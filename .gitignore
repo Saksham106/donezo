@@ -1,4 +1,9 @@
 .DS_Store
 node_modules/
+dist/
+supabase/.temp/
+.env*
+!.env.example
 *.log
 screenshots/
+.vercel

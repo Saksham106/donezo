@@ -1,51 +1,47 @@
-# Donezo — Accountability PWA MVP
+# Donezo — Accountability with friends
 
-A mobile-first social accountability prototype for small friend groups. Track daily habits, submit optional photo proof, nudge friends, protect streaks, and compete on a weekly XP leaderboard.
+A mobile-first social accountability PWA for small friend groups. Create habits, submit optional photo proof, nudge friends, protect streaks, and compete on a shared XP scoreboard.
 
-## What works
+## Stack
 
-- Today checklist with XP and streak progress
-- Optional photo/screenshot proof
-- Friend activity feed with nudges
-- Create recurring habits
-- Weekly leaderboard
-- Local persistence via `localStorage`
-- Installable PWA manifest + service worker/offline shell
-- Notification permission flow + local test notification
-- Responsive phone-first UI
+- Static mobile-first PWA bundled with esbuild
+- Supabase Auth, Postgres, Row Level Security, and private Storage
+- Vercel hosting
+- Node's built-in test runner
 
-## Run locally
-
-No package installation is required. The tests and local server use Node's built-in APIs.
+## Local setup
 
 ```bash
+npm install
+cp .env.example .env.local
+# Export the two values from .env.local, then:
 npm test
 npm run check
+npm run build
 npm start
 ```
 
-Then open `http://localhost:4173`.
+Required build variables:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY`
+
+Open `http://localhost:4173` after building.
+
+## Current product flow
+
+1. Sign up or sign in with email/password.
+2. Create a circle or join one with its 12-character invite code.
+3. Add daily habits and choose whether photo proof is required.
+4. Check in, upload private proof, nudge friends, and view the shared feed/scoreboard.
+
+All application tables have RLS enabled. Proof files are private and are exposed to circle peers only through short-lived signed URLs.
 
 ## iPhone PWA test
 
-1. Serve the project over HTTPS (or deploy it).
-2. Open it in Safari.
-3. Share → **Add to Home Screen**.
-4. Launch Donezo from the Home Screen.
-5. Open **Me** → **Enable** notifications.
+1. Open the deployed HTTPS URL in Safari.
+2. Share → **Add to Home Screen**.
+3. Launch Donezo from the Home Screen.
+4. Open **Me** → **Enable** notifications.
 
-Remote scheduled pushes are intentionally not included yet. The MVP proves the browser/PWA notification plumbing; a backend can later store push subscriptions and send scheduled pushes.
-
-## Architecture
-
-The executable MVP is a zero-dependency static PWA. State mutation is isolated in `src/store.js`, domain calculations are pure functions in `src/domain.js`, and the UI is in `src/app.js`.
-
-The intended production migration remains:
-
-- Next.js + TypeScript
-- Tailwind/shadcn UI
-- Supabase Auth + Postgres + Storage
-- Web Push subscription storage/server delivery
-- Vercel deployment
-
-Supabase Realtime is **not required for push notifications**. Add it later only if live cross-device feed/leaderboard updates are worthwhile.
+Remote scheduled push delivery is not implemented yet. The current notification control proves the installed-PWA browser permission and local notification path.

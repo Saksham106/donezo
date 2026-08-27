@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
+import { extname, join } from 'node:path';
+import { safeStaticPath } from './src/server-path.js';
 
 const port = Number(process.env.PORT || 4173);
-const root = process.cwd();
+const root = join(process.cwd(), 'dist');
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
@@ -13,10 +14,9 @@ const types = {
 createServer(async (req, res) => {
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-    let pathname = decodeURIComponent(url.pathname);
+    let pathname = url.pathname;
     if (pathname === '/') pathname = '/index.html';
-    const safePath = normalize(pathname).replace(/^(\.\.[/\\])+/, '');
-    let filePath = join(root, safePath);
+    let filePath = safeStaticPath(root, pathname);
     const info = await stat(filePath).catch(() => null);
     if (!info?.isFile()) filePath = join(root, 'index.html');
     const body = await readFile(filePath);

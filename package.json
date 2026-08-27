@@ -1,11 +1,18 @@
 {
   "name": "donezo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build.mjs",
     "start": "node server.mjs",
-    "check": "node --check src/app.js && node --check src/domain.js && node --check src/store.js && node --check src/notifications.js"
+    "check": "node --check src/app.js && node --check src/config.js && node --check src/domain.js && node --check src/store.js && node --check src/notifications.js && node --check src/server-path.js && node --check server.mjs && node --check scripts/build.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.112.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }
