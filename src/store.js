@@ -1,3 +1,5 @@
+import { calculateBestStreak, calculateStreak } from './domain.js';
+
 const clone = (value) => structuredClone(value);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -23,6 +25,17 @@ export function proofObjectPath(userId, habitId, mimeType, timestamp = Date.now(
     throw new Error('Invalid proof path');
   }
   return `${userId}/${habitId}-${timestamp}.${extension}`;
+}
+
+function dateInTimezone(timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timeZone || 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
 export function mapDatabaseState(user, rows) {
@@ -56,6 +69,7 @@ export function mapDatabaseState(user, rows) {
     proofPath: checkIn.proof_path,
     note: checkIn.note,
   }));
+  const today = rows.today || dateInTimezone(profile.timezone);
   const memberRows = rows.members?.length
     ? rows.members
     : [{ user_id: user.id, profiles: profile }];
@@ -74,8 +88,8 @@ export function mapDatabaseState(user, rows) {
       avatar: initials(name),
       avatarUrl: memberProfile.avatar_url,
       xp,
-      currentStreak: dates.length,
-      bestStreak: dates.length,
+      currentStreak: calculateStreak(dates, today),
+      bestStreak: calculateBestStreak(dates),
     };
   });
   const memberById = new Map(members.map((member) => [member.id, member]));
@@ -155,17 +169,21 @@ export function createSupabaseRepository(client, user) {
       return getState();
     }
 
-    const [membersResult, habitsResult, checkInsResult, nudgesResult] = await Promise.all([
+    const [membersResult, habitsResult, nudgesResult] = await Promise.all([
       client.from('circle_members')
         .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url)')
         .eq('circle_id', circle.id)
         .order('joined_at', { ascending: true }),
       client.from('habits').select('*').eq('circle_id', circle.id).eq('active', true).order('created_at'),
-      client.from('check_ins').select('*').order('completed_at', { ascending: false }).limit(1000),
       client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100),
     ]);
-    const failed = [membersResult, habitsResult, checkInsResult, nudgesResult].find((result) => result.error);
+    const failed = [membersResult, habitsResult, nudgesResult].find((result) => result.error);
     if (failed) throw appError(failed.error, 'Could not load Donezo data');
+    const habitIds = habitsResult.data.map((habit) => habit.id);
+    const checkInsResult = habitIds.length
+      ? await client.from('check_ins').select('*').in('habit_id', habitIds).order('completed_at', { ascending: false }).limit(1000)
+      : { data: [], error: null };
+    if (checkInsResult.error) throw appError(checkInsResult.error, 'Could not load Donezo data');
     state = mapDatabaseState(user, {
       profile,
       circle,
@@ -222,7 +240,13 @@ export function createSupabaseRepository(client, user) {
     if (existing) {
       const { error } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
       if (error) throw appError(error, 'Could not undo check-in');
-      if (existing.proofPath) await client.storage.from('proofs').remove([existing.proofPath]);
+      if (existing.proofPath) {
+        const { error: cleanupError } = await client.storage.from('proofs').remove([existing.proofPath]);
+        if (cleanupError) {
+          await load();
+          throw appError(cleanupError, 'Check-in undone, but its proof could not be removed');
+        }
+      }
     } else {
       const { error } = await client.from('check_ins').insert({ habit_id: habitId, user_id: user.id, check_date: date });
       if (error) throw appError(error, 'Could not complete habit');
@@ -245,7 +269,10 @@ export function createSupabaseRepository(client, user) {
       proof_path: path,
     });
     if (checkInError) {
-      await client.storage.from('proofs').remove([path]);
+      const { error: cleanupError } = await client.storage.from('proofs').remove([path]);
+      if (cleanupError) {
+        throw new Error(`${checkInError.message || 'Could not save check-in'}; uploaded proof cleanup also failed`);
+      }
       throw appError(checkInError, 'Could not save check-in');
     }
     return load();
