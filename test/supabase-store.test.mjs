@@ -5,6 +5,7 @@ import { mapDatabaseState, proofObjectPath } from '../src/store.js';
 const user = { id: 'user-1', email: 'saksham@example.com' };
 
 const rows = {
+  today: '2026-08-27',
   profile: { id: 'user-1', username: 'sak', display_name: 'Saksham', avatar_url: null },
   circle: { id: 'circle-1', name: 'Donezo Crew', invite_code: 'abc123' },
   members: [
@@ -32,6 +33,8 @@ test('mapDatabaseState converts Supabase rows into app state and derives XP', ()
   ]);
   assert.equal(state.habits[0].proofMode, 'photo');
   assert.equal(state.checkIns[0].proofPath, 'user-1/proof.webp');
+  assert.equal(state.members[0].currentStreak, 1);
+  assert.equal(state.members[0].bestStreak, 1);
 });
 
 test('mapDatabaseState ignores check-ins outside the loaded circle habits', () => {
