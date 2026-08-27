@@ -144,11 +144,11 @@ export function createSupabaseRepository(client, user) {
     const displayName = user.user_metadata?.display_name?.trim()
       || user.email?.split('@')[0]
       || 'Donezo user';
-    const { data: inserted, error: insertError } = await client.from('profiles').insert({
+    const { data: inserted, error: insertError } = await client.from('profiles').upsert({
       id: user.id,
       display_name: displayName,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York',
-    }).select().single();
+    }, { onConflict: 'id' }).select().single();
     if (insertError) throw appError(insertError, 'Could not create profile');
     return inserted;
   }
