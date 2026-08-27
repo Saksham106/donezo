@@ -1,0 +1,13 @@
+{
+  "name": "Donezo — Accountability with friends",
+  "short_name": "Donezo",
+  "description": "Compete with friends, keep your streaks alive, and actually do the things you said you'd do.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
