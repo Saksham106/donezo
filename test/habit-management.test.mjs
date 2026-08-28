@@ -53,11 +53,15 @@ test('archiving marks the habit inactive without erasing historical check-ins', 
   assert.equal(state.checkIns.some((checkIn) => checkIn.id === 'old-check'), true);
 });
 
-test('production repository scopes writes to owner and loads archived habits for history', async () => {
+test('production repository scopes writes to owner, reloads state, and loads archived habits for history', async () => {
   const store = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
-  assert.match(store, /async function updateHabit\(/);
-  assert.match(store, /async function archiveHabit\(/);
-  assert.match(store, /from\('habits'\)\.update\([\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\)/);
+  assert.match(store, /async function updateHabit\([\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\);[\s\S]*?await load\(\)/);
+  assert.match(store, /async function archiveHabit\([\s\S]*?active: false[\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\);[\s\S]*?await load\(\)/);
   assert.doesNotMatch(store, /from\('habits'\)\.select\('\*'\)\.eq\('circle_id', circle\.id\)\.eq\('active', true\)/);
   assert.match(store, /updateHabit,\s*archiveHabit/);
+});
+
+test('existing RLS authorizes habit updates only for the owner in an active circle', async () => {
+  const migration = await readFile(new URL('../supabase/migrations/0001_initial_schema.sql', import.meta.url), 'utf8');
+  assert.match(migration, /create policy habits_update_owner[\s\S]*?using \(owner_id = \(select auth\.uid\(\)\)\)[\s\S]*?with check \(owner_id = \(select auth\.uid\(\)\) and circle_id in \(select private\.user_circle_ids\(\)\)\)/);
 });
