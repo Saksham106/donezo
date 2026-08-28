@@ -51,16 +51,17 @@ test('proofRejectionThreshold requires a strict majority of other circle members
   assert.equal(proofRejectionThreshold(5), 3);
 });
 
-test('rejectedCheckInIds ignores self votes and rejects only at majority threshold', () => {
+test('rejectedCheckInIds ignores self votes and rejects only uploaded proofs at majority threshold', () => {
   const checkIns = [
-    { id: 'c1', userId: 'a' },
-    { id: 'c2', userId: 'b' },
+    { id: 'c1', userId: 'a', proofPath: 'a/proof.jpg' },
+    { id: 'c2', userId: 'b', proofPath: null },
   ];
   const reactions = [
     { checkInId: 'c1', userId: 'a', emoji: '👎' },
     { checkInId: 'c1', userId: 'b', emoji: '👎' },
     { checkInId: 'c1', userId: 'c', emoji: '👎' },
-    { checkInId: 'c2', userId: 'a', emoji: '🔥' },
+    { checkInId: 'c2', userId: 'a', emoji: '👎' },
+    { checkInId: 'c2', userId: 'c', emoji: '👎' },
   ];
   assert.deepEqual([...rejectedCheckInIds(checkIns, reactions, 3)], ['c1']);
 });
