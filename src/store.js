@@ -1,4 +1,9 @@
-import { calculateBestStreak, calculateStreak } from './domain.js';
+import {
+  calculateBestStreak,
+  calculateStreak,
+  localDateInTimeZone,
+  rejectedCheckInIds,
+} from './domain.js';
 
 const clone = (value) => structuredClone(value);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -28,14 +33,7 @@ export function proofObjectPath(userId, habitId, mimeType, timestamp = Date.now(
 }
 
 function dateInTimezone(timeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timeZone || 'UTC',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
+  return localDateInTimeZone(new Date(), timeZone || 'UTC');
 }
 
 export function mapDatabaseState(user, rows) {
@@ -44,43 +42,74 @@ export function mapDatabaseState(user, rows) {
     display_name: user.email?.split('@')[0] || 'You',
     username: null,
     avatar_url: null,
+    timezone: 'UTC',
   };
-  const habits = (rows.habits || []).map((habit) => ({
-    id: habit.id,
-    circleId: habit.circle_id,
-    ownerId: habit.owner_id,
-    title: habit.title,
-    emoji: habit.emoji,
-    frequency: habit.frequency,
-    targetTime: habit.target_time?.slice(0, 5) || '',
-    proofMode: habit.proof_mode,
-    xp: habit.xp,
-    active: habit.active,
-    createdAt: habit.created_at || null,
-  }));
-  const habitById = new Map(habits.map((habit) => [habit.id, habit]));
-  const checkIns = (rows.checkIns || [])
-    .filter((checkIn) => habitById.has(checkIn.habit_id))
-    .map((checkIn) => ({
-    id: checkIn.id,
-    habitId: checkIn.habit_id,
-    userId: checkIn.user_id,
-    date: checkIn.check_date,
-    completedAt: checkIn.completed_at,
-    proofPath: checkIn.proof_path,
-    note: checkIn.note,
-  }));
-  const today = rows.today || dateInTimezone(profile.timezone);
   const memberRows = rows.members?.length
     ? rows.members
     : [{ user_id: user.id, profiles: profile }];
+  const memberProfileById = new Map(memberRows.map((membership) => {
+    const memberProfile = membership.profiles || {};
+    return [membership.user_id || memberProfile.id, memberProfile];
+  }));
+
+  const habits = (rows.habits || []).map((habit) => {
+    const ownerProfile = memberProfileById.get(habit.owner_id) || {};
+    const ownerTimeZone = ownerProfile.timezone || 'UTC';
+    return {
+      id: habit.id,
+      circleId: habit.circle_id,
+      ownerId: habit.owner_id,
+      title: habit.title,
+      emoji: habit.emoji,
+      frequency: habit.frequency,
+      targetTime: habit.target_time?.slice(0, 5) || '',
+      proofMode: habit.proof_mode,
+      xp: habit.xp,
+      active: habit.active,
+      createdAt: habit.created_at || null,
+      ownerTimeZone,
+      createdDate: habit.created_at ? localDateInTimeZone(habit.created_at, ownerTimeZone) : null,
+    };
+  });
+  const habitById = new Map(habits.map((habit) => [habit.id, habit]));
+  const rawCheckIns = (rows.checkIns || [])
+    .filter((checkIn) => habitById.has(checkIn.habit_id))
+    .map((checkIn) => ({
+      id: checkIn.id,
+      habitId: checkIn.habit_id,
+      userId: checkIn.user_id,
+      date: checkIn.check_date,
+      completedAt: checkIn.completed_at,
+      proofPath: checkIn.proof_path,
+      note: checkIn.note,
+    }));
+  const reactions = (rows.reactions || []).map((reaction) => ({
+    id: reaction.id,
+    checkInId: reaction.check_in_id,
+    userId: reaction.user_id,
+    emoji: reaction.emoji,
+    createdAt: reaction.created_at,
+  }));
+  const rejectedIds = rejectedCheckInIds(rawCheckIns, reactions, memberRows.length);
+  const checkIns = rawCheckIns.map((checkIn) => {
+    const downvoteUsers = new Set(reactions
+      .filter((reaction) => reaction.checkInId === checkIn.id && reaction.emoji === '👎' && reaction.userId !== checkIn.userId)
+      .map((reaction) => reaction.userId));
+    return {
+      ...checkIn,
+      invalid: rejectedIds.has(checkIn.id),
+      downvotes: downvoteUsers.size,
+      userDownvoted: downvoteUsers.has(user.id),
+    };
+  });
+
+  const today = rows.today || dateInTimezone(profile.timezone);
   const members = memberRows.map((membership) => {
     const memberProfile = membership.profiles || {};
     const memberId = membership.user_id || memberProfile.id;
-    const dates = [...new Set(checkIns.filter((checkIn) => checkIn.userId === memberId).map((checkIn) => checkIn.date))];
-    const xp = checkIns
-      .filter((checkIn) => checkIn.userId === memberId)
-      .reduce((total, checkIn) => total + (habitById.get(checkIn.habitId)?.xp || 0), 0);
+    const validCheckIns = checkIns.filter((checkIn) => checkIn.userId === memberId && !checkIn.invalid);
+    const dates = [...new Set(validCheckIns.map((checkIn) => checkIn.date))];
+    const xp = validCheckIns.reduce((total, checkIn) => total + (habitById.get(checkIn.habitId)?.xp || 0), 0);
     const name = memberProfile.display_name || memberProfile.username || 'Friend';
     return {
       id: memberId,
@@ -88,6 +117,7 @@ export function mapDatabaseState(user, rows) {
       handle: memberProfile.username ? `@${memberProfile.username}` : '',
       avatar: initials(name),
       avatarUrl: memberProfile.avatar_url,
+      timeZone: memberProfile.timezone || 'UTC',
       xp,
       currentStreak: calculateStreak(dates, today),
       bestStreak: calculateBestStreak(dates),
@@ -95,22 +125,25 @@ export function mapDatabaseState(user, rows) {
   });
   const memberById = new Map(members.map((member) => [member.id, member]));
   const friendActivities = checkIns
-    .filter((checkIn) => checkIn.userId !== user.id)
     .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
-    .slice(0, 30)
+    .slice(0, 40)
     .map((checkIn) => {
       const habit = habitById.get(checkIn.habitId);
       const actor = memberById.get(checkIn.userId);
       return {
         id: checkIn.id,
+        checkInId: checkIn.id,
         userId: checkIn.userId,
         type: 'completed',
         habitTitle: habit?.title || 'Habit',
         emoji: habit?.emoji || '⚡',
         when: checkIn.completedAt,
         streak: actor?.currentStreak || 0,
-        message: checkIn.note || 'Done. Proof beats promises.',
+        message: checkIn.invalid ? 'Proof got cooked 💀 — run it back.' : (checkIn.note || 'Done. Proof beats promises.'),
         proofPath: checkIn.proofPath,
+        invalid: checkIn.invalid,
+        downvotes: checkIn.downvotes,
+        userDownvoted: checkIn.userDownvoted,
       };
     });
 
@@ -122,6 +155,7 @@ export function mapDatabaseState(user, rows) {
     members,
     habits,
     checkIns,
+    reactions,
     friendActivities,
     nudges: (rows.nudges || []).map((nudge) => ({
       id: nudge.id,
@@ -166,13 +200,13 @@ export function createSupabaseRepository(client, user) {
     if (membershipError) throw appError(membershipError, 'Could not load your circle');
     const circle = membership?.circles || null;
     if (!circle) {
-      state = mapDatabaseState(user, { profile, circle: null, members: [], habits: [], checkIns: [], nudges: [] });
+      state = mapDatabaseState(user, { profile, circle: null, members: [], habits: [], checkIns: [], reactions: [], nudges: [] });
       return getState();
     }
 
     const [membersResult, habitsResult, nudgesResult] = await Promise.all([
       client.from('circle_members')
-        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url)')
+        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone)')
         .eq('circle_id', circle.id)
         .order('joined_at', { ascending: true }),
       client.from('habits').select('*').eq('circle_id', circle.id).eq('active', true).order('created_at'),
@@ -185,12 +219,18 @@ export function createSupabaseRepository(client, user) {
       ? await client.from('check_ins').select('*').in('habit_id', habitIds).order('completed_at', { ascending: false }).limit(1000)
       : { data: [], error: null };
     if (checkInsResult.error) throw appError(checkInsResult.error, 'Could not load Donezo data');
+    const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
+    const reactionsResult = checkInIds.length
+      ? await client.from('reactions').select('*').in('check_in_id', checkInIds).order('created_at')
+      : { data: [], error: null };
+    if (reactionsResult.error) throw appError(reactionsResult.error, 'Could not load proof votes');
     state = mapDatabaseState(user, {
       profile,
       circle,
       members: membersResult.data,
       habits: habitsResult.data,
       checkIns: checkInsResult.data,
+      reactions: reactionsResult.data,
       nudges: nudgesResult.data,
     });
     return getState();
@@ -216,6 +256,14 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
+  async function updateDisplayName(displayName) {
+    const cleanName = displayName.trim();
+    if (!cleanName || cleanName.length > 60) throw new Error('Name must be 1–60 characters');
+    const { error } = await client.from('profiles').update({ display_name: cleanName }).eq('id', user.id);
+    if (error) throw appError(error, 'Could not update your name');
+    return load();
+  }
+
   async function addHabit(input) {
     if (!state.circleId) throw new Error('Create or join a circle first');
     const title = input.title.trim();
@@ -227,7 +275,7 @@ export function createSupabaseRepository(client, user) {
       emoji: input.emoji || '⚡',
       frequency: input.frequency || 'daily',
       target_time: input.targetTime || null,
-      proof_mode: input.proofMode || 'none',
+      proof_mode: input.proofMode || 'photo',
     };
     const { error } = await client.from('habits').insert(payload);
     if (error) throw appError(error, 'Could not add habit');
@@ -237,7 +285,7 @@ export function createSupabaseRepository(client, user) {
 
   async function toggleHabit(habitId, date) {
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
-    if (existing) {
+    if (existing && !existing.invalid) {
       const { error } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
       if (error) throw appError(error, 'Could not undo check-in');
       if (existing.proofPath) {
@@ -248,6 +296,10 @@ export function createSupabaseRepository(client, user) {
         }
       }
     } else {
+      if (existing?.invalid) {
+        const { error: deleteError } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
+        if (deleteError) throw appError(deleteError, 'Could not clear rejected check-in');
+      }
       const { error } = await client.from('check_ins').insert({ habit_id: habitId, user_id: user.id, check_date: date });
       if (error) throw appError(error, 'Could not complete habit');
     }
@@ -255,6 +307,9 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function completeWithProof(habitId, date, file) {
+    const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
+    if (existing && !existing.invalid) throw new Error('Already checked in today');
+    const oldProofPath = existing?.proofPath || null;
     const path = proofObjectPath(user.id, habitId, file.type);
     const { error: uploadError } = await client.storage.from('proofs').upload(path, file, {
       cacheControl: '3600',
@@ -262,6 +317,13 @@ export function createSupabaseRepository(client, user) {
       upsert: false,
     });
     if (uploadError) throw appError(uploadError, 'Could not upload proof');
+    if (existing?.invalid) {
+      const { error: deleteError } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
+      if (deleteError) {
+        await client.storage.from('proofs').remove([path]);
+        throw appError(deleteError, 'Could not replace rejected proof');
+      }
+    }
     const { error: checkInError } = await client.from('check_ins').insert({
       habit_id: habitId,
       user_id: user.id,
@@ -270,10 +332,24 @@ export function createSupabaseRepository(client, user) {
     });
     if (checkInError) {
       const { error: cleanupError } = await client.storage.from('proofs').remove([path]);
-      if (cleanupError) {
-        throw new Error(`${checkInError.message || 'Could not save check-in'}; uploaded proof cleanup also failed`);
-      }
+      if (cleanupError) throw new Error(`${checkInError.message || 'Could not save check-in'}; uploaded proof cleanup also failed`);
       throw appError(checkInError, 'Could not save check-in');
+    }
+    if (oldProofPath && oldProofPath !== path) await client.storage.from('proofs').remove([oldProofPath]);
+    return load();
+  }
+
+  async function toggleDownvote(checkInId) {
+    const checkIn = state.checkIns.find((item) => item.id === checkInId);
+    if (!checkIn?.proofPath) throw new Error('Nothing to vote on');
+    if (checkIn.userId === user.id) throw new Error('You cannot cook your own proof 😭');
+    const existing = state.reactions.find((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji === '👎');
+    if (existing) {
+      const { error } = await client.from('reactions').delete().eq('id', existing.id).eq('user_id', user.id);
+      if (error) throw appError(error, 'Could not remove vote');
+    } else {
+      const { error } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji: '👎' });
+      if (error) throw appError(error, 'Could not downvote proof');
     }
     return load();
   }
@@ -282,14 +358,50 @@ export function createSupabaseRepository(client, user) {
     if (!state.circleId) throw new Error('Create or join a circle first');
     const cleanMessage = message.trim();
     if (!cleanMessage || cleanMessage.length > 140) throw new Error('Nudge must be 1–140 characters');
-    const { error } = await client.from('nudges').insert({
+    const { data, error } = await client.from('nudges').insert({
       circle_id: state.circleId,
       from_user_id: user.id,
       to_user_id: toUserId,
       message: cleanMessage,
-    });
+    }).select('id').single();
     if (error) throw appError(error, 'Could not send nudge');
+    let pushSent = false;
+    try {
+      const { error: pushError } = await client.functions.invoke('send-nudge', {
+        body: { action: 'send-nudge', nudgeId: data.id },
+      });
+      pushSent = !pushError;
+    } catch {
+      pushSent = false;
+    }
+    await load();
+    return { pushSent, nudgeId: data.id };
+  }
+
+  async function markNudgeRead(nudgeId) {
+    const { error } = await client.from('nudges').update({ read_at: new Date().toISOString() }).eq('id', nudgeId).eq('to_user_id', user.id);
+    if (error) throw appError(error, 'Could not mark nudge read');
     return load();
+  }
+
+  async function getVapidPublicKey() {
+    const { data, error } = await client.functions.invoke('send-nudge', { body: { action: 'vapid-public-key' } });
+    if (error || !data?.publicKey) throw appError(error, 'Push setup is not ready yet');
+    return data.publicKey;
+  }
+
+  async function savePushSubscription(subscription) {
+    const json = typeof subscription.toJSON === 'function' ? subscription.toJSON() : subscription;
+    if (!json?.endpoint || !json?.keys?.p256dh || !json?.keys?.auth) throw new Error('Invalid push subscription');
+    const { error } = await client.from('push_subscriptions').upsert({
+      user_id: user.id,
+      endpoint: json.endpoint,
+      p256dh: json.keys.p256dh,
+      auth: json.keys.auth,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'endpoint' });
+    if (error) throw appError(error, 'Could not save push subscription');
+    return true;
   }
 
   async function getProofUrl(path) {
@@ -298,7 +410,22 @@ export function createSupabaseRepository(client, user) {
     return data.signedUrl;
   }
 
-  return { getState, load, createCircle, joinCircle, addHabit, toggleHabit, completeWithProof, sendNudge, getProofUrl };
+  return {
+    getState,
+    load,
+    createCircle,
+    joinCircle,
+    updateDisplayName,
+    addHabit,
+    toggleHabit,
+    completeWithProof,
+    toggleDownvote,
+    sendNudge,
+    markNudgeRead,
+    getVapidPublicKey,
+    savePushSubscription,
+    getProofUrl,
+  };
 }
 
 // Kept as a tiny deterministic test double for domain tests. Production uses
@@ -329,7 +456,7 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   function addHabit(input) {
-    const habit = { id: uid('habit'), ownerId: state.currentUserId, title: input.title.trim(), emoji: input.emoji || '⚡', frequency: input.frequency || 'daily', targetTime: input.targetTime || '', proofMode: input.proofMode || 'none', xp: Number(input.xp || 10), active: true };
+    const habit = { id: uid('habit'), ownerId: state.currentUserId, title: input.title.trim(), emoji: input.emoji || '⚡', frequency: input.frequency || 'daily', targetTime: input.targetTime || '', proofMode: input.proofMode || 'photo', xp: Number(input.xp || 10), active: true };
     state.habits.push(habit);
     emit();
     return clone(habit);

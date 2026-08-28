@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dailyProgress, calculateBestStreak, calculateStreak, rankMembers, weeklyCompletionScore, rankMembersByWeeklyScore } from '../src/domain.js';
+import {
+  dailyProgress,
+  calculateBestStreak,
+  calculateStreak,
+  rankMembers,
+  weeklyCompletionScore,
+  rankMembersByWeeklyScore,
+  localDateInTimeZone,
+  proofRejectionThreshold,
+  rejectedCheckInIds,
+} from '../src/domain.js';
 
 test('dailyProgress returns completed ratio and percentage', () => {
   assert.deepEqual(dailyProgress(3, 5), { completed: 3, total: 5, ratio: 0.6, percent: 60 });
@@ -29,10 +39,37 @@ test('rankMembers sorts highest XP first and assigns ranks', () => {
   ]);
 });
 
+test('localDateInTimeZone keeps late-evening Boston creation on the correct local day', () => {
+  assert.equal(localDateInTimeZone('2026-08-28T00:30:00Z', 'America/New_York'), '2026-08-27');
+});
+
+test('proofRejectionThreshold requires a strict majority of other circle members', () => {
+  assert.equal(proofRejectionThreshold(1), Infinity);
+  assert.equal(proofRejectionThreshold(2), 1);
+  assert.equal(proofRejectionThreshold(3), 2);
+  assert.equal(proofRejectionThreshold(4), 2);
+  assert.equal(proofRejectionThreshold(5), 3);
+});
+
+test('rejectedCheckInIds ignores self votes and rejects only uploaded proofs at majority threshold', () => {
+  const checkIns = [
+    { id: 'c1', userId: 'a', proofPath: 'a/proof.jpg' },
+    { id: 'c2', userId: 'b', proofPath: null },
+  ];
+  const reactions = [
+    { checkInId: 'c1', userId: 'a', emoji: '👎' },
+    { checkInId: 'c1', userId: 'b', emoji: '👎' },
+    { checkInId: 'c1', userId: 'c', emoji: '👎' },
+    { checkInId: 'c2', userId: 'a', emoji: '👎' },
+    { checkInId: 'c2', userId: 'c', emoji: '👎' },
+  ];
+  assert.deepEqual([...rejectedCheckInIds(checkIns, reactions, 3)], ['c1']);
+});
+
 test('weeklyCompletionScore weights every eligible commitment equally and starts new habits on creation date', () => {
   const habits = [
-    { id: 'h1', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-24T10:00:00Z' },
-    { id: 'h2', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-26T10:00:00Z' },
+    { id: 'h1', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-24T10:00:00Z', ownerTimeZone: 'America/New_York' },
+    { id: 'h2', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-26T10:00:00Z', ownerTimeZone: 'America/New_York' },
   ];
   const checkIns = [
     { habitId: 'h1', userId: 'a', date: '2026-08-24' },
@@ -48,11 +85,22 @@ test('weeklyCompletionScore weights every eligible commitment equally and starts
   });
 });
 
+test('weeklyCompletionScore fixes the UTC midnight creation bug and ignores invalid proof', () => {
+  const habits = [
+    { id: 'h1', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-28T00:30:00Z', ownerTimeZone: 'America/New_York' },
+  ];
+  const checkIns = [
+    { id: 'good', habitId: 'h1', userId: 'a', date: '2026-08-27', invalid: false },
+  ];
+  assert.deepEqual(weeklyCompletionScore('a', habits, checkIns, '2026-08-27'), { completed: 1, possible: 1, percent: 100 });
+  assert.deepEqual(weeklyCompletionScore('a', habits, [{ ...checkIns[0], invalid: true }], '2026-08-27'), { completed: 0, possible: 1, percent: 0 });
+});
+
 test('weeklyCompletionScore gives the same perfect score regardless of habit count', () => {
   const habits = [
-    { id: 'a1', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z' },
-    { id: 'b1', ownerId: 'b', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z' },
-    { id: 'b2', ownerId: 'b', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z' },
+    { id: 'a1', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z', ownerTimeZone: 'UTC' },
+    { id: 'b1', ownerId: 'b', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z', ownerTimeZone: 'UTC' },
+    { id: 'b2', ownerId: 'b', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z', ownerTimeZone: 'UTC' },
   ];
   const checkIns = [
     { habitId: 'a1', userId: 'a', date: '2026-08-27' },
@@ -69,7 +117,7 @@ test('rankMembersByWeeklyScore breaks equal scores by streak then name', () => {
     { id: 'b', name: 'Bob', currentStreak: 5 },
     { id: 'c', name: 'Cara', currentStreak: 5 },
   ];
-  const habits = members.map((member) => ({ id: `${member.id}1`, ownerId: member.id, active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z' }));
+  const habits = members.map((member) => ({ id: `${member.id}1`, ownerId: member.id, active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z', ownerTimeZone: 'UTC' }));
   const checkIns = habits.map((habit) => ({ habitId: habit.id, userId: habit.ownerId, date: '2026-08-27' }));
   const ranked = rankMembersByWeeklyScore(members, habits, checkIns, '2026-08-27');
   assert.deepEqual(ranked.map(({ id, rank, weeklyScore }) => ({ id, rank, weeklyScore })), [

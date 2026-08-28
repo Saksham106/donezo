@@ -28,6 +28,7 @@ await Promise.all([
   cp('tokens.css', 'dist/tokens.css'),
   cp('styles.css', 'dist/styles.css'),
   cp('components.css', 'dist/components.css'),
+  cp('social.css', 'dist/social.css'),
   cp('manifest.webmanifest', 'dist/manifest.webmanifest'),
   cp('icon.svg', 'dist/icon.svg'),
   cp('sw.js', 'dist/sw.js'),

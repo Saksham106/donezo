@@ -1,5 +1,5 @@
-const CACHE = 'donezo-shell-v5';
-const ASSETS = ['/', '/index.html', '/tokens.css', '/styles.css', '/components.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'donezo-shell-v7';
+const ASSETS = ['/', '/index.html', '/tokens.css', '/styles.css', '/components.css', '/social.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
@@ -25,10 +25,31 @@ self.addEventListener('fetch', (event) => {
   }));
 });
 
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data?.json() || {};
+  } catch {
+    payload = { body: event.data?.text() || 'Your squad is calling you out.' };
+  }
+  event.waitUntil(self.registration.showNotification(payload.title || 'Donezo ⚡', {
+    body: payload.body || 'Lock in bro 😭',
+    icon: '/icon.svg',
+    badge: '/icon.svg',
+    tag: payload.tag || 'donezo-push',
+    data: { url: payload.url || '/?nudges=1' },
+  }));
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-    if (clients[0]) return clients[0].focus();
-    return self.clients.openWindow('/');
+  const target = event.notification.data?.url || '/';
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
+    const existing = clients.find((client) => 'focus' in client);
+    if (existing) {
+      if ('navigate' in existing) await existing.navigate(target);
+      return existing.focus();
+    }
+    return self.clients.openWindow(target);
   }));
 });

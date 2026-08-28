@@ -41,6 +41,40 @@ function dateKey(value) {
   return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 }
 
+export function localDateInTimeZone(value, timeZone = 'UTC') {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return dateKey(value);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timeZone || 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const result = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${result.year}-${result.month}-${result.day}`;
+}
+
+export function proofRejectionThreshold(circleMemberCount) {
+  const otherMembers = Math.max(0, Number(circleMemberCount || 0) - 1);
+  return otherMembers === 0 ? Infinity : Math.floor(otherMembers / 2) + 1;
+}
+
+export function rejectedCheckInIds(checkIns, reactions, circleMemberCount) {
+  const threshold = proofRejectionThreshold(circleMemberCount);
+  if (!Number.isFinite(threshold)) return new Set();
+  const checkInById = new Map(checkIns.map((checkIn) => [checkIn.id, checkIn]));
+  const votersByCheckIn = new Map();
+  for (const reaction of reactions || []) {
+    if (reaction.emoji !== '👎') continue;
+    const checkIn = checkInById.get(reaction.checkInId);
+    if (!checkIn?.proofPath || reaction.userId === checkIn.userId) continue;
+    if (!votersByCheckIn.has(reaction.checkInId)) votersByCheckIn.set(reaction.checkInId, new Set());
+    votersByCheckIn.get(reaction.checkInId).add(reaction.userId);
+  }
+  return new Set([...votersByCheckIn.entries()].filter(([, voters]) => voters.size >= threshold).map(([checkInId]) => checkInId));
+}
+
 function mondayOf(dateString) {
   const date = new Date(`${dateString}T12:00:00Z`);
   const day = date.getUTCDay();
@@ -63,12 +97,15 @@ function inclusiveDays(startString, endString) {
 export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
   const weekStart = mondayOf(todayString);
   const eligibleHabits = habits.filter((habit) => habit.ownerId === memberId && habit.active !== false && (habit.frequency || 'daily') === 'daily');
-  const completed = new Set(checkIns.filter((checkIn) => checkIn.userId === memberId).map((checkIn) => `${checkIn.habitId}:${checkIn.date}`));
+  const completed = new Set(checkIns
+    .filter((checkIn) => checkIn.userId === memberId && checkIn.invalid !== true)
+    .map((checkIn) => `${checkIn.habitId}:${checkIn.date}`));
   let possible = 0;
   let completedCount = 0;
 
   for (const habit of eligibleHabits) {
-    const createdDate = habit.createdAt ? dateKey(habit.createdAt) : weekStart;
+    const createdDate = habit.createdDate
+      || (habit.createdAt ? localDateInTimeZone(habit.createdAt, habit.ownerTimeZone || 'UTC') : weekStart);
     const start = createdDate > weekStart ? createdDate : weekStart;
     for (const day of inclusiveDays(start, todayString)) {
       possible += 1;
