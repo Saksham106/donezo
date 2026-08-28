@@ -1,0 +1,32 @@
+name: Apply nav safe-area fix
+
+on:
+  push:
+    branches: [fix/nav-safe-area-invite-icon]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/nav-safe-area-invite-icon
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/apply-nav-safe-area-fix.mjs
+      - run: node --check src/app.js
+      - name: Commit product changes
+        run: |
+          if git diff --quiet; then
+            echo "No product changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add styles.css src/app.js
+          git commit -m "fix: lower mobile nav and update invite icon"
+          git push origin HEAD:fix/nav-safe-area-invite-icon
