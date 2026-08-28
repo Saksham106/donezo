@@ -31,6 +31,7 @@ let tab = 'today';
 let proofHabit = null;
 let proofReview = null;
 let proofViewer = null;
+let proofViewerRequestId = 0;
 let selectedEmoji = '⚡';
 let habitSheetOpen = false;
 let editingHabitId = null;
@@ -422,14 +423,15 @@ async function handleProofSubmit() {
 async function loadProofViewerUrl() {
   const current = proofViewer;
   if (!current) return;
+  const requestId = ++proofViewerRequestId;
   proofViewer = { ...current, status: 'loading', url: null, error: null };
   render();
   try {
     const url = await repo.getProofUrl(current.path);
-    if (!proofViewer || proofViewer.path !== current.path) return;
+    if (requestId !== proofViewerRequestId || !proofViewer || proofViewer.path !== current.path) return;
     proofViewer = { ...proofViewer, status: 'ready', url, error: null };
   } catch (error) {
-    if (!proofViewer || proofViewer.path !== current.path) return;
+    if (requestId !== proofViewerRequestId || !proofViewer || proofViewer.path !== current.path) return;
     proofViewer = { ...proofViewer, status: 'error', url: null, error: readableError(error) };
   }
   render();
@@ -443,10 +445,12 @@ function bindProofActions() {
   app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => replaceProofSelection(proofGalleryInput); });
   app.querySelectorAll('[data-proof-review-close]').forEach((element) => { element.onclick = dismissProofReview; });
   app.querySelectorAll('[data-proof-submit]').forEach((element) => { element.onclick = handleProofSubmit; });
-  app.querySelectorAll('[data-proof-viewer-close]').forEach((element) => { element.onclick = () => { proofViewer = null; render(); }; });
+  app.querySelectorAll('[data-proof-viewer-close]').forEach((element) => { element.onclick = () => { proofViewerRequestId += 1; proofViewer = null; render(); }; });
   app.querySelectorAll('[data-proof-viewer-retry]').forEach((element) => { element.onclick = loadProofViewerUrl; });
-  app.querySelector('[data-proof-viewer-image]')?.addEventListener('error', () => {
-    if (!proofViewer) return;
+  const proofViewerImage = app.querySelector('[data-proof-viewer-image]');
+  const expectedUrl = proofViewer?.url;
+  proofViewerImage?.addEventListener('error', () => {
+    if (!proofViewer || proofViewer?.url !== expectedUrl) return;
     proofViewer = { ...proofViewer, status: 'error', url: null, error: 'That signed proof link expired. Tap try again.' };
     render();
   });

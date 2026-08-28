@@ -73,6 +73,12 @@ test('proof viewing stays inside the app and preserves context', () => {
   assert.match(app, /formatWhen\(activity\.when\)/);
 });
 
+test('proof viewer ignores stale signed-link and image failures', () => {
+  assert.match(app, /proofViewerRequestId/);
+  assert.match(app, /requestId !== proofViewerRequestId/);
+  assert.match(app, /proofViewer\?\.url !== expectedUrl/);
+});
+
 test('social stylesheet and service worker additions ship in production', () => {
   assert.match(css, /social\.css/);
   assert.match(build, /social\.css/);
