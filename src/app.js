@@ -29,6 +29,8 @@ let tab = 'today';
 let proofHabit = null;
 let selectedEmoji = '⚡';
 let habitSheetOpen = false;
+let editingHabitId = null;
+let archiveConfirm = false;
 let settingsSheetOpen = false;
 let nudgeInboxOpen = new URLSearchParams(window.location.search).get('nudges') === '1';
 let nudgeComposerUserId = null;
@@ -265,7 +267,7 @@ function leagueScreen() {
 }
 
 function habitSettingsRow(habit) {
-  return `<div class="habit-setting"><span>${esc(habit.emoji)}</span><div><strong>${esc(habit.title)}</strong><small>${esc(formatTime(habit.targetTime))}${habit.proofMode === 'photo' ? ' · Photo proof' : ' · Truuust mode'}</small></div></div>`;
+  return `<button type="button" class="habit-setting habit-setting-button" data-edit-habit="${habit.id}" aria-label="Edit ${esc(habit.title)}"><span>${esc(habit.emoji)}</span><div><strong>${esc(habit.title)}</strong><small>${esc(formatTime(habit.targetTime))}${habit.proofMode === 'photo' ? ' · Photo proof' : ' · Truuust mode'}</small></div><span class="setting-chevron" aria-hidden="true">›</span></button>`;
 }
 
 function meScreen() {
@@ -279,7 +281,19 @@ function meScreen() {
 function habitSheet() {
   if (!habitSheetOpen) return '';
   const emojis = ['⚡', '🏃', '🏋️', '📚', '🧠', '📵'];
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="Add habit" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>Add a habit</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="20:00"></label><label>Proof<select name="proofMode"><option value="photo" selected>Photo / screenshot</option><option value="none">Truuust me</option></select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>Add habit</button></form></section></div>`;
+  const editing = editingHabitId
+    ? getState().habits.find((habit) => habit.id === editingHabitId && habit.ownerId === getState().currentUserId && habit.active)
+    : null;
+  const editMode = Boolean(editing);
+  const title = editing?.title || '';
+  const targetTime = editing?.targetTime || '20:00';
+  const proofMode = editing?.proofMode || 'photo';
+  const archiveArea = editMode
+    ? archiveConfirm
+      ? `<div class="archive-confirm" role="alert"><strong>Archive this habit?</strong><p>It disappears from Today and Check In, but your old check-ins stay in history.</p><div><button class="btn danger-soft" type="button" data-confirm-archive ${busy ? 'disabled' : ''}>Yes, archive it</button><button class="btn" type="button" data-cancel-archive ${busy ? 'disabled' : ''}>Keep habit</button></div></div>`
+      : `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
+    : '';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form><div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
@@ -348,10 +362,15 @@ function render() {
   app.querySelectorAll('[data-settings]').forEach((element) => { element.onclick = () => { settingsSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-nudge-inbox]').forEach((element) => { element.onclick = () => { nudgeInboxOpen = true; render(); }; });
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { tab = 'today'; closeSheets(); render(); }; });
-  app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { habitSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; archiveConfirm = false; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; archiveConfirm = false; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
-  app.querySelector('#habit-form')?.addEventListener('submit', handleAdd);
+  app.querySelector('#habit-form')?.addEventListener('submit', handleHabitSubmit);
+  app.querySelector('[data-archive-habit]')?.addEventListener('click', handleArchiveRequest);
+  app.querySelector('[data-confirm-archive]')?.addEventListener('click', handleArchiveConfirm);
+  app.querySelector('[data-cancel-archive]')?.addEventListener('click', () => { archiveConfirm = false; render(); });
+  app.querySelector('[data-cancel-habit]')?.addEventListener('click', closeHabitEditor);
   app.querySelector('#nudge-form')?.addEventListener('submit', handleNudgeSubmit);
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
   app.querySelector('#notification-btn')?.addEventListener('click', handleNotifications);
@@ -372,6 +391,8 @@ function renderPreservingScroll() {
 
 function closeSheets() {
   habitSheetOpen = false;
+  editingHabitId = null;
+  archiveConfirm = false;
   settingsSheetOpen = false;
   nudgeComposerUserId = null;
   nudgeInboxOpen = false;
@@ -536,17 +557,45 @@ async function handleHabit(id) {
   await runMutation(() => repo.toggleHabit(id, today()), `Checked in · ${habit.title}`);
 }
 
-async function handleAdd(event) {
+function closeHabitEditor() {
+  habitSheetOpen = false;
+  editingHabitId = null;
+  archiveConfirm = false;
+  selectedEmoji = '⚡';
+  render();
+}
+
+async function handleHabitSubmit(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const title = String(form.get('title'));
-  const emoji = selectedEmoji;
-  await runMutation(async () => {
-    await repo.addHabit({ title, emoji, targetTime: form.get('targetTime'), proofMode: form.get('proofMode'), frequency: 'daily' });
-    selectedEmoji = '⚡';
-    habitSheetOpen = false;
-    tab = 'checkin';
-  }, `${emoji} ${title.trim()} added. Now actually do it.`);
+  const input = {
+    title: String(form.get('title')),
+    emoji: selectedEmoji,
+    targetTime: String(form.get('targetTime') || ''),
+    proofMode: String(form.get('proofMode')),
+  };
+  const habitId = editingHabitId;
+  const result = habitId
+    ? await runMutation(() => repo.updateHabit(habitId, input), 'Habit saved')
+    : await runMutation(() => repo.addHabit({ ...input, frequency: 'daily' }), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`);
+  if (!result) return;
+  closeHabitEditor();
+  if (!habitId) tab = 'checkin';
+  render();
+}
+
+function handleArchiveRequest() {
+  if (busy || !editingHabitId) return;
+  archiveConfirm = true;
+  render();
+}
+
+async function handleArchiveConfirm() {
+  const habitId = editingHabitId;
+  if (!habitId) return;
+  const result = await runMutation(() => repo.archiveHabit(habitId), 'Habit archived');
+  if (!result) return;
+  closeHabitEditor();
 }
 
 async function handleNudgeSubmit(event) {
