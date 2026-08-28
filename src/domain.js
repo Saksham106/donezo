@@ -36,3 +36,64 @@ export function calculateBestStreak(dateStrings) {
 export function rankMembers(members) {
   return [...members].sort((a, b) => b.xp - a.xp || a.name.localeCompare(b.name)).map((member, index) => ({ ...member, rank: index + 1 }));
 }
+
+function dateKey(value) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+}
+
+function mondayOf(dateString) {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  const day = date.getUTCDay();
+  const offset = day === 0 ? 6 : day - 1;
+  date.setUTCDate(date.getUTCDate() - offset);
+  return dateKey(date);
+}
+
+function inclusiveDays(startString, endString) {
+  const start = new Date(`${startString}T12:00:00Z`);
+  const end = new Date(`${endString}T12:00:00Z`);
+  if (start > end) return [];
+  const days = [];
+  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    days.push(dateKey(cursor));
+  }
+  return days;
+}
+
+export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
+  const weekStart = mondayOf(todayString);
+  const eligibleHabits = habits.filter((habit) => habit.ownerId === memberId && habit.active !== false && (habit.frequency || 'daily') === 'daily');
+  const completed = new Set(checkIns.filter((checkIn) => checkIn.userId === memberId).map((checkIn) => `${checkIn.habitId}:${checkIn.date}`));
+  let possible = 0;
+  let completedCount = 0;
+
+  for (const habit of eligibleHabits) {
+    const createdDate = habit.createdAt ? dateKey(habit.createdAt) : weekStart;
+    const start = createdDate > weekStart ? createdDate : weekStart;
+    for (const day of inclusiveDays(start, todayString)) {
+      possible += 1;
+      if (completed.has(`${habit.id}:${day}`)) completedCount += 1;
+    }
+  }
+
+  return {
+    completed: completedCount,
+    possible,
+    percent: possible === 0 ? 0 : Math.round((completedCount / possible) * 100),
+  };
+}
+
+export function rankMembersByWeeklyScore(members, habits, checkIns, todayString) {
+  return members
+    .map((member) => {
+      const score = weeklyCompletionScore(member.id, habits, checkIns, todayString);
+      return {
+        ...member,
+        weeklyScore: score.percent,
+        weeklyCompleted: score.completed,
+        weeklyPossible: score.possible,
+      };
+    })
+    .sort((a, b) => b.weeklyScore - a.weeklyScore || (b.currentStreak || 0) - (a.currentStreak || 0) || a.name.localeCompare(b.name))
+    .map((member, index) => ({ ...member, rank: index + 1 }));
+}
