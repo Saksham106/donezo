@@ -5,6 +5,8 @@ import { readFile } from 'node:fs/promises';
 const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+const build = await readFile(new URL('../scripts/build.mjs', import.meta.url), 'utf8');
+const serviceWorker = await readFile(new URL('../sw.js', import.meta.url), 'utf8');
 
 test('primary navigation is daily-use focused', () => {
   assert.match(app, /Check In/);
@@ -22,4 +24,10 @@ test('mobile shell locks zoom and isolates scrolling between safe areas', () => 
   assert.match(css, /safe-area-inset-bottom/);
   assert.match(css, /\.content-scroll/);
   assert.match(css, /overflow-y:\s*auto/);
+});
+
+test('component stylesheet ships in both production build and offline cache', () => {
+  assert.match(css, /components\.css/);
+  assert.match(build, /components\.css/);
+  assert.match(serviceWorker, /components\.css/);
 });
