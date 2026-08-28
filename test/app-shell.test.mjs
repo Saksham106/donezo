@@ -28,6 +28,13 @@ test('mobile shell locks zoom and contains itself inside the physical viewport',
   assert.match(css, /overflow-y:\s*auto/);
 });
 
+test('bottom nav stays home-indicator safe without floating too high', () => {
+  assert.match(css, /\.nav\{[^}]*padding:[^;}]*env\(safe-area-inset-bottom\)/s);
+  assert.match(css, /\.nav-btn\{[^}]*min-height:\s*(?:2\.[6-9]|3\.0)rem/s);
+  assert.doesNotMatch(css, /\.nav-btn\{[^}]*min-height:\s*3\.2rem/s);
+  assert.doesNotMatch(css, /margin-top:\s*-\.65rem/);
+});
+
 test('social UX exposes settings, nudge inbox/composer, proof votes and invite on Squad', () => {
   assert.match(app, /data-settings/);
   assert.match(app, /data-nudge-inbox/);
@@ -43,6 +50,27 @@ test('habit sheet defaults to photo proof and cannot horizontally overflow', () 
   assert.match(app, />Truuust me</);
   assert.match(social, /\.sheet[^}]*overflow-x:\s*hidden/);
   assert.match(social, /input\[type="time"\]/);
+});
+
+test('photo proof flow is review-first and mobile-camera aware', () => {
+  assert.match(html, /id="proof-input"[^>]*accept="image\/\*"[^>]*capture="environment"/);
+  assert.match(app, /proofReviewSheet/);
+  assert.match(app, /Submit proof/);
+  assert.match(app, /Retake/);
+  assert.match(app, /Choose another/);
+  assert.match(app, /URL\.createObjectURL/);
+  assert.match(app, /URL\.revokeObjectURL/);
+  assert.match(app, /completeWithProof/);
+});
+
+test('proof viewing stays inside the app and preserves context', () => {
+  assert.doesNotMatch(app, /window\.open\(/);
+  assert.match(app, /proofViewerSheet/);
+  assert.match(app, /getProofUrl/);
+  assert.match(app, /data-proof-viewer-retry/);
+  assert.match(app, /View proof/);
+  assert.match(app, /activity\.habitTitle/);
+  assert.match(app, /formatWhen\(activity\.when\)/);
 });
 
 test('social stylesheet and service worker additions ship in production', () => {
