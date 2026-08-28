@@ -6,7 +6,8 @@ const migration = await readFile(new URL('../supabase/migrations/0009_harden_pro
 const pushFunction = await readFile(new URL('../supabase/functions/send-nudge/index.ts', import.meta.url), 'utf8');
 
 test('proof vote migration prevents self downvotes and scopes votes to circle members', () => {
-  assert.match(migration, /emoji <> '👎' or ci\.user_id <> \(select auth\.uid\(\)\)/);
+  assert.match(migration, /ci\.proof_path is not null/);
+  assert.match(migration, /ci\.user_id <> \(select auth\.uid\(\)\)/);
   assert.match(migration, /h\.circle_id in \(select private\.user_circle_ids\(\)\)/);
   assert.match(migration, /reactions_delete_self/);
 });
