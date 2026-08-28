@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
+import { createRefreshCoordinator } from './refresh.js';
 import {
   dailyProgress,
   proofRejectionThreshold,
@@ -30,6 +31,10 @@ let habitSheetOpen = false;
 let settingsSheetOpen = false;
 let nudgeInboxOpen = new URLSearchParams(window.location.search).get('nudges') === '1';
 let nudgeComposerUserId = null;
+let refreshCoordinator = null;
+let manualRefreshLoading = false;
+let lastRefreshAt = null;
+let online = navigator.onLine !== false;
 let busy = false;
 let authMode = 'sign-in';
 let authMessage = '';
@@ -114,6 +119,10 @@ function incomingNudges() {
 function topbar() {
   const unread = incomingNudges().filter((nudge) => !nudge.readAt).length;
   return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button><div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open nudges">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
+}
+
+function offlineIndicator() {
+  return online ? '' : '<div class="offline-indicator" role="status">Offline · showing last sync</div>';
 }
 
 function nav() {
@@ -209,7 +218,9 @@ function squadScreen() {
     return `<div class="friend-row"><div class="avatar">${esc(person.avatar)}</div><span><strong>${isMe ? `${esc(person.name)} · You` : esc(person.name)}</strong><small>${progress.completed}/${progress.total} today · 🔥 ${person.currentStreak}</small></span>${isMe ? '<span class="you-pill">you</span>' : `<button class="btn small-btn" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</div>`;
   }).join('');
   const activities = state.friendActivities.map(activityCard).join('');
-  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR CIRCLE'}`, 'Receipts, pressure, and a little public shame.')}<section class="invite-card"><div><span class="eyebrow">INVITE FRIENDS</span><strong>${esc(state.circleInviteCode)}</strong><small>Send the code. Increase the peer pressure.</small></div><button class="btn small-btn" id="copy-invite">Copy</button></section><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
+  const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
+  const refreshButton = `<button class="btn small-btn refresh-btn ${manualRefreshLoading ? 'loading' : ''}" data-manual-refresh ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span>${manualRefreshLoading ? 'Refreshing…' : 'Refresh'}</button>`;
+  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR CIRCLE'}`, 'Receipts, pressure, and a little public shame.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small>${refreshButton}</div><section class="invite-card"><div><span class="eyebrow">INVITE FRIENDS</span><strong>${esc(state.circleInviteCode)}</strong><small>Send the code. Increase the peer pressure.</small></div><button class="btn small-btn" id="copy-invite">Copy</button></section><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
 }
 
 function leagueScreen() {
@@ -279,7 +290,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
@@ -300,7 +311,18 @@ function render() {
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
   app.querySelector('#notification-btn')?.addEventListener('click', handleNotifications);
   app.querySelector('#copy-invite')?.addEventListener('click', handleCopyInvite);
+  app.querySelector('[data-manual-refresh]')?.addEventListener('click', handleManualRefresh);
   app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
+}
+
+function renderPreservingScroll() {
+  const contentScroll = app.querySelector('#content-scroll')?.scrollTop ?? 0;
+  const sheetScroll = app.querySelector('[data-sheet]')?.scrollTop ?? 0;
+  render();
+  const nextContent = app.querySelector('#content-scroll');
+  const nextSheet = app.querySelector('[data-sheet]');
+  if (nextContent) nextContent.scrollTop = contentScroll;
+  if (nextSheet) nextSheet.scrollTop = sheetScroll;
 }
 
 function closeSheets() {
@@ -311,7 +333,59 @@ function closeSheets() {
   if (window.location.search.includes('nudges=')) history.replaceState({}, '', window.location.pathname);
 }
 
+function stopRefreshCoordinator() {
+  refreshCoordinator?.stop();
+  refreshCoordinator = null;
+  manualRefreshLoading = false;
+}
+
+async function refreshRepositoryData(activeRepo) {
+  await activeRepo.load();
+  if (!session || repo !== activeRepo) return;
+  lastRefreshAt = new Date().toISOString();
+  renderPreservingScroll();
+}
+
+function startRefreshCoordinator(activeRepo) {
+  stopRefreshCoordinator();
+  online = navigator.onLine !== false;
+  refreshCoordinator = createRefreshCoordinator({
+    refresh: () => refreshRepositoryData(activeRepo),
+    isVisible: () => document.visibilityState === 'visible',
+    isOnline: () => navigator.onLine !== false,
+    isBusy: () => busy,
+    onNetworkChange: (value) => {
+      if (repo !== activeRepo || !session) return;
+      online = value;
+      renderPreservingScroll();
+    },
+    documentTarget: document,
+    windowTarget: window,
+    intervalMs: 30_000,
+  });
+  refreshCoordinator.start();
+}
+
+async function handleManualRefresh() {
+  const coordinator = refreshCoordinator;
+  if (!coordinator || manualRefreshLoading) return;
+  manualRefreshLoading = true;
+  renderPreservingScroll();
+  const result = await coordinator.request('manual');
+  if (coordinator !== refreshCoordinator) return;
+  manualRefreshLoading = false;
+
+  if (result.status === 'refreshed') notify('Squad refreshed. Fresh receipts 🧾');
+  else if (result.status === 'failed') notify('Refresh flopped. Keeping your last good data.', 3600);
+  else if (result.reason === 'offline') notify('Still offline. Showing your last sync.', 3200);
+  else if (result.reason === 'busy') notify('Finish that action first, then refresh.', 2800);
+
+  renderPreservingScroll();
+}
+
 async function runMutation(action, successMessage) {
+  if (busy) return undefined;
+  await refreshCoordinator?.waitForIdle();
   if (busy) return undefined;
   busy = true;
   render();
@@ -470,6 +544,7 @@ async function handleCopyInvite() {
 }
 
 async function handleSignOut() {
+  stopRefreshCoordinator();
   await supabase.auth.signOut();
 }
 
@@ -488,21 +563,28 @@ proofInput.addEventListener('change', async () => {
 });
 
 async function boot(nextSession) {
+  stopRefreshCoordinator();
   session = nextSession;
+  online = navigator.onLine !== false;
   if (!session) {
     repo = null;
+    lastRefreshAt = null;
     render();
     return;
   }
   app.innerHTML = '<div class="standalone-screen loading"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><p>Loading your circle…</p></div>';
   try {
-    repo = createSupabaseRepository(supabase, session.user);
-    await repo.load();
+    const activeRepo = createSupabaseRepository(supabase, session.user);
+    repo = activeRepo;
+    await activeRepo.load();
+    lastRefreshAt = new Date().toISOString();
     render();
+    startRefreshCoordinator(activeRepo);
     if (getNotificationCapability(window).permission === 'granted') {
-      syncPushSubscription(repo).catch(() => {});
+      syncPushSubscription(activeRepo).catch(() => {});
     }
   } catch (error) {
+    stopRefreshCoordinator();
     app.innerHTML = `<div class="standalone-screen loading"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><h1>Could not load.</h1><p>${esc(readableError(error))}</p><button class="btn primary" id="retry">Retry</button><button class="text-btn" id="sign-out">Sign out</button></div>`;
     app.querySelector('#retry')?.addEventListener('click', () => boot(session));
     app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
