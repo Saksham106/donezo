@@ -68,7 +68,7 @@ export function rejectedCheckInIds(checkIns, reactions, circleMemberCount) {
   for (const reaction of reactions || []) {
     if (reaction.emoji !== '👎') continue;
     const checkIn = checkInById.get(reaction.checkInId);
-    if (!checkIn || reaction.userId === checkIn.userId) continue;
+    if (!checkIn?.proofPath || reaction.userId === checkIn.userId) continue;
     if (!votersByCheckIn.has(reaction.checkInId)) votersByCheckIn.set(reaction.checkInId, new Set());
     votersByCheckIn.get(reaction.checkInId).add(reaction.userId);
   }
