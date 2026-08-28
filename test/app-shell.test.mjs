@@ -33,7 +33,7 @@ test('social UX exposes settings, nudge inbox/composer, proof votes and invite o
   assert.match(app, /data-nudge-inbox/);
   assert.match(app, /nudge-form/);
   assert.match(app, /data-downvote/);
-  assert.match(app, /Invite friends/);
+  assert.match(app, /INVITE FRIENDS/);
   assert.match(app, /Lock in bro/);
 });
 
