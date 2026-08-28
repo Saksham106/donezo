@@ -3,6 +3,7 @@ import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
 import { createRefreshCoordinator } from './refresh.js';
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, validateInviteCode } from './invite.js';
+import { createProofReviewState, formatProofFileSize, transitionProofReview, validateProofFile } from './proof.js';
 import {
   dailyProgress,
   proofRejectionThreshold,
@@ -19,6 +20,7 @@ import {
 const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
 const proofInput = document.querySelector('#proof-input');
+const proofGalleryInput = document.querySelector('#proof-gallery-input');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
@@ -27,6 +29,8 @@ let repo = null;
 let session = null;
 let tab = 'today';
 let proofHabit = null;
+let proofReview = null;
+let proofViewer = null;
 let selectedEmoji = '⚡';
 let habitSheetOpen = false;
 let editingHabitId = null;
@@ -322,6 +326,132 @@ function inviteSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet invite-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
 }
 
+function proofSourceSheet() {
+  if (!proofHabit || proofReview) return '';
+  const habit = getState()?.habits.find((item) => item.id === proofHabit);
+  if (!habit) return '';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Camera first, library if the receipt already exists.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button></section></div>`;
+}
+
+function proofReviewSheet() {
+  if (!proofReview) return '';
+  const habit = getState()?.habits.find((item) => item.id === proofReview.habitId);
+  if (!habit) return '';
+  const uploading = proofReview.status === 'uploading';
+  const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
+  return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
+}
+
+function proofViewerSheet() {
+  if (!proofViewer) return '';
+  const loading = proofViewer.status === 'loading';
+  const actor = member(proofViewer.userId);
+  const body = loading
+    ? '<div class="proof-viewer-loading" role="status"><span></span><p>Loading proof…</p></div>'
+    : proofViewer.status === 'error'
+      ? `<div class="proof-viewer-error" role="alert"><strong>Couldn’t load that proof.</strong><p>${esc(proofViewer.error || 'The signed link may have expired.')}</p><button class="btn primary" type="button" data-proof-viewer-retry>Try again</button></div>`
+      : `<div class="proof-viewer-image-wrap"><img data-proof-viewer-image src="${esc(proofViewer.url)}" alt="Proof for ${esc(proofViewer.habitTitle)}"></div>`;
+  return `<div class="sheet-backdrop"><section class="sheet proof-viewer-sheet" role="dialog" aria-modal="true" aria-label="View proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">PROOF</p><h2>${esc(proofViewer.habitTitle)}</h2></div><button class="icon-btn" type="button" data-proof-viewer-close aria-label="Close proof">×</button></div><div class="proof-viewer-context"><strong>${esc(actor?.name || 'Friend')}</strong><span>${esc(proofViewer.whenLabel || '')}</span></div>${body}</section></div>`;
+}
+
+function clearProofReview() {
+  if (proofReview?.previewUrl) URL.revokeObjectURL(proofReview.previewUrl);
+  proofReview = null;
+}
+
+function dismissProofReview() {
+  clearProofReview();
+  proofHabit = null;
+  render();
+}
+
+function chooseProofInput(input) {
+  if (!proofHabit && proofReview?.habitId) proofHabit = proofReview.habitId;
+  input?.click();
+}
+
+function replaceProofSelection(input) {
+  if (!proofReview) return;
+  proofHabit = proofReview.habitId;
+  input?.click();
+}
+
+async function handleProofFileSelection(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  const habitId = proofHabit || proofReview?.habitId;
+  if (!habitId) return;
+  const validation = validateProofFile(file);
+  if (!validation.valid) {
+    notify(validation.error, 3400);
+    return;
+  }
+  const previewUrl = URL.createObjectURL(file);
+  if (proofReview?.previewUrl) URL.revokeObjectURL(proofReview.previewUrl);
+  proofReview = createProofReviewState({ file, habitId, previewUrl });
+  proofHabit = null;
+  render();
+}
+
+async function handleProofSubmit() {
+  const review = proofReview;
+  if (!review || review.status === 'uploading' || busy) return;
+  await refreshCoordinator?.waitForIdle();
+  if (busy || proofReview !== review) return;
+  const habit = getState().habits.find((item) => item.id === review.habitId);
+  if (!habit) return;
+  busy = true;
+  proofReview = transitionProofReview(review, { type: 'uploading' });
+  render();
+  try {
+    await repo.completeWithProof(review.habitId, today(), review.file);
+    if (proofReview?.previewUrl === review.previewUrl) clearProofReview();
+    proofHabit = null;
+    notify(`Proof saved · ${habit.title} 🧾`);
+  } catch (error) {
+    if (proofReview?.previewUrl === review.previewUrl) {
+      proofReview = transitionProofReview(proofReview, { type: 'failed', error: readableError(error) });
+    }
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
+async function loadProofViewerUrl() {
+  const current = proofViewer;
+  if (!current) return;
+  proofViewer = { ...current, status: 'loading', url: null, error: null };
+  render();
+  try {
+    const url = await repo.getProofUrl(current.path);
+    if (!proofViewer || proofViewer.path !== current.path) return;
+    proofViewer = { ...proofViewer, status: 'ready', url, error: null };
+  } catch (error) {
+    if (!proofViewer || proofViewer.path !== current.path) return;
+    proofViewer = { ...proofViewer, status: 'error', url: null, error: readableError(error) };
+  }
+  render();
+}
+
+function bindProofActions() {
+  app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
+  app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
+  app.querySelectorAll('[data-proof-source-close]').forEach((element) => { element.onclick = () => { proofHabit = null; render(); }; });
+  app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => replaceProofSelection(proofInput); });
+  app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => replaceProofSelection(proofGalleryInput); });
+  app.querySelectorAll('[data-proof-review-close]').forEach((element) => { element.onclick = dismissProofReview; });
+  app.querySelectorAll('[data-proof-submit]').forEach((element) => { element.onclick = handleProofSubmit; });
+  app.querySelectorAll('[data-proof-viewer-close]').forEach((element) => { element.onclick = () => { proofViewer = null; render(); }; });
+  app.querySelectorAll('[data-proof-viewer-retry]').forEach((element) => { element.onclick = loadProofViewerUrl; });
+  app.querySelector('[data-proof-viewer-image]')?.addEventListener('error', () => {
+    if (!proofViewer) return;
+    proofViewer = { ...proofViewer, status: 'error', url: null, error: 'That signed proof link expired. Tap try again.' };
+    render();
+  });
+}
+
 function render() {
   if (!session) {
     app.innerHTML = authScreen();
@@ -349,7 +479,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
@@ -375,6 +505,7 @@ function render() {
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
   app.querySelector('#notification-btn')?.addEventListener('click', handleNotifications);
   bindInviteActions();
+  bindProofActions();
   app.querySelector('[data-manual-refresh]')?.addEventListener('click', handleManualRefresh);
   app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
 }
@@ -397,6 +528,9 @@ function closeSheets() {
   nudgeComposerUserId = null;
   nudgeInboxOpen = false;
   inviteSheetOpen = false;
+  proofHabit = null;
+  clearProofReview();
+  proofViewer = null;
   if (window.location.search.includes('nudges=')) history.replaceState({}, '', window.location.pathname);
 }
 
@@ -551,7 +685,7 @@ async function handleHabit(id) {
   }
   if (habit.proofMode === 'photo') {
     proofHabit = id;
-    proofInput.click();
+    render();
     return;
   }
   await runMutation(() => repo.toggleHabit(id, today()), `Checked in · ${habit.title}`);
@@ -619,7 +753,7 @@ function handleRedoProof(checkInId) {
   const checkIn = getState().checkIns.find((item) => item.id === checkInId);
   if (!checkIn) return;
   proofHabit = checkIn.habitId;
-  proofInput.click();
+  render();
 }
 
 async function handleReadNudge(nudgeId) {
@@ -634,12 +768,22 @@ async function handleDisplayName(event) {
 }
 
 async function handleProofView(path) {
-  try {
-    const url = await repo.getProofUrl(path);
-    window.open(url, '_blank', 'noopener,noreferrer');
-  } catch (error) {
-    notify(readableError(error), 3500);
+  const activity = getState().friendActivities.find((item) => item.proofPath === path);
+  if (!activity) {
+    notify('Could not find that proof', 3000);
+    return;
   }
+  proofViewer = {
+    path,
+    status: 'loading',
+    url: null,
+    error: null,
+    userId: activity.userId,
+    habitTitle: activity.habitTitle,
+    whenLabel: formatWhen(activity.when),
+  };
+  render();
+  await loadProofViewerUrl();
 }
 
 async function handleNotifications() {
@@ -718,25 +862,20 @@ function bindInviteActions() {
 
 async function handleSignOut() {
   stopRefreshCoordinator();
+  clearProofReview();
+  proofHabit = null;
+  proofViewer = null;
   await supabase.auth.signOut();
 }
 
-proofInput.addEventListener('change', async () => {
-  const file = proofInput.files?.[0];
-  const habitId = proofHabit;
-  if (!file || !habitId) return;
-  proofInput.value = '';
-  proofHabit = null;
-  if (!['image/jpeg', 'image/png', 'image/webp', 'image/heic'].includes(file.type) || file.size > 4 * 1024 * 1024) {
-    notify('Use JPG, PNG, WebP, or HEIC under 4 MB');
-    return;
-  }
-  const habit = getState().habits.find((item) => item.id === habitId);
-  await runMutation(() => repo.completeWithProof(habitId, today(), file), `Proof saved · ${habit.title}. Receipt secured 🧾`);
-});
+proofInput.addEventListener('change', () => handleProofFileSelection(proofInput));
+proofGalleryInput.addEventListener('change', () => handleProofFileSelection(proofGalleryInput));
 
 async function boot(nextSession) {
   stopRefreshCoordinator();
+  clearProofReview();
+  proofHabit = null;
+  proofViewer = null;
   session = nextSession;
   online = navigator.onLine !== false;
   if (!session) {
