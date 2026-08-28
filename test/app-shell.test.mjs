@@ -50,3 +50,17 @@ test('social stylesheet and service worker additions ship in production', () => 
   assert.match(serviceWorker, /social\.css/);
   assert.match(serviceWorker, /addEventListener\('push'/);
 });
+
+test('shared circle freshness is wired without replacing the app architecture', () => {
+  assert.match(app, /createRefreshCoordinator/);
+  assert.match(app, /intervalMs:\s*30_000/);
+  assert.match(app, /visibilityState\s*===\s*'visible'/);
+  assert.match(app, /navigator\.onLine/);
+  assert.match(app, /renderPreservingScroll/);
+  assert.match(app, /refreshCoordinator\?\.stop\(\)/);
+  assert.match(app, /data-manual-refresh/);
+  assert.match(app, /manualRefreshLoading/);
+  assert.match(app, /refreshRepositoryData/);
+  assert.match(social, /\.offline-indicator/);
+  assert.match(social, /\.refresh-btn/);
+});
