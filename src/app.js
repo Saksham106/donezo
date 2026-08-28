@@ -297,7 +297,7 @@ function habitSheet() {
       ? `<div class="archive-confirm" role="alert"><strong>Archive this habit?</strong><p>It disappears from Today and Check In, but your old check-ins stay in history.</p><div><button class="btn danger-soft" type="button" data-confirm-archive ${busy ? 'disabled' : ''}>Yes, archive it</button><button class="btn" type="button" data-cancel-archive ${busy ? 'disabled' : ''}>Keep habit</button></div></div>`
       : `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
     : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form><div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form><div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
@@ -487,7 +487,14 @@ function render() {
   app.querySelectorAll('[data-downvote]').forEach((element) => { element.onclick = () => handleDownvote(element.dataset.downvote); });
   app.querySelectorAll('[data-redo-checkin]').forEach((element) => { element.onclick = () => handleRedoProof(element.dataset.redoCheckin); });
   app.querySelectorAll('[data-read-nudge]').forEach((element) => { element.onclick = () => handleReadNudge(element.dataset.readNudge); });
-  app.querySelectorAll('[data-emoji]').forEach((element) => { element.onclick = () => { selectedEmoji = element.dataset.emoji; render(); }; });
+  app.querySelectorAll('[data-emoji]').forEach((element) => { element.onclick = () => {
+    selectedEmoji = element.dataset.emoji;
+    app.querySelectorAll('[data-emoji]').forEach((button) => {
+      const selected = button.dataset.emoji === selectedEmoji;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+  }; });
   app.querySelectorAll('[data-nudge-copy]').forEach((element) => { element.onclick = () => { const textarea = app.querySelector('#nudge-form textarea'); if (textarea) textarea.value = element.dataset.nudgeCopy; }; });
   app.querySelectorAll('[data-settings]').forEach((element) => { element.onclick = () => { settingsSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-nudge-inbox]').forEach((element) => { element.onclick = () => { nudgeInboxOpen = true; render(); }; });
@@ -540,11 +547,18 @@ function stopRefreshCoordinator() {
   manualRefreshLoading = false;
 }
 
+function hasUnsavedDraft() {
+  return habitSheetOpen
+    || settingsSheetOpen
+    || Boolean(nudgeComposerUserId)
+    || Boolean(proofReview);
+}
+
 async function refreshRepositoryData(activeRepo) {
   await activeRepo.load();
   if (!session || repo !== activeRepo) return;
   lastRefreshAt = new Date().toISOString();
-  renderPreservingScroll();
+  if (!hasUnsavedDraft()) renderPreservingScroll();
 }
 
 function startRefreshCoordinator(activeRepo) {
@@ -639,6 +653,7 @@ async function handleCreateCircle(event) {
   const form = new FormData(event.currentTarget);
   await runMutation(async () => {
     await repo.createCircle(String(form.get('name')));
+    clearPendingInvite();
     createdCircleInvite = getState().circleInviteCode;
     return true;
   }, 'Circle created');
@@ -844,10 +859,14 @@ async function handleCopyRawInvite() {
   }
 }
 
-function dismissPendingInvite() {
+function clearPendingInvite() {
   pendingInvite = { present: false, valid: false, code: null, raw: null };
   inviteMessage = '';
   history.replaceState({}, '', clearInviteParam(window.location.href));
+}
+
+function dismissPendingInvite() {
+  clearPendingInvite();
   render();
 }
 

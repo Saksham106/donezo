@@ -28,3 +28,13 @@ test('habit management reuses mutation guard and closes after successful changes
   assert.match(app, /editingHabitId = null/);
   assert.match(app, /habitSheetOpen = false/);
 });
+
+test('emoji selection does not rerender and wipe unsaved habit fields', () => {
+  assert.match(app, /selectedEmoji = element\.dataset\.emoji;[\s\S]{0,240}classList\.toggle/);
+  assert.doesNotMatch(app, /selectedEmoji = element\.dataset\.emoji;\s*render\(\)/);
+});
+
+test('background refresh keeps unsaved form drafts mounted', () => {
+  assert.match(app, /function hasUnsavedDraft\(\)/);
+  assert.match(app, /lastRefreshAt = new Date\(\)\.toISOString\(\);\s*if \(!hasUnsavedDraft\(\)\) renderPreservingScroll\(\);/);
+});

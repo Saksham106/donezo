@@ -55,10 +55,12 @@ test('archiving marks the habit inactive without erasing historical check-ins', 
 
 test('production repository scopes writes to owner, reloads state, and loads archived habits for history', async () => {
   const store = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
-  assert.match(store, /async function updateHabit\([\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\);[\s\S]*?await load\(\)/);
-  assert.match(store, /async function archiveHabit\([\s\S]*?active: false[\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\);[\s\S]*?await load\(\)/);
+  assert.match(store, /async function updateHabit\([\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\)\.select\('\*'\)\.maybeSingle\(\);[\s\S]*?if \(!updated\)[\s\S]*?await load\(\)/);
+  assert.match(store, /async function archiveHabit\([\s\S]*?active: false[\s\S]*?\.eq\('id', habitId\)\.eq\('owner_id', user\.id\)\.select\('\*'\)\.maybeSingle\(\);[\s\S]*?if \(!archived\)[\s\S]*?await load\(\)/);
   assert.doesNotMatch(store, /from\('habits'\)\.select\('\*'\)\.eq\('circle_id', circle\.id\)\.eq\('active', true\)/);
   assert.match(store, /updateHabit,\s*archiveHabit/);
+  assert.match(store, /\.select\('\*'\)\.maybeSingle\(\)/);
+  assert.match(store, /archivedDate/);
 });
 
 test('existing RLS authorizes habit updates only for the owner in an active circle', async () => {

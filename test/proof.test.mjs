@@ -18,6 +18,8 @@ test('proof validation preserves current file types and 4 MB limit', () => {
   assert.match(validateProofFile(makeFile('image/gif')).error, /JPG, PNG, WebP, or HEIC/);
   assert.equal(validateProofFile(makeFile('image/jpeg', MAX_PROOF_BYTES + 1)).valid, false);
   assert.match(validateProofFile(makeFile('image/jpeg', MAX_PROOF_BYTES + 1)).error, /4 MB/);
+  assert.equal(validateProofFile(makeFile('image/jpeg', 0)).valid, false);
+  assert.match(validateProofFile(makeFile('image/jpeg', 0)).error, /empty/i);
 });
 
 test('proof file size feedback is concise and deterministic', () => {

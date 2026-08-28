@@ -9,6 +9,7 @@ export function validateProofFile(file) {
   if (!Number.isFinite(file.size) || file.size < 0 || file.size > MAX_PROOF_BYTES) {
     return { valid: false, error: 'Keep proof under 4 MB' };
   }
+  if (file.size === 0) return { valid: false, error: 'That photo is empty. Choose another one.' };
   return { valid: true, error: null };
 }
 

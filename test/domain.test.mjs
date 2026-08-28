@@ -111,6 +111,45 @@ test('weeklyCompletionScore gives the same perfect score regardless of habit cou
   assert.equal(weeklyCompletionScore('b', habits, checkIns, '2026-08-27').percent, 100);
 });
 
+test('weeklyCompletionScore preserves an archived habit through its archive date', () => {
+  const habits = [{
+    id: 'archived-run',
+    ownerId: 'me',
+    frequency: 'daily',
+    active: false,
+    createdDate: '2026-08-24',
+    archivedDate: '2026-08-26',
+  }];
+  const checkIns = [
+    { habitId: 'archived-run', userId: 'me', date: '2026-08-24' },
+    { habitId: 'archived-run', userId: 'me', date: '2026-08-25' },
+    { habitId: 'archived-run', userId: 'me', date: '2026-08-26' },
+  ];
+
+  assert.deepEqual(weeklyCompletionScore('me', habits, checkIns, '2026-08-28'), {
+    completed: 3,
+    possible: 3,
+    percent: 100,
+  });
+});
+
+test('weeklyCompletionScore excludes habits archived before the current week', () => {
+  const habits = [{
+    id: 'old-habit',
+    ownerId: 'me',
+    frequency: 'daily',
+    active: false,
+    createdDate: '2026-08-01',
+    archivedDate: '2026-08-20',
+  }];
+
+  assert.deepEqual(weeklyCompletionScore('me', habits, [], '2026-08-28'), {
+    completed: 0,
+    possible: 0,
+    percent: 0,
+  });
+});
+
 test('rankMembersByWeeklyScore breaks equal scores by streak then name', () => {
   const members = [
     { id: 'a', name: 'Alex', currentStreak: 2 },
