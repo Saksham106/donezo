@@ -56,6 +56,7 @@ export function mapDatabaseState(user, rows) {
     proofMode: habit.proof_mode,
     xp: habit.xp,
     active: habit.active,
+    createdAt: habit.created_at || null,
   }));
   const habitById = new Map(habits.map((habit) => [habit.id, habit]));
   const checkIns = (rows.checkIns || [])
@@ -227,7 +228,6 @@ export function createSupabaseRepository(client, user) {
       frequency: input.frequency || 'daily',
       target_time: input.targetTime || null,
       proof_mode: input.proofMode || 'none',
-      xp: Number(input.xp || 10),
     };
     const { error } = await client.from('habits').insert(payload);
     if (error) throw appError(error, 'Could not add habit');
