@@ -120,7 +120,7 @@ test('invite flow is compact, shareable, explicit and preserved through auth', (
   assert.match(app, /data-copy-code/);
   assert.match(app, /data-continue-app/);
   assert.match(app, /createdCircleInvite/);
-  assert.match(app, /Join friends/);
+  assert.match(app, /Join a squad/);
   assert.match(app, /const value = pendingInvite\.present/);
   assert.match(app, /value="\$\{esc\(value\)\}"/);
   assert.match(social, /\.invite-icon-btn/);

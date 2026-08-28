@@ -63,6 +63,19 @@ export function mapDatabaseState(user, rows) {
     const memberProfile = membership.profiles || {};
     return [membership.user_id || memberProfile.id, memberProfile];
   }));
+  const circles = (rows.circles || (rows.circle ? [rows.circle] : [])).map((circle) => ({
+    id: circle.id,
+    name: circle.name,
+    inviteCode: circle.invite_code,
+    ownerId: circle.owner_id,
+    role: circle.role || 'member',
+  }));
+  const sharesByHabit = new Map();
+  for (const share of rows.habitShares || []) {
+    const ids = sharesByHabit.get(share.habit_id) || [];
+    if (!ids.includes(share.circle_id)) ids.push(share.circle_id);
+    sharesByHabit.set(share.habit_id, ids);
+  }
 
   const habits = (rows.habits || []).map((habit) => {
     const ownerProfile = memberProfileById.get(habit.owner_id) || {};
@@ -70,6 +83,7 @@ export function mapDatabaseState(user, rows) {
     return {
       id: habit.id,
       circleId: habit.circle_id,
+      squadIds: sharesByHabit.get(habit.id) || [habit.circle_id],
       ownerId: habit.owner_id,
       title: habit.title,
       emoji: habit.emoji,
@@ -140,9 +154,7 @@ export function mapDatabaseState(user, rows) {
     };
   });
   const memberById = new Map(members.map((member) => [member.id, member]));
-  const friendActivities = checkIns
-    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
-    .slice(0, 40)
+  const checkInActivities = checkIns
     .map((checkIn) => {
       const habit = habitById.get(checkIn.habitId);
       const actor = memberById.get(checkIn.userId);
@@ -162,9 +174,34 @@ export function mapDatabaseState(user, rows) {
         userDownvoted: checkIn.userDownvoted,
       };
     });
+  const nudges = (rows.nudges || []).map((nudge) => ({
+    id: nudge.id,
+    circleId: nudge.circle_id,
+    fromUserId: nudge.from_user_id,
+    toUserId: nudge.to_user_id,
+    message: nudge.message,
+    visibility: nudge.visibility || 'private',
+    createdAt: nudge.created_at,
+    readAt: nudge.read_at,
+  }));
+  const calloutActivities = nudges
+    .filter((nudge) => nudge.visibility === 'squad')
+    .map((nudge) => ({
+      id: `callout-${nudge.id}`,
+      nudgeId: nudge.id,
+      userId: nudge.fromUserId,
+      toUserId: nudge.toUserId,
+      type: 'callout',
+      when: nudge.createdAt,
+      message: nudge.message,
+    }));
+  const friendActivities = [...checkInActivities, ...calloutActivities]
+    .sort((a, b) => new Date(b.when) - new Date(a.when))
+    .slice(0, 40);
 
   return {
     currentUserId: user.id,
+    circles,
     circleId: rows.circle?.id || null,
     circleName: rows.circle?.name || null,
     circleInviteCode: rows.circle?.invite_code || null,
@@ -173,15 +210,7 @@ export function mapDatabaseState(user, rows) {
     checkIns,
     reactions,
     friendActivities,
-    nudges: (rows.nudges || []).map((nudge) => ({
-      id: nudge.id,
-      circleId: nudge.circle_id,
-      fromUserId: nudge.from_user_id,
-      toUserId: nudge.to_user_id,
-      message: nudge.message,
-      createdAt: nudge.created_at,
-      readAt: nudge.read_at,
-    })),
+    nudges,
   };
 }
 
@@ -204,37 +233,51 @@ export function createSupabaseRepository(client, user) {
     return inserted;
   }
 
-  async function load() {
+  async function load(requestedCircleId = state.circleId) {
     const profile = await ensureProfile();
-    const { data: membership, error: membershipError } = await client
+    const { data: memberships, error: membershipError } = await client
       .from('circle_members')
-      .select('circle_id, role, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
+      .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
       .eq('user_id', user.id)
-      .order('joined_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (membershipError) throw appError(membershipError, 'Could not load your circle');
-    const circle = membership?.circles || null;
+      .order('joined_at', { ascending: true });
+    if (membershipError) throw appError(membershipError, 'Could not load your squads');
+    const circles = (memberships || []).map((membership) => ({
+      ...membership.circles,
+      role: membership.role,
+      joinedAt: membership.joined_at,
+    })).filter((circle) => circle.id);
+    const circle = circles.find((item) => item.id === requestedCircleId) || circles[0] || null;
     if (!circle) {
-      state = mapDatabaseState(user, { profile, circle: null, members: [], habits: [], checkIns: [], reactions: [], nudges: [] });
+      state = mapDatabaseState(user, { profile, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [] });
       return getState();
     }
 
-    const [membersResult, habitsResult, nudgesResult] = await Promise.all([
+    const [membersResult, sharedHabitsResult, nudgesResult] = await Promise.all([
       client.from('circle_members')
         .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone)')
         .eq('circle_id', circle.id)
         .order('joined_at', { ascending: true }),
-      client.from('habits').select('*').eq('circle_id', circle.id).order('created_at'),
+      client.from('habit_circles')
+        .select('habit_id,circle_id,habits!inner(*)')
+        .eq('circle_id', circle.id)
+        .order('shared_at'),
       client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100),
     ]);
-    const failed = [membersResult, habitsResult, nudgesResult].find((result) => result.error);
+    const failed = [membersResult, sharedHabitsResult, nudgesResult].find((result) => result.error);
     if (failed) throw appError(failed.error, 'Could not load Donezo data');
-    const habitIds = habitsResult.data.map((habit) => habit.id);
-    const checkInsResult = habitIds.length
-      ? await client.from('check_ins').select('*').in('habit_id', habitIds).order('completed_at', { ascending: false }).limit(1000)
-      : { data: [], error: null };
-    if (checkInsResult.error) throw appError(checkInsResult.error, 'Could not load Donezo data');
+    const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
+    const habitIds = habits.map((habit) => habit.id);
+    const [habitSharesResult, checkInsResult] = await Promise.all([
+      habitIds.length
+        ? client.from('habit_circles').select('habit_id,circle_id').in('habit_id', habitIds)
+        : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('check_ins').select('*').in('habit_id', habitIds).order('completed_at', { ascending: false }).limit(1000)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (habitSharesResult.error || checkInsResult.error) {
+      throw appError(habitSharesResult.error || checkInsResult.error, 'Could not load Donezo data');
+    }
     const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
     const reactionsResult = checkInIds.length
       ? await client.from('reactions').select('*').in('check_in_id', checkInIds).order('created_at')
@@ -242,14 +285,21 @@ export function createSupabaseRepository(client, user) {
     if (reactionsResult.error) throw appError(reactionsResult.error, 'Could not load proof votes');
     state = mapDatabaseState(user, {
       profile,
+      circles,
       circle,
       members: membersResult.data,
-      habits: habitsResult.data,
+      habits,
+      habitShares: habitSharesResult.data,
       checkIns: checkInsResult.data,
       reactions: reactionsResult.data,
       nudges: nudgesResult.data,
     });
     return getState();
+  }
+
+  async function selectCircle(circleId) {
+    if (!state.circles.some((circle) => circle.id === circleId)) throw new Error('You are not in that squad');
+    return load(circleId);
   }
 
   function getState() {
@@ -258,18 +308,18 @@ export function createSupabaseRepository(client, user) {
 
   async function createCircle(name) {
     const cleanName = name.trim();
-    if (!cleanName || cleanName.length > 60) throw new Error('Circle name must be 1–60 characters');
-    const { error } = await client.from('circles').insert({ name: cleanName, owner_id: user.id });
-    if (error) throw appError(error, 'Could not create circle');
-    return load();
+    if (!cleanName || cleanName.length > 60) throw new Error('Squad name must be 1–60 characters');
+    const { data, error } = await client.from('circles').insert({ name: cleanName, owner_id: user.id }).select('id').single();
+    if (error) throw appError(error, 'Could not create squad');
+    return load(data.id);
   }
 
   async function joinCircle(inviteCode) {
     const code = inviteCode.trim().toLowerCase();
     if (!/^[a-z0-9]{12}$/.test(code)) throw new Error('Enter the 12-character invite code');
-    const { error } = await client.rpc('join_circle', { supplied_code: code });
+    const { data, error } = await client.rpc('join_circle', { supplied_code: code });
     if (error) throw appError(error, 'Invalid or expired invite code');
-    return load();
+    return load(data);
   }
 
   async function updateDisplayName(displayName) {
@@ -281,50 +331,52 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function addHabit(input) {
-    if (!state.circleId) throw new Error('Create or join a circle first');
+    if (!state.circleId) throw new Error('Create or join a squad first');
     const clean = validateHabitInput({
       title: input.title,
       emoji: input.emoji || '⚡',
       targetTime: input.targetTime || '',
       proofMode: input.proofMode || 'photo',
     });
-    const payload = {
-      circle_id: state.circleId,
-      owner_id: user.id,
-      title: clean.title,
-      emoji: clean.emoji,
-      frequency: input.frequency || 'daily',
-      target_time: clean.targetTime || null,
-      proof_mode: clean.proofMode,
-    };
-    const { error } = await client.from('habits').insert(payload);
+    const squadIds = [...new Set(input.squadIds?.length ? input.squadIds : [state.circleId])];
+    const { data: habitId, error } = await client.rpc('create_habit_with_squads', {
+      requested_squads: squadIds,
+      habit_title: clean.title,
+      habit_emoji: clean.emoji,
+      habit_frequency: input.frequency || 'daily',
+      habit_target_time: clean.targetTime || null,
+      habit_proof_mode: clean.proofMode,
+    });
     if (error) throw appError(error, 'Could not add habit');
-    await load();
-    return state.habits.find((habit) => habit.ownerId === user.id && habit.title === clean.title);
+    await load(state.circleId);
+    return state.habits.find((habit) => habit.id === habitId) || { id: habitId };
   }
 
   function ownedHabit(habitId) {
     const habit = state.habits.find((item) => item.id === habitId);
-    if (!habit || habit.ownerId !== user.id || habit.circleId !== state.circleId) {
+    if (!habit || habit.ownerId !== user.id) {
       throw new Error('You can only manage your own habit');
     }
     return habit;
   }
 
   async function updateHabit(habitId, input) {
-    ownedHabit(habitId);
+    const habit = ownedHabit(habitId);
     const clean = validateHabitInput(input);
-    const { data: updated, error } = await client.from('habits').update({
-      title: clean.title,
-      emoji: clean.emoji,
-      target_time: clean.targetTime || null,
-      proof_mode: clean.proofMode,
-      updated_at: new Date().toISOString(),
-    }).eq('id', habitId).eq('owner_id', user.id).select('*').maybeSingle();
+    const squadIds = [...new Set(input.squadIds?.length ? input.squadIds : habit.squadIds)];
+    const { data: updatedId, error } = await client.rpc('update_habit_with_squads', {
+      target_habit_id: habitId,
+      requested_squads: squadIds,
+      habit_title: clean.title,
+      habit_emoji: clean.emoji,
+      habit_frequency: input.frequency || habit.frequency || 'daily',
+      habit_target_time: clean.targetTime || null,
+      habit_proof_mode: clean.proofMode,
+    });
     if (error) throw appError(error, 'Could not save habit');
-    if (!updated) throw new Error('Habit could not be updated. Refresh and try again.');
-    await load();
-    return state.habits.find((habit) => habit.id === habitId);
+    if (!updatedId) throw new Error('Habit could not be updated. Refresh and try again.');
+    await load(state.circleId);
+    return state.habits.find((item) => item.id === habitId) || { id: updatedId };
   }
 
   async function archiveHabit(habitId) {
@@ -410,8 +462,9 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
-  async function sendNudge(toUserId, message) {
-    if (!state.circleId) throw new Error('Create or join a circle first');
+  async function sendNudge(toUserId, message, visibility = 'squad') {
+    if (!state.circleId) throw new Error('Create or join a squad first');
+    if (!['private', 'squad'].includes(visibility)) throw new Error('Choose public or private');
     const cleanMessage = message.trim();
     if (!cleanMessage || cleanMessage.length > 140) throw new Error('Nudge must be 1–140 characters');
     const { data, error } = await client.from('nudges').insert({
@@ -419,6 +472,7 @@ export function createSupabaseRepository(client, user) {
       from_user_id: user.id,
       to_user_id: toUserId,
       message: cleanMessage,
+      visibility,
     }).select('id').single();
     if (error) throw appError(error, 'Could not send nudge');
     let pushSent = false;
@@ -469,6 +523,7 @@ export function createSupabaseRepository(client, user) {
   return {
     getState,
     load,
+    selectCircle,
     createCircle,
     joinCircle,
     updateDisplayName,
