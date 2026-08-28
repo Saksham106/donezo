@@ -1,5 +1,5 @@
-const CACHE = 'donezo-shell-v6';
-const ASSETS = ['/', '/index.html', '/tokens.css', '/styles.css', '/components.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'donezo-shell-v7';
+const ASSETS = ['/', '/index.html', '/tokens.css', '/styles.css', '/components.css', '/social.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
