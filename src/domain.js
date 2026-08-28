@@ -96,7 +96,11 @@ function inclusiveDays(startString, endString) {
 
 export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
   const weekStart = mondayOf(todayString);
-  const eligibleHabits = habits.filter((habit) => habit.ownerId === memberId && habit.active !== false && (habit.frequency || 'daily') === 'daily');
+  const eligibleHabits = habits.filter((habit) => (
+    habit.ownerId === memberId
+    && (habit.frequency || 'daily') === 'daily'
+    && (habit.active !== false || Boolean(habit.archivedDate))
+  ));
   const completed = new Set(checkIns
     .filter((checkIn) => checkIn.userId === memberId && checkIn.invalid !== true)
     .map((checkIn) => `${checkIn.habitId}:${checkIn.date}`));
@@ -107,7 +111,10 @@ export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
     const createdDate = habit.createdDate
       || (habit.createdAt ? localDateInTimeZone(habit.createdAt, habit.ownerTimeZone || 'UTC') : weekStart);
     const start = createdDate > weekStart ? createdDate : weekStart;
-    for (const day of inclusiveDays(start, todayString)) {
+    const end = habit.active === false && habit.archivedDate < todayString
+      ? habit.archivedDate
+      : todayString;
+    for (const day of inclusiveDays(start, end)) {
       possible += 1;
       if (completed.has(`${habit.id}:${day}`)) completedCount += 1;
     }

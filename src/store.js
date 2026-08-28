@@ -79,8 +79,12 @@ export function mapDatabaseState(user, rows) {
       xp: habit.xp,
       active: habit.active,
       createdAt: habit.created_at || null,
+      updatedAt: habit.updated_at || null,
       ownerTimeZone,
       createdDate: habit.created_at ? localDateInTimeZone(habit.created_at, ownerTimeZone) : null,
+      archivedDate: habit.active === false && habit.updated_at
+        ? localDateInTimeZone(habit.updated_at, ownerTimeZone)
+        : null,
     };
   });
   const habitById = new Map(habits.map((habit) => [habit.id, habit]));
@@ -310,25 +314,27 @@ export function createSupabaseRepository(client, user) {
   async function updateHabit(habitId, input) {
     ownedHabit(habitId);
     const clean = validateHabitInput(input);
-    const { error } = await client.from('habits').update({
+    const { data: updated, error } = await client.from('habits').update({
       title: clean.title,
       emoji: clean.emoji,
       target_time: clean.targetTime || null,
       proof_mode: clean.proofMode,
       updated_at: new Date().toISOString(),
-    }).eq('id', habitId).eq('owner_id', user.id);
+    }).eq('id', habitId).eq('owner_id', user.id).select('*').maybeSingle();
     if (error) throw appError(error, 'Could not save habit');
+    if (!updated) throw new Error('Habit could not be updated. Refresh and try again.');
     await load();
     return state.habits.find((habit) => habit.id === habitId);
   }
 
   async function archiveHabit(habitId) {
     ownedHabit(habitId);
-    const { error } = await client.from('habits').update({
+    const { data: archived, error } = await client.from('habits').update({
       active: false,
       updated_at: new Date().toISOString(),
-    }).eq('id', habitId).eq('owner_id', user.id);
+    }).eq('id', habitId).eq('owner_id', user.id).select('*').maybeSingle();
     if (error) throw appError(error, 'Could not archive habit');
+    if (!archived) throw new Error('Habit could not be archived. Refresh and try again.');
     await load();
     return state.habits.find((habit) => habit.id === habitId);
   }
