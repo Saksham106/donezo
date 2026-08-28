@@ -66,7 +66,11 @@ export default {
       .select('id,circle_id,from_user_id,to_user_id,message')
       .eq('id', body.nudgeId)
       .maybeSingle();
-    if (nudgeError || !nudge) return json({ error: 'Nudge not found' }, 404);
+    if (nudgeError) {
+      console.error('nudge lookup failed', nudgeError.message);
+      return json({ error: 'Could not load nudge' }, 500);
+    }
+    if (!nudge) return json({ error: 'Nudge not found' }, 404);
     if (nudge.from_user_id !== user.id) return json({ error: 'Forbidden' }, 403);
 
     const { data: memberships, error: membershipError } = await admin
@@ -74,7 +78,11 @@ export default {
       .select('user_id')
       .eq('circle_id', nudge.circle_id)
       .in('user_id', [nudge.from_user_id, nudge.to_user_id]);
-    if (membershipError || memberships?.length !== 2) return json({ error: 'Circle membership changed' }, 403);
+    if (membershipError) {
+      console.error('membership lookup failed', membershipError.message);
+      return json({ error: 'Could not verify circle membership' }, 500);
+    }
+    if (memberships?.length !== 2) return json({ error: 'Circle membership changed' }, 403);
 
     const [{ data: sender }, { data: subscriptions, error: subscriptionError }] = await Promise.all([
       admin.from('profiles').select('display_name').eq('id', nudge.from_user_id).maybeSingle(),
@@ -96,6 +104,8 @@ export default {
     });
 
     let delivered = 0;
+    let failed = 0;
+    let pruned = 0;
     for (const subscription of subscriptions || []) {
       try {
         await webpush.sendNotification({
@@ -106,13 +116,20 @@ export default {
       } catch (error) {
         const statusCode = Number((error as { statusCode?: number })?.statusCode || 0);
         if (statusCode === 404 || statusCode === 410) {
-          await admin.from('push_subscriptions').delete().eq('id', subscription.id);
+          const { error: pruneError } = await admin.from('push_subscriptions').delete().eq('id', subscription.id);
+          if (pruneError) {
+            failed += 1;
+            console.error('dead subscription prune failed', pruneError.message);
+          } else {
+            pruned += 1;
+          }
         } else {
+          failed += 1;
           console.error('push delivery failed', statusCode || error);
         }
       }
     }
 
-    return json({ delivered });
+    return json({ delivered, failed, pruned });
   },
 };
