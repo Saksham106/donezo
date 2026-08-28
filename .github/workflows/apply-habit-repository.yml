@@ -1,4 +1,4 @@
-name: Apply habit repository transform
+name: Apply habit management transforms
 
 on:
   push:
@@ -18,15 +18,17 @@ jobs:
         with:
           node-version: 24
       - run: node scripts/apply-habit-repository.mjs
+      - run: node scripts/apply-habit-ui.mjs
       - run: node --check src/store.js
-      - name: Commit repository changes
+      - run: node --check src/app.js
+      - name: Commit product changes
         run: |
           if git diff --quiet; then
-            echo "No repository changes needed"
+            echo "No product changes needed"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/store.js
-          git commit -m "feat: add habit edit and archive repository support"
+          git add src/store.js src/app.js social.css
+          git commit -m "feat: complete habit lifecycle management"
           git push origin HEAD:feat/habit-management
