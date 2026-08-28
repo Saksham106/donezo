@@ -27,7 +27,10 @@ with check (
     join public.habits h on h.id = ci.habit_id
     where ci.id = check_in_id
       and h.circle_id in (select private.user_circle_ids())
-      and (emoji <> '👎' or ci.user_id <> (select auth.uid()))
+      and (
+        emoji <> '👎'
+        or (ci.proof_path is not null and ci.user_id <> (select auth.uid()))
+      )
   )
 );
 
