@@ -134,8 +134,12 @@ function incomingNudges() {
 }
 
 function topbar() {
+  const state = getState();
   const unread = incomingNudges().filter((nudge) => !nudge.readAt).length;
-  return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button><div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open nudges">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
+  const squadSwitcher = state?.circles?.length > 1
+    ? `<select class="squad-switcher" data-squad-switcher aria-label="Switch squad">${state.circles.map((circle) => `<option value="${circle.id}" ${circle.id === state.circleId ? 'selected' : ''}>${esc(circle.name)}</option>`).join('')}</select>`
+    : `<button class="squad-name-button" type="button" data-settings>${esc(state?.circleName || 'Squad')}</button>`;
+  return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button>${squadSwitcher}<div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open nudges">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
 }
 
 function offlineIndicator() {
@@ -161,32 +165,32 @@ function authScreen() {
   const signingUp = authMode === 'sign-up';
   const inviteContext = pendingInvite.present
     ? pendingInvite.valid
-      ? `<div class="invite-context" role="status"><strong>Invite ready</strong><p>Sign in first. You’ll confirm joining your friend’s circle next.</p><button class="text-btn compact" type="button" data-dismiss-invite>Not my invite</button></div>`
+      ? `<div class="invite-context" role="status"><strong>Invite ready</strong><p>Sign in first. You’ll confirm joining your friend’s squad next.</p><button class="text-btn compact" type="button" data-dismiss-invite>Not my invite</button></div>`
       : `<div class="invite-context error" role="alert"><strong>Invite link looks off</strong><p>${esc(inviteMessage || 'Ask your friend for a fresh invite link.')}</p><button class="text-btn compact" type="button" data-dismiss-invite>Dismiss invite</button></div>`
     : '';
-  return `<div class="standalone-screen auth-shell"><header class="auth-brand"><span>ϟ</span><strong>Donezo</strong></header><section class="auth-card"><p class="eyebrow">ACCOUNTABILITY WITH FRIENDS</p><h1>${signingUp ? 'Start showing up.' : 'Welcome back.'}</h1><p>${pendingInvite.present ? 'Your invite stays with you while you sign in.' : signingUp ? 'Create an account, then make or join a circle.' : 'Your habits and your people are waiting.'}</p>${inviteContext}${authMessage ? `<div class="form-message">${esc(authMessage)}</div>` : ''}<form id="auth-form" class="form auth-form">${signingUp ? '<label>Name<input name="name" autocomplete="name" maxlength="60" required placeholder="Your name"></label>' : ''}<label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="8+ characters"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}</button></form><button class="text-btn" id="auth-mode">${signingUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</button></section></div>`;
+  return `<div class="standalone-screen auth-shell"><header class="auth-brand"><span>ϟ</span><strong>Donezo</strong></header><section class="auth-card"><p class="eyebrow">ACCOUNTABILITY WITH FRIENDS</p><h1>${signingUp ? 'Start showing up.' : 'Welcome back.'}</h1><p>${pendingInvite.present ? 'Your invite stays with you while you sign in.' : signingUp ? 'Create an account, then make or join a squad.' : 'Your habits and your people are waiting.'}</p>${inviteContext}${authMessage ? `<div class="form-message">${esc(authMessage)}</div>` : ''}<form id="auth-form" class="form auth-form">${signingUp ? '<label>Name<input name="name" autocomplete="name" maxlength="60" required placeholder="Your name"></label>' : ''}<label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="8+ characters"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}</button></form><button class="text-btn" id="auth-mode">${signingUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</button></section></div>`;
 }
 
-function createCircleForm(primary = false) {
-  return `<form id="create-circle-form" class="form ${primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Create a circle</h2><p class="form-intro">Start a fresh group, then invite your people.</p><label>Circle name<input name="name" maxlength="60" required placeholder="Donezo Crew"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Create circle</button></form>`;
+function createCircleForm(primary = false, compact = false) {
+  return `<form id="create-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Create a squad</h2><p class="form-intro">Start a separate group for family, school, work, or whoever.</p><label>Squad name<input name="name" maxlength="60" required placeholder="BU Crew"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Create squad</button></form>`;
 }
 
-function joinCircleForm(primary = false) {
+function joinCircleForm(primary = false, compact = false) {
   const value = pendingInvite.present ? (pendingInvite.valid ? pendingInvite.code : pendingInvite.raw || '') : '';
-  return `<form id="join-circle-form" class="form ${primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join friends</h2><p class="form-intro">${pendingInvite.present ? 'You came in through an invite. Confirm the code, then tap Join circle.' : 'Paste the 12-character code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join circle</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
+  return `<form id="join-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join a squad</h2><p class="form-intro">${pendingInvite.present ? 'Confirm the invite code, then join.' : 'Paste the 12-character code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join squad</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
 }
 
 function onboardingScreen() {
   const inviteFirst = pendingInvite.present;
   const detail = inviteFirst
     ? (pendingInvite.valid ? 'Your friend sent an invite. Confirm it below before anything happens.' : 'That invite needs attention. Paste a fresh code or dismiss it.')
-    : 'Create a circle now, then invite your people.';
-  return `<div class="standalone-screen onboarding-screen"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><button class="text-btn compact" id="sign-out">Sign out</button></header><main class="onboarding-content">${pageHeading(inviteFirst ? 'Join your friends' : 'Set up your circle', inviteFirst ? 'INVITE FOUND' : 'ONE LAST STEP', detail)}<div class="onboard-grid ${inviteFirst ? 'invite-first' : ''}">${inviteFirst ? `${joinCircleForm(true)}<div class="or"><span>OR</span></div>${createCircleForm(false)}` : `${createCircleForm(true)}<div class="or"><span>OR</span></div>${joinCircleForm(false)}`}</div></main></div>`;
+    : 'Create a squad now, then invite your people.';
+  return `<div class="standalone-screen onboarding-screen"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><button class="text-btn compact" id="sign-out">Sign out</button></header><main class="onboarding-content">${pageHeading(inviteFirst ? 'Join your friends' : 'Set up your first squad', inviteFirst ? 'INVITE FOUND' : 'ONE LAST STEP', detail)}<div class="onboard-grid ${inviteFirst ? 'invite-first' : ''}">${inviteFirst ? `${joinCircleForm(true)}<div class="or"><span>OR</span></div>${createCircleForm(false)}` : `${createCircleForm(true)}<div class="or"><span>OR</span></div>${joinCircleForm(false)}`}</div></main></div>`;
 }
 
 function creatorInviteScreen() {
   const code = createdCircleInvite || getState()?.circleInviteCode || '';
-  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">CIRCLE CREATED</p><h1>You’re in. Bring the group.</h1><p>Share the invite now, or jump into the app and do it later from Squad.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
+  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">SQUAD CREATED</p><h1>You’re in. Bring the group.</h1><p>Share the invite now, or jump into the app and do it later from Squad.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
 }
 
 function myHabits(state = getState()) {
@@ -243,6 +247,10 @@ function checkInScreen() {
 function activityCard(activity) {
   const actor = member(activity.userId);
   const mine = activity.userId === me().id;
+  if (activity.type === 'callout') {
+    const target = member(activity.toUserId);
+    return `<article class="activity callout"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')} called out ${esc(target?.name || 'a friend')}</strong><small>${esc(formatWhen(activity.when))} · visible to this squad</small></div></div><div class="callout-message"><span>⚡</span><p>${esc(activity.message)}</p></div></article>`;
+  }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(getState().members.length);
   const proofActions = activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">View proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
@@ -261,7 +269,7 @@ function squadScreen() {
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
   const refreshButton = `<button class="btn small-btn refresh-btn ${manualRefreshLoading ? 'loading' : ''}" data-manual-refresh ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span>${manualRefreshLoading ? 'Refreshing…' : 'Refresh'}</button>`;
   const inviteButton = `<button class="invite-icon-btn" type="button" data-invite-open aria-label="Invite friends" title="Invite friends">${icon('userPlus')}</button>`;
-  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR CIRCLE'}`, 'Receipts, pressure, and a little public shame.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${inviteButton}</div></div><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
+  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR SQUAD'}`, 'Receipts, pressure, and a little public shame.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${inviteButton}</div></div><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
 }
 
 function leagueScreen() {
@@ -295,25 +303,29 @@ function habitSheet() {
   const title = editing?.title || '';
   const targetTime = editMode ? (editing.targetTime ?? '') : '20:00';
   const proofMode = editing?.proofMode || 'photo';
+  const selectedSquads = new Set(editing?.squadIds || [getState().circleId]);
+  const squadChoices = getState().circles.map((circle) => `<label class="squad-check"><input type="checkbox" name="squadIds" value="${circle.id}" ${selectedSquads.has(circle.id) ? 'checked' : ''}><span><strong>${esc(circle.name)}</strong><small>${circle.id === getState().circleId ? 'Current squad' : 'Share updates here too'}</small></span></label>`).join('');
   const archiveArea = editMode
     ? archiveConfirm
       ? `<div class="archive-confirm" role="alert"><strong>Archive this habit?</strong><p>It disappears from Today and Check In, but your old check-ins stay in history.</p><div><button class="btn danger-soft" type="button" data-confirm-archive ${busy ? 'disabled' : ''}>Yes, archive it</button><button class="btn" type="button" data-cancel-archive ${busy ? 'disabled' : ''}>Keep habit</button></div></div>`
       : `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
     : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form><div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><fieldset class="squad-sharing"><legend>Share with squads</legend><p>One check-in appears in every selected squad. Pick at least one.</p>${squadChoices}</fieldset><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form><div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
   if (!settingsSheetOpen) return '';
   const capability = getNotificationCapability(window);
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SETTINGS</p><h2>Make it yours</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div><form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><div class="sheet-setting"><div><strong>Notifications</strong><small>${capability.supported ? `Permission: ${capability.permission}` : 'Not supported here'}</small></div><button class="btn small-btn" id="notification-btn">${capability.permission === 'granted' ? 'Test + sync' : 'Enable'}</button></div><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Then push notifications can actually bully you.</p></div><button class="text-btn danger" id="sign-out">Sign out</button></section></div>`;
+  const state = getState();
+  const squadList = state.circles.map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SETTINGS</p><h2>Make it yours</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div><form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep family and friend groups separate.</p></div><span>${state.circles.length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section><div class="sheet-setting"><div><strong>Notifications</strong><small>${capability.supported ? `Permission: ${capability.permission}` : 'Not supported here'}</small></div><button class="btn small-btn" id="notification-btn">${capability.permission === 'granted' ? 'Test + sync' : 'Enable'}</button></div><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Then push notifications can actually bully you.</p></div><button class="text-btn danger" id="sign-out">Sign out</button></section></div>`;
 }
 
 function nudgeComposerSheet() {
   if (!nudgeComposerUserId) return '';
   const friend = member(nudgeComposerUserId);
   const quick = ['Lock in bro 😭', "Don't sell 💀", "Clock's ticking lil bro", 'You got this 🤝'];
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Nudge friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">NUDGE ${esc(friend?.name || 'FRIEND').toUpperCase()}</p><h2>Apply pressure ⚡</h2></div><button class="icon-btn" type="button" data-close-nudge aria-label="Close">×</button></div><div class="quick-nudges">${quick.map((message) => `<button type="button" data-nudge-copy="${esc(message)}">${esc(message)}</button>`).join('')}</div><form id="nudge-form" class="form sheet-form"><label>Message<textarea name="message" maxlength="140" rows="3" required>Lock in bro 😭</textarea></label><div class="char-hint">140 chars max. Be annoying responsibly.</div><button class="btn primary full" ${busy ? 'disabled' : ''}>Send nudge</button></form></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Nudge friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">NUDGE ${esc(friend?.name || 'FRIEND').toUpperCase()}</p><h2>Apply pressure ⚡</h2></div><button class="icon-btn" type="button" data-close-nudge aria-label="Close">×</button></div><div class="quick-nudges">${quick.map((message) => `<button type="button" data-nudge-copy="${esc(message)}">${esc(message)}</button>`).join('')}</div><form id="nudge-form" class="form sheet-form"><label>Message<textarea name="message" maxlength="140" rows="3" required>Lock in bro 😭</textarea></label><fieldset class="visibility-choice"><legend>Who sees it?</legend><label><input type="radio" name="visibility" value="squad" checked><span><strong>Public callout</strong><small>The whole squad sees it in activity.</small></span></label><label><input type="radio" name="visibility" value="private"><span><strong>Private nudge</strong><small>Only ${esc(friend?.name || 'your friend')} sees it.</small></span></label></fieldset><div class="char-hint">140 chars max. Be annoying responsibly.</div><button class="btn primary full" ${busy ? 'disabled' : ''}>Send nudge</button></form></section></div>`;
 }
 
 function nudgeInboxSheet() {
@@ -487,6 +499,8 @@ function render() {
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
   app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
+  app.querySelector('[data-squad-switcher]')?.addEventListener('change', (event) => handleSquadSelect(event.target.value));
+  app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
   app.querySelectorAll('[data-proof]').forEach((element) => { element.onclick = () => handleProofView(element.dataset.proof); });
@@ -510,6 +524,8 @@ function render() {
   app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
   app.querySelector('#habit-form')?.addEventListener('submit', handleHabitSubmit);
+  app.querySelector('#create-circle-form')?.addEventListener('submit', handleCreateCircle);
+  app.querySelector('#join-circle-form')?.addEventListener('submit', handleJoinCircle);
   app.querySelector('[data-archive-habit]')?.addEventListener('click', handleArchiveRequest);
   app.querySelector('[data-confirm-archive]')?.addEventListener('click', handleArchiveConfirm);
   app.querySelector('[data-cancel-archive]')?.addEventListener('click', () => { archiveConfirm = false; render(); });
@@ -654,15 +670,28 @@ async function handleAuth(event) {
   }
 }
 
+async function handleSquadSelect(circleId) {
+  if (busy || !circleId || circleId === getState()?.circleId) return;
+  const result = await runMutation(() => repo.selectCircle(circleId));
+  if (!result) return;
+  localStorage.setItem('donezo.activeSquadId', circleId);
+  settingsSheetOpen = false;
+  tab = 'today';
+  notify(`Switched to ${getState().circleName}`);
+  render();
+}
+
 async function handleCreateCircle(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   await runMutation(async () => {
     await repo.createCircle(String(form.get('name')));
+    localStorage.setItem('donezo.activeSquadId', getState().circleId);
+    settingsSheetOpen = false;
     clearPendingInvite();
     createdCircleInvite = getState().circleInviteCode;
     return true;
-  }, 'Circle created');
+  }, 'Squad created');
 }
 
 async function handleJoinCircle(event) {
@@ -681,6 +710,8 @@ async function handleJoinCircle(event) {
   if (submit) { submit.disabled = true; submit.textContent = 'Joining…'; }
   try {
     await repo.joinCircle(validation.code);
+    localStorage.setItem('donezo.activeSquadId', getState().circleId);
+    settingsSheetOpen = false;
     pendingInvite = { present: false, valid: false, code: null, raw: null };
     history.replaceState({}, '', clearInviteParam(window.location.href));
     notify('You’re in. Time to lock in.');
@@ -688,7 +719,7 @@ async function handleJoinCircle(event) {
     const message = readableError(error);
     inviteMessage = /invalid|expired/i.test(message)
       ? 'That invite is invalid or expired. Ask your friend for a fresh link, or enter a different code.'
-      : `Couldn’t join that circle. ${message}`;
+      : `Couldn’t join that squad. ${message}`;
     notify(inviteMessage, 3600);
   } finally {
     busy = false;
@@ -726,9 +757,15 @@ async function handleHabitSubmit(event) {
   const input = {
     title: String(form.get('title')),
     emoji: selectedEmoji,
+    frequency: 'daily',
     targetTime: String(form.get('targetTime') || ''),
     proofMode: String(form.get('proofMode')),
+    squadIds: form.getAll('squadIds').map(String),
   };
+  if (!input.squadIds.length) {
+    notify('Pick at least one squad for this habit', 3200);
+    return;
+  }
   const habitId = editingHabitId;
   const result = habitId
     ? await runMutation(() => repo.updateHabit(habitId, input), 'Habit saved')
@@ -759,10 +796,12 @@ async function handleNudgeSubmit(event) {
   const friend = member(toUserId);
   const form = new FormData(event.currentTarget);
   const message = String(form.get('message'));
-  const result = await runMutation(() => repo.sendNudge(toUserId, message));
+  const visibility = String(form.get('visibility') || 'squad');
+  const result = await runMutation(() => repo.sendNudge(toUserId, message, visibility));
   if (!result) return;
   nudgeComposerUserId = null;
-  notify(result.pushSent ? `Nudged ${friend?.name || 'friend'} ⚡` : `Nudge saved. Push missed the bus 🚌`, 3200);
+  const label = visibility === 'squad' ? `Called out ${friend?.name || 'friend'} in the squad ⚡` : `Nudged ${friend?.name || 'friend'} privately ⚡`;
+  notify(result.pushSent ? label : `${label} Push missed the bus 🚌`, 3200);
   render();
 }
 
@@ -915,7 +954,7 @@ async function boot(nextSession) {
   try {
     const activeRepo = createSupabaseRepository(supabase, session.user);
     repo = activeRepo;
-    await activeRepo.load();
+    await activeRepo.load(localStorage.getItem('donezo.activeSquadId') || undefined);
     if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
     lastRefreshAt = new Date().toISOString();
     render();
