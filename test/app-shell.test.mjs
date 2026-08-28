@@ -33,7 +33,7 @@ test('social UX exposes settings, nudge inbox/composer, proof votes and invite o
   assert.match(app, /data-nudge-inbox/);
   assert.match(app, /nudge-form/);
   assert.match(app, /data-downvote/);
-  assert.match(app, /INVITE FRIENDS/);
+  assert.match(app, /data-invite-open/);
   assert.match(app, /Lock in bro/);
 });
 
@@ -63,4 +63,21 @@ test('shared circle freshness is wired without replacing the app architecture', 
   assert.match(app, /refreshRepositoryData/);
   assert.match(social, /\.offline-indicator/);
   assert.match(social, /\.refresh-btn/);
+});
+
+test('invite flow is compact, shareable, explicit and preserved through auth', () => {
+  assert.match(app, /navigator\.share/);
+  assert.match(app, /navigator\.clipboard\.writeText/);
+  assert.match(app, /buildAuthRedirectUrl/);
+  assert.match(app, /pendingInvite/);
+  assert.match(app, /data-dismiss-invite/);
+  assert.match(app, /data-invite-open/);
+  assert.match(app, /data-copy-code/);
+  assert.match(app, /data-continue-app/);
+  assert.match(app, /createdCircleInvite/);
+  assert.match(app, /Join friends/);
+  assert.match(app, /const value = pendingInvite\.present/);
+  assert.match(app, /value="\$\{esc\(value\)\}"/);
+  assert.match(social, /\.invite-icon-btn/);
+  assert.doesNotMatch(app, /<section class="invite-card">/);
 });

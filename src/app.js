@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
 import { createRefreshCoordinator } from './refresh.js';
+import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, validateInviteCode } from './invite.js';
 import {
   dailyProgress,
   proofRejectionThreshold,
@@ -31,6 +32,12 @@ let habitSheetOpen = false;
 let settingsSheetOpen = false;
 let nudgeInboxOpen = new URLSearchParams(window.location.search).get('nudges') === '1';
 let nudgeComposerUserId = null;
+let inviteSheetOpen = false;
+let createdCircleInvite = null;
+let pendingInvite = parseInviteParam(window.location.href);
+let inviteMessage = pendingInvite.present && !pendingInvite.valid
+  ? 'That invite link looks busted. Paste a fresh 12-character code or dismiss it.'
+  : '';
 let refreshCoordinator = null;
 let manualRefreshLoading = false;
 let lastRefreshAt = null;
@@ -108,6 +115,7 @@ function icon(name) {
     trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0Z"/><path d="M12 13v4"/><path d="M8 20h8"/><path d="M6 6H4v2a3 3 0 0 0 3 3"/><path d="M18 6h2v2a3 3 0 0 1-3 3"/>',
     user: '<circle cx="12" cy="8" r="3.5"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/>',
     bolt: '<path d="m13 2-8 11h6l-1 9 9-12h-6z"/>',
+    share: '<path d="M12 16V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v7h14v-7"/>',
   };
   return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${paths[name]}</svg>`;
 }
@@ -142,11 +150,34 @@ function pageHeading(title, meta, detail = '') {
 
 function authScreen() {
   const signingUp = authMode === 'sign-up';
-  return `<div class="standalone-screen auth-shell"><header class="auth-brand"><span>ϟ</span><strong>Donezo</strong></header><section class="auth-card"><p class="eyebrow">ACCOUNTABILITY WITH FRIENDS</p><h1>${signingUp ? 'Start showing up.' : 'Welcome back.'}</h1><p>${signingUp ? 'Create an account, then make or join a circle.' : 'Your habits and your people are waiting.'}</p>${authMessage ? `<div class="form-message">${esc(authMessage)}</div>` : ''}<form id="auth-form" class="form auth-form">${signingUp ? '<label>Name<input name="name" autocomplete="name" maxlength="60" required placeholder="Your name"></label>' : ''}<label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="8+ characters"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}</button></form><button class="text-btn" id="auth-mode">${signingUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</button></section></div>`;
+  const inviteContext = pendingInvite.present
+    ? pendingInvite.valid
+      ? `<div class="invite-context" role="status"><strong>Invite ready</strong><p>Sign in first. You’ll confirm joining your friend’s circle next.</p><button class="text-btn compact" type="button" data-dismiss-invite>Not my invite</button></div>`
+      : `<div class="invite-context error" role="alert"><strong>Invite link looks off</strong><p>${esc(inviteMessage || 'Ask your friend for a fresh invite link.')}</p><button class="text-btn compact" type="button" data-dismiss-invite>Dismiss invite</button></div>`
+    : '';
+  return `<div class="standalone-screen auth-shell"><header class="auth-brand"><span>ϟ</span><strong>Donezo</strong></header><section class="auth-card"><p class="eyebrow">ACCOUNTABILITY WITH FRIENDS</p><h1>${signingUp ? 'Start showing up.' : 'Welcome back.'}</h1><p>${pendingInvite.present ? 'Your invite stays with you while you sign in.' : signingUp ? 'Create an account, then make or join a circle.' : 'Your habits and your people are waiting.'}</p>${inviteContext}${authMessage ? `<div class="form-message">${esc(authMessage)}</div>` : ''}<form id="auth-form" class="form auth-form">${signingUp ? '<label>Name<input name="name" autocomplete="name" maxlength="60" required placeholder="Your name"></label>' : ''}<label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="8+ characters"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}</button></form><button class="text-btn" id="auth-mode">${signingUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</button></section></div>`;
+}
+
+function createCircleForm(primary = false) {
+  return `<form id="create-circle-form" class="form ${primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Create a circle</h2><p class="form-intro">Start a fresh group, then invite your people.</p><label>Circle name<input name="name" maxlength="60" required placeholder="Donezo Crew"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Create circle</button></form>`;
+}
+
+function joinCircleForm(primary = false) {
+  const value = pendingInvite.present ? (pendingInvite.valid ? pendingInvite.code : pendingInvite.raw || '') : '';
+  return `<form id="join-circle-form" class="form ${primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join friends</h2><p class="form-intro">${pendingInvite.present ? 'You came in through an invite. Confirm the code, then tap Join circle.' : 'Paste the 12-character code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join circle</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
 }
 
 function onboardingScreen() {
-  return `<div class="standalone-screen onboarding-screen"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><button class="text-btn compact" id="sign-out">Sign out</button></header><main class="onboarding-content">${pageHeading('Set up your circle', 'ONE LAST STEP', 'Create a squad or join one with an invite code.')}<div class="onboard-grid"><form id="create-circle-form" class="form"><h2>Create a circle</h2><label>Circle name<input name="name" maxlength="60" required placeholder="Donezo Crew"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>Create circle</button></form><div class="or"><span>OR</span></div><form id="join-circle-form" class="form"><h2>Join friends</h2><label>12-character invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6"></label><button class="btn full" ${busy ? 'disabled' : ''}>Join circle</button></form></div></main></div>`;
+  const inviteFirst = pendingInvite.present;
+  const detail = inviteFirst
+    ? (pendingInvite.valid ? 'Your friend sent an invite. Confirm it below before anything happens.' : 'That invite needs attention. Paste a fresh code or dismiss it.')
+    : 'Create a circle now, then invite your people.';
+  return `<div class="standalone-screen onboarding-screen"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><button class="text-btn compact" id="sign-out">Sign out</button></header><main class="onboarding-content">${pageHeading(inviteFirst ? 'Join your friends' : 'Set up your circle', inviteFirst ? 'INVITE FOUND' : 'ONE LAST STEP', detail)}<div class="onboard-grid ${inviteFirst ? 'invite-first' : ''}">${inviteFirst ? `${joinCircleForm(true)}<div class="or"><span>OR</span></div>${createCircleForm(false)}` : `${createCircleForm(true)}<div class="or"><span>OR</span></div>${joinCircleForm(false)}`}</div></main></div>`;
+}
+
+function creatorInviteScreen() {
+  const code = createdCircleInvite || getState()?.circleInviteCode || '';
+  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">CIRCLE CREATED</p><h1>You’re in. Bring the group.</h1><p>Share the invite now, or jump into the app and do it later from Squad.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
 }
 
 function myHabits(state = getState()) {
@@ -220,7 +251,8 @@ function squadScreen() {
   const activities = state.friendActivities.map(activityCard).join('');
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
   const refreshButton = `<button class="btn small-btn refresh-btn ${manualRefreshLoading ? 'loading' : ''}" data-manual-refresh ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span>${manualRefreshLoading ? 'Refreshing…' : 'Refresh'}</button>`;
-  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR CIRCLE'}`, 'Receipts, pressure, and a little public shame.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small>${refreshButton}</div><section class="invite-card"><div><span class="eyebrow">INVITE FRIENDS</span><strong>${esc(state.circleInviteCode)}</strong><small>Send the code. Increase the peer pressure.</small></div><button class="btn small-btn" id="copy-invite">Copy</button></section><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
+  const inviteButton = `<button class="invite-icon-btn" type="button" data-invite-open aria-label="Invite friends" title="Invite friends">${icon('share')}</button>`;
+  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR CIRCLE'}`, 'Receipts, pressure, and a little public shame.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${inviteButton}</div></div><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
 }
 
 function leagueScreen() {
@@ -270,6 +302,12 @@ function nudgeInboxSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Nudges" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">NUDGE INBOX</p><h2>${unread.length ? `${unread.length} waiting for you` : 'Nobody is yelling rn'}</h2></div><button class="icon-btn" type="button" data-close-inbox aria-label="Close">×</button></div>${nudges.length ? `<div class="inbox-list">${nudges.map((nudge) => `<article class="inbox-nudge ${nudge.readAt ? 'read' : ''}"><div><strong>⚡ ${esc(member(nudge.fromUserId)?.name || 'Friend')}</strong><small>${esc(formatWhen(nudge.createdAt))}</small></div><p>${esc(nudge.message)}</p>${nudge.readAt ? '' : `<button class="btn small-btn" data-read-nudge="${nudge.id}">Got it</button>`}</article>`).join('')}</div>` : '<div class="empty compact-empty"><b>No nudges.</b><p>Your friends are being suspiciously nice.</p></div>'}</section></div>`;
 }
 
+function inviteSheet() {
+  if (!inviteSheetOpen) return '';
+  const code = getState()?.circleInviteCode || '';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet invite-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
+}
+
 function render() {
   if (!session) {
     app.innerHTML = authScreen();
@@ -279,18 +317,25 @@ function render() {
       authMessage = '';
       render();
     });
+    bindInviteActions();
     return;
   }
   const state = getState();
+  if (createdCircleInvite && state?.circleId) {
+    app.innerHTML = creatorInviteScreen();
+    bindInviteActions();
+    return;
+  }
   if (!state?.circleId) {
     app.innerHTML = onboardingScreen();
     app.querySelector('#create-circle-form')?.addEventListener('submit', handleCreateCircle);
     app.querySelector('#join-circle-form')?.addEventListener('submit', handleJoinCircle);
     app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
+    bindInviteActions();
     return;
   }
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
@@ -310,7 +355,7 @@ function render() {
   app.querySelector('#nudge-form')?.addEventListener('submit', handleNudgeSubmit);
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
   app.querySelector('#notification-btn')?.addEventListener('click', handleNotifications);
-  app.querySelector('#copy-invite')?.addEventListener('click', handleCopyInvite);
+  bindInviteActions();
   app.querySelector('[data-manual-refresh]')?.addEventListener('click', handleManualRefresh);
   app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
 }
@@ -330,6 +375,7 @@ function closeSheets() {
   settingsSheetOpen = false;
   nudgeComposerUserId = null;
   nudgeInboxOpen = false;
+  inviteSheetOpen = false;
   if (window.location.search.includes('nudges=')) history.replaceState({}, '', window.location.pathname);
 }
 
@@ -417,7 +463,7 @@ async function handleAuth(event) {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { display_name: name }, emailRedirectTo: window.location.origin },
+        options: { data: { display_name: name }, emailRedirectTo: pendingInvite.present ? (pendingInvite.valid ? buildAuthRedirectUrl(window.location.href, pendingInvite.code) : window.location.href) : window.location.origin },
       });
       if (error) throw error;
       if (!data.session) authMessage = 'Check your email, confirm the account, then sign in.';
@@ -436,13 +482,42 @@ async function handleAuth(event) {
 async function handleCreateCircle(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  await runMutation(() => repo.createCircle(String(form.get('name'))), 'Circle created');
+  await runMutation(async () => {
+    await repo.createCircle(String(form.get('name')));
+    createdCircleInvite = getState().circleInviteCode;
+    return true;
+  }, 'Circle created');
 }
 
 async function handleJoinCircle(event) {
   event.preventDefault();
+  if (busy) return;
   const form = new FormData(event.currentTarget);
-  await runMutation(() => repo.joinCircle(String(form.get('code'))), 'You joined the circle');
+  const validation = validateInviteCode(String(form.get('code')));
+  if (!validation.valid) {
+    inviteMessage = 'Invite codes are 12 letters/numbers. Paste a fresh one or dismiss this invite.';
+    render();
+    return;
+  }
+  busy = true;
+  inviteMessage = '';
+  const submit = event.currentTarget.querySelector('button[type="submit"]') || event.currentTarget.querySelector('button');
+  if (submit) { submit.disabled = true; submit.textContent = 'Joining…'; }
+  try {
+    await repo.joinCircle(validation.code);
+    pendingInvite = { present: false, valid: false, code: null, raw: null };
+    history.replaceState({}, '', clearInviteParam(window.location.href));
+    notify('You’re in. Time to lock in.');
+  } catch (error) {
+    const message = readableError(error);
+    inviteMessage = /invalid|expired/i.test(message)
+      ? 'That invite is invalid or expired. Ask your friend for a fresh link, or enter a different code.'
+      : `Couldn’t join that circle. ${message}`;
+    notify(inviteMessage, 3600);
+  } finally {
+    busy = false;
+    render();
+  }
 }
 
 async function handleHabit(id) {
@@ -534,13 +609,62 @@ async function handleNotifications() {
   render();
 }
 
-async function handleCopyInvite() {
-  try {
-    await navigator.clipboard.writeText(getState().circleInviteCode);
-    notify('Invite code copied. Recruit your opps.');
-  } catch {
-    notify(`Invite code: ${getState().circleInviteCode}`, 5000);
+function activeInviteCode() {
+  return createdCircleInvite || getState()?.circleInviteCode || '';
+}
+
+async function handleShareInvite() {
+  const code = activeInviteCode();
+  if (!validateInviteCode(code).valid) {
+    notify('Invite code is not ready yet. Try again in a sec.', 3200);
+    return;
   }
+  const url = buildInviteLink(window.location.href, code);
+  const payload = {
+    title: 'Join my Donezo circle',
+    text: 'Join my Donezo circle — we’re trying to actually lock in.',
+    url,
+  };
+  if (typeof navigator.share === 'function') {
+    try {
+      await navigator.share(payload);
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    notify('Invite link copied');
+  } catch {
+    notify(url, 6000);
+  }
+}
+
+async function handleCopyRawInvite() {
+  const code = activeInviteCode();
+  try {
+    await navigator.clipboard.writeText(code);
+    notify('Raw invite code copied');
+  } catch {
+    notify(`Invite code: ${code}`, 5000);
+  }
+}
+
+function dismissPendingInvite() {
+  pendingInvite = { present: false, valid: false, code: null, raw: null };
+  inviteMessage = '';
+  history.replaceState({}, '', clearInviteParam(window.location.href));
+  render();
+}
+
+function bindInviteActions() {
+  app.querySelectorAll('[data-dismiss-invite]').forEach((element) => { element.onclick = dismissPendingInvite; });
+  app.querySelectorAll('[data-invite-open]').forEach((element) => { element.onclick = () => { inviteSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-close-invite]').forEach((element) => { element.onclick = () => { inviteSheetOpen = false; render(); }; });
+  app.querySelectorAll('[data-share-invite]').forEach((element) => { element.onclick = handleShareInvite; });
+  app.querySelectorAll('[data-copy-code]').forEach((element) => { element.onclick = handleCopyRawInvite; });
+  app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; tab = 'today'; render(); }; });
 }
 
 async function handleSignOut() {
