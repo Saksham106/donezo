@@ -17,7 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node scripts/run-invite-patch.mjs
+      - run: node scripts/fix-invite-source.mjs
+      - run: node --check src/app.js
       - name: Commit transformed source
         run: |
           if git diff --quiet; then
@@ -26,6 +27,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/app.js social.css package.json
-          git commit -m "chore: apply invite flow source changes"
+          git add src/app.js
+          git commit -m "chore: fix invite flow render syntax"
           git push origin HEAD:feat/invite-flow
