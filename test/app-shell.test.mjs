@@ -28,11 +28,18 @@ test('mobile shell locks zoom and contains itself inside the physical viewport',
   assert.match(css, /overflow-y:\s*auto/);
 });
 
-test('bottom nav stays home-indicator safe without floating too high', () => {
-  assert.match(css, /\.nav\{[^}]*padding:[^;}]*env\(safe-area-inset-bottom\)/s);
-  assert.match(css, /\.nav-btn\{[^}]*min-height:\s*(?:2\.[6-9]|3\.0)rem/s);
-  assert.doesNotMatch(css, /\.nav-btn\{[^}]*min-height:\s*3\.2rem/s);
-  assert.doesNotMatch(css, /margin-top:\s*-\.65rem/);
+test('bottom nav caps oversized iOS safe-area insets and sits low', () => {
+  assert.match(css, /--app-safe-bottom:\s*clamp\(\.25rem,\s*env\(safe-area-inset-bottom\),\s*1\.5rem\)/);
+  assert.match(css, /\.nav\{[^}]*padding:[^;}]*var\(--app-safe-bottom\)/s);
+  assert.match(css, /\.nav-btn\{[^}]*min-height:\s*2\.65rem/s);
+  assert.match(css, /\.nav-btn\.checkin \.nav-icon\{[^}]*margin-top:\s*0/s);
+  assert.doesNotMatch(css, /\.nav\{[^}]*padding:[^;}]*calc\([^;}]*env\(safe-area-inset-bottom\)/s);
+});
+
+test('Squad invite uses an add-person glyph instead of a share arrow', () => {
+  assert.match(app, /userPlus:/);
+  assert.match(app, /data-invite-open[^`]*\$\{icon\('userPlus'\)\}/s);
+  assert.doesNotMatch(app, /data-invite-open[^`]*\$\{icon\('share'\)\}/s);
 });
 
 test('social UX exposes settings, nudge inbox/composer, proof votes and invite on Squad', () => {
