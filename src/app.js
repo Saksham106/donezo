@@ -46,6 +46,7 @@ let inviteMessage = pendingInvite.present && !pendingInvite.valid
   ? 'That invite link looks busted. Paste a fresh 12-character code or dismiss it.'
   : '';
 let refreshCoordinator = null;
+let bootGeneration = 0;
 let manualRefreshLoading = false;
 let lastRefreshAt = null;
 let online = navigator.onLine !== false;
@@ -137,7 +138,7 @@ function topbar() {
 }
 
 function offlineIndicator() {
-  return online ? '' : '<div class="offline-indicator" role="status">Offline · showing last sync</div>';
+  return online ? '' : '<div class="offline-indicator" role="status">Offline · reconnect to refresh</div>';
 }
 
 function nav() {
@@ -291,7 +292,7 @@ function habitSheet() {
     : null;
   const editMode = Boolean(editing);
   const title = editing?.title || '';
-  const targetTime = editing?.targetTime || '20:00';
+  const targetTime = editMode ? (editing.targetTime ?? '') : '20:00';
   const proofMode = editing?.proofMode || 'photo';
   const archiveArea = editMode
     ? archiveConfirm
@@ -884,6 +885,7 @@ function bindInviteActions() {
 }
 
 async function handleSignOut() {
+  bootGeneration += 1;
   stopRefreshCoordinator();
   clearProofReview();
   proofHabit = null;
@@ -895,6 +897,7 @@ proofInput.addEventListener('change', () => handleProofFileSelection(proofInput)
 proofGalleryInput.addEventListener('change', () => handleProofFileSelection(proofGalleryInput));
 
 async function boot(nextSession) {
+  const generation = ++bootGeneration;
   stopRefreshCoordinator();
   clearProofReview();
   proofHabit = null;
@@ -912,6 +915,7 @@ async function boot(nextSession) {
     const activeRepo = createSupabaseRepository(supabase, session.user);
     repo = activeRepo;
     await activeRepo.load();
+    if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
     lastRefreshAt = new Date().toISOString();
     render();
     startRefreshCoordinator(activeRepo);
@@ -919,6 +923,7 @@ async function boot(nextSession) {
       syncPushSubscription(activeRepo).catch(() => {});
     }
   } catch (error) {
+    if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
     stopRefreshCoordinator();
     app.innerHTML = `<div class="standalone-screen loading"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><h1>Could not load.</h1><p>${esc(readableError(error))}</p><button class="btn primary" id="retry">Retry</button><button class="text-btn" id="sign-out">Sign out</button></div>`;
     app.querySelector('#retry')?.addEventListener('click', () => boot(session));
