@@ -13,8 +13,8 @@ const rows = {
     { user_id: 'user-2', profiles: { id: 'user-2', username: 'alex', display_name: 'Alex', avatar_url: null } },
   ],
   habits: [
-    { id: 'habit-1', circle_id: 'circle-1', owner_id: 'user-1', title: 'Run', emoji: '🏃', frequency: 'daily', target_time: '08:00:00', proof_mode: 'photo', xp: 20, active: true },
-    { id: 'habit-2', circle_id: 'circle-1', owner_id: 'user-2', title: 'Read', emoji: '📚', frequency: 'daily', target_time: null, proof_mode: 'none', xp: 10, active: true },
+    { id: 'habit-1', circle_id: 'circle-1', owner_id: 'user-1', title: 'Run', emoji: '🏃', frequency: 'daily', target_time: '08:00:00', proof_mode: 'photo', xp: 20, active: true, created_at: '2026-08-26T12:00:00Z' },
+    { id: 'habit-2', circle_id: 'circle-1', owner_id: 'user-2', title: 'Read', emoji: '📚', frequency: 'daily', target_time: null, proof_mode: 'none', xp: 10, active: true, created_at: '2026-08-25T12:00:00Z' },
   ],
   checkIns: [
     { id: 'check-1', habit_id: 'habit-1', user_id: 'user-1', check_date: '2026-08-27', completed_at: '2026-08-27T12:00:00Z', proof_path: 'user-1/proof.webp', note: null },
@@ -32,6 +32,7 @@ test('mapDatabaseState converts Supabase rows into app state and derives XP', ()
     { id: 'user-2', name: 'Alex', xp: 0 },
   ]);
   assert.equal(state.habits[0].proofMode, 'photo');
+  assert.equal(state.habits[0].createdAt, '2026-08-26T12:00:00Z');
   assert.equal(state.checkIns[0].proofPath, 'user-1/proof.webp');
   assert.equal(state.members[0].currentStreak, 1);
   assert.equal(state.members[0].bestStreak, 1);
