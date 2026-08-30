@@ -161,9 +161,14 @@ test('ships the controller entry point and a versioned network-first shell worke
   assert.match(html, /name="mobile-web-app-capable" content="yes"/);
   assert.match(html, /<script type="module" src="\/pwa\.js"><\/script>/);
   assert.match(build, /cp\('src\/pwa\.js', 'dist\/pwa\.js'\)/);
-  assert.match(worker, /donezo-shell-v14/);
+  assert.match(worker, /donezo-shell-v15/);
   assert.match(worker, /SKIP_WAITING/);
   assert.match(worker, /request\.mode === 'navigate'/);
   assert.match(worker, /cache:\s*'no-store'/);
+  assert.match(worker, /async function networkFirstShellAsset\(request\)/);
+  assert.match(worker, /\['script', 'style'\]\.includes\(event\.request\.destination\)/);
+  assert.match(worker, /event\.respondWith\(networkFirstShellAsset\(event\.request\)\)/);
+  assert.match(worker, /ASSETS\.map\(\(path\) => new Request\(path, \{ cache: 'reload' \}\)\)/);
+  assert.doesNotMatch(worker, /\['style', 'script', 'image', 'font'\]\.includes/);
   assert.doesNotMatch(worker, /self\.skipWaiting\(\);/);
 });
