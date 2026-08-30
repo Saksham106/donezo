@@ -37,4 +37,5 @@ test('emoji selection does not rerender and wipe unsaved habit fields', () => {
 test('background refresh keeps unsaved form drafts mounted', () => {
   assert.match(app, /function hasUnsavedDraft\(\)/);
   assert.match(app, /lastRefreshAt = new Date\(\)\.toISOString\(\);\s*if \(!hasUnsavedDraft\(\)\) renderPreservingScroll\(\);/);
+  assert.match(app, /onNetworkChange:\s*\(value\) => \{[\s\S]{0,180}if \(!hasUnsavedDraft\(\)\) renderPreservingScroll\(\);/);
 });

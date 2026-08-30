@@ -1367,7 +1367,7 @@ function startRefreshCoordinator(activeRepo) {
     onNetworkChange: (value) => {
       if (repo !== activeRepo || !session) return;
       online = value;
-      renderPreservingScroll();
+      if (!hasUnsavedDraft()) renderPreservingScroll();
     },
     documentTarget: document,
     windowTarget: window,
