@@ -20,6 +20,31 @@ create unique index if not exists friend_requests_one_pending_pair_idx
   on public.friend_requests(least(requester_id, addressee_id), greatest(requester_id, addressee_id))
   where status = 'pending';
 
+-- Short friend links are bearer credentials. Store only a one-way digest and
+-- keep the table inaccessible through the client Data API; the RPCs below are
+-- the only way to mint or redeem a code.
+create table if not exists public.friend_invites (
+  id uuid primary key default gen_random_uuid(),
+  inviter_id uuid not null references public.profiles(id) on delete cascade,
+  code_hash text not null unique check (code_hash ~ '^[a-f0-9]{32}$'),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '30 days'),
+  used_at timestamptz,
+  accepted_by uuid references public.profiles(id) on delete set null,
+  check (expires_at > created_at)
+);
+create index if not exists friend_invites_inviter_idx on public.friend_invites(inviter_id, created_at desc);
+create index if not exists friend_invites_open_idx on public.friend_invites(code_hash, expires_at) where used_at is null;
+
+-- The audience relation is created before helper functions that reference it.
+create table if not exists public.check_in_audience_members (
+  check_in_id uuid not null references public.check_ins(id) on delete cascade,
+  viewer_id uuid not null references public.profiles(id) on delete cascade,
+  granted_at timestamptz not null default now(),
+  primary key (check_in_id, viewer_id)
+);
+create index if not exists check_in_audience_members_viewer_idx on public.check_in_audience_members(viewer_id, check_in_id);
+
 create table if not exists public.friendships (
   user_a uuid not null references public.profiles(id) on delete cascade,
   user_b uuid not null references public.profiles(id) on delete cascade,
@@ -121,6 +146,16 @@ as $$
           and (select auth.uid()) = any(habit.selected_friend_ids)
           and private.are_direct_friends(habit.owner_id, (select auth.uid()))
         )
+        -- Keep metadata available for a check-in that already authorized this
+        -- viewer, even if the habit's current audience later changes.
+        or exists (
+          select 1
+          from public.check_ins historical_check_in
+          join public.check_in_audience_members historical_viewer
+            on historical_viewer.check_in_id = historical_check_in.id
+          where historical_check_in.habit_id = habit.id
+            and historical_viewer.viewer_id = (select auth.uid())
+        )
       )
   );
 $$;
@@ -131,6 +166,64 @@ revoke all on function private.habit_visible_to_current_user(uuid) from public, 
 grant execute on function private.are_direct_friends(uuid, uuid) to authenticated;
 grant execute on function private.direct_friend_ids(uuid) to authenticated;
 grant execute on function private.habit_visible_to_current_user(uuid) to authenticated;
+
+-- Keep one hidden compatibility workspace for schema that still requires a circle.
+create or replace function public.ensure_friends_workspace()
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor uuid := (select auth.uid());
+  workspace_id uuid;
+begin
+  if actor is null then raise exception 'Authentication required'; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(actor::text, 0));
+  select membership.circle_id into workspace_id
+  from public.circle_members membership
+  where membership.user_id = actor
+  order by membership.joined_at, membership.circle_id
+  limit 1;
+  if workspace_id is null then
+    insert into public.circles(name, owner_id)
+    values ('My Friends', actor)
+    returning id into workspace_id;
+  end if;
+  return workspace_id;
+end;
+$$;
+revoke all on function public.ensure_friends_workspace() from public, anon;
+grant execute on function public.ensure_friends_workspace() to authenticated;
+
+-- Nudges are deliberately private in the unified network. The compatibility
+-- workspace only satisfies the existing non-null circle foreign key; direct
+-- friendship, not shared workspace membership, is the authorization boundary.
+create or replace function public.send_friend_nudge(target_user_id uuid, target_message text)
+returns public.nudges
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor uuid := (select auth.uid());
+  workspace_id uuid;
+  clean_message text := pg_catalog.btrim(coalesce(target_message, ''));
+  result public.nudges;
+begin
+  if actor is null then raise exception 'Authentication required'; end if;
+  if target_user_id is null or target_user_id = actor then raise exception 'Choose a friend'; end if;
+  if not private.are_direct_friends(actor, target_user_id) then raise exception 'Direct friendship required'; end if;
+  if pg_catalog.char_length(clean_message) not between 1 and 140 then raise exception 'Nudge must be 1–140 characters'; end if;
+  workspace_id := public.ensure_friends_workspace();
+  insert into public.nudges(circle_id, from_user_id, to_user_id, message, visibility)
+  values (workspace_id, actor, target_user_id, clean_message, 'private')
+  returning * into result;
+  return result;
+end;
+$$;
+revoke all on function public.send_friend_nudge(uuid, text) from public, anon;
+grant execute on function public.send_friend_nudge(uuid, text) to authenticated;
 
 -- The old habit RPC remains compatible. Its selected audience is populated as
 -- each legacy share is written, so a newly-created legacy habit cannot become
@@ -158,6 +251,82 @@ drop trigger if exists sync_legacy_habit_audience on public.habit_circles;
 create trigger sync_legacy_habit_audience
 after insert on public.habit_circles
 for each row execute function private.sync_legacy_habit_audience();
+
+-- Code invites create a friendship directly after redemption; they do not create
+-- a pending friend_requests row, so an outstanding request cannot deadlock this flow.
+create or replace function public.create_friend_invite()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor uuid := (select auth.uid());
+  random_bytes bytea := extensions.gen_random_bytes(12);
+  code text;
+  invite public.friend_invites;
+begin
+  if actor is null then raise exception 'Authentication required'; end if;
+  select pg_catalog.string_agg(
+    pg_catalog.substr('abcdefghijklmnopqrstuvwxyz0123456789', (pg_catalog.get_byte(random_bytes, byte_index) % 36) + 1, 1),
+    '' order by byte_index
+  ) into code
+  from pg_catalog.generate_series(0, 11) as byte_index;
+  insert into public.friend_invites(inviter_id, code_hash)
+  values (actor, md5(code))
+  returning * into invite;
+  return jsonb_build_object('code', code, 'expires_at', invite.expires_at);
+end;
+$$;
+
+create or replace function public.accept_friend_invite(supplied_code text)
+returns public.friendships
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor uuid := (select auth.uid());
+  code text := lower(trim(coalesce(supplied_code, '')));
+  invite public.friend_invites;
+  result public.friendships;
+begin
+  if actor is null then raise exception 'Authentication required'; end if;
+  if code !~ '^[a-z0-9]{12}$' then raise exception 'Invalid invite code'; end if;
+  select * into invite
+  from public.friend_invites
+  where code_hash = md5(code)
+    and used_at is null
+    and expires_at > now()
+  for update;
+  if invite.id is null then raise exception 'Invalid or expired invite code'; end if;
+  if invite.inviter_id = actor then raise exception 'You cannot accept your own invite'; end if;
+  if private.are_direct_friends(invite.inviter_id, actor) then raise exception 'You are already friends'; end if;
+  insert into public.friendships(user_a, user_b)
+  values (least(invite.inviter_id, actor), greatest(invite.inviter_id, actor))
+  on conflict (user_a, user_b) do nothing
+  returning * into result;
+  update public.friend_invites
+  set used_at = now(), accepted_by = actor
+  where id = invite.id and used_at is null;
+  update public.friend_requests
+  set status = 'accepted', responded_at = now()
+  where status = 'pending'
+    and ((requester_id = invite.inviter_id and addressee_id = actor)
+      or (requester_id = actor and addressee_id = invite.inviter_id));
+  if result.user_a is null then
+    select * into result from public.friendships
+    where user_a = least(invite.inviter_id, actor)
+      and user_b = greatest(invite.inviter_id, actor);
+  end if;
+  return result;
+end;
+$$;
+
+revoke all on function public.create_friend_invite() from public, anon;
+revoke all on function public.accept_friend_invite(text) from public, anon;
+grant execute on function public.create_friend_invite() to authenticated;
+grant execute on function public.accept_friend_invite(text) to authenticated;
 
 create or replace function public.invite_friend(target_user_id uuid)
 returns public.friend_requests
@@ -228,6 +397,45 @@ begin
 end;
 $$;
 
+create or replace function public.remove_friend(target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor uuid := (select auth.uid());
+begin
+  if actor is null then raise exception 'Authentication required'; end if;
+  if target_user_id is null or target_user_id = actor then raise exception 'Choose another user'; end if;
+
+  delete from public.friendships
+  where user_a = least(actor, target_user_id)
+    and user_b = greatest(actor, target_user_id);
+  if not found then raise exception 'Friendship not found'; end if;
+
+  -- Stop future selected-audience sharing in both directions. Historical
+  -- check-in snapshots are intentionally untouched.
+  update public.habits
+  set selected_friend_ids = array_remove(selected_friend_ids, target_user_id),
+      updated_at = now()
+  where owner_id = actor and audience = 'selected_friends';
+  update public.habits
+  set selected_friend_ids = array_remove(selected_friend_ids, actor),
+      updated_at = now()
+  where owner_id = target_user_id and audience = 'selected_friends';
+
+  update public.friend_requests
+  set status = 'cancelled', responded_at = now()
+  where status = 'pending'
+    and ((requester_id = actor and addressee_id = target_user_id)
+      or (requester_id = target_user_id and addressee_id = actor));
+  delete from public.friend_labels
+  where (owner_id = actor and friend_id = target_user_id)
+    or (owner_id = target_user_id and friend_id = actor);
+end;
+$$;
+
 create or replace function public.set_habit_audience(
   target_habit_id uuid,
   requested_audience text,
@@ -270,36 +478,34 @@ $$;
 
 revoke all on function public.invite_friend(uuid) from public, anon;
 revoke all on function public.accept_friend(uuid) from public, anon;
+revoke all on function public.remove_friend(uuid) from public, anon;
 revoke all on function public.set_habit_audience(uuid, text, uuid[]) from public, anon;
 grant execute on function public.invite_friend(uuid) to authenticated;
 grant execute on function public.accept_friend(uuid) to authenticated;
+grant execute on function public.remove_friend(uuid) to authenticated;
 grant execute on function public.set_habit_audience(uuid, text, uuid[]) to authenticated;
 
 -- Every check-in stores the exact viewer set at insert time. Later friendship
 -- changes therefore cannot expose historical proof or social interactions.
-create table if not exists public.check_in_audience_members (
-  check_in_id uuid not null references public.check_ins(id) on delete cascade,
-  viewer_id uuid not null references public.profiles(id) on delete cascade,
-  granted_at timestamptz not null default now(),
-  primary key (check_in_id, viewer_id)
-);
-create index if not exists check_in_audience_members_viewer_idx on public.check_in_audience_members(viewer_id, check_in_id);
-
 insert into public.check_in_audience_members(check_in_id, viewer_id)
 select check_in.id, check_in.user_id
 from public.check_ins check_in
 on conflict (check_in_id, viewer_id) do nothing;
+-- Legacy share timestamps created by the migration are not evidence of when an
+-- old share happened. Requiring them to precede completion therefore fails
+-- closed for unverifiable legacy timing and retains owner-only access.
 insert into public.check_in_audience_members(check_in_id, viewer_id)
 select distinct check_in.id, member.user_id
 from public.check_ins check_in
 join public.habits habit on habit.id = check_in.habit_id
 join public.habit_circles share on share.habit_id = habit.id
 join public.circle_members member on member.circle_id = share.circle_id
-join public.habits visible_habit on visible_habit.id = habit.id
 where member.user_id <> check_in.user_id
+  and member.joined_at <= check_in.completed_at
+  and share.shared_at <= check_in.completed_at
   and (
-    visible_habit.audience = 'all_friends'
-    or (visible_habit.audience = 'selected_friends' and member.user_id = any(visible_habit.selected_friend_ids))
+    habit.audience = 'all_friends'
+    or (habit.audience = 'selected_friends' and member.user_id = any(habit.selected_friend_ids))
   )
 on conflict (check_in_id, viewer_id) do nothing;
 
@@ -359,7 +565,9 @@ begin
     on conflict do nothing;
   elsif habit.audience = 'selected_friends' then
     insert into public.check_in_audience_members(check_in_id, viewer_id)
-    select new.id, unnest(habit.selected_friend_ids)
+    select new.id, viewer
+    from unnest(habit.selected_friend_ids) selected(viewer)
+    where private.are_direct_friends(habit.owner_id, viewer)
     on conflict do nothing;
   end if;
   return new;
@@ -368,8 +576,32 @@ $$;
 revoke all on function private.snapshot_check_in_audience_members() from public, anon, authenticated;
 drop trigger if exists snapshot_check_in_audience_members on public.check_ins;
 create trigger snapshot_check_in_audience_members
-after insert on public.check_ins
-for each row execute function private.snapshot_check_in_audience_members();
+  after insert on public.check_ins
+  for each row execute function private.snapshot_check_in_audience_members();
+
+-- Return only immutable audience cardinalities for visible check-ins. The
+-- member rows themselves remain self-select-only so this cannot enumerate a
+-- proof's audience.
+create or replace function public.check_in_audience_sizes(target_check_in_ids uuid[])
+returns table(check_in_id uuid, audience_size bigint)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select audience.check_in_id, count(*)::bigint
+  from public.check_in_audience_members audience
+  where audience.check_in_id = any(coalesce(target_check_in_ids, '{}'::uuid[]))
+    and exists (
+      select 1
+      from public.check_in_audience_members viewer
+      where viewer.check_in_id = audience.check_in_id
+        and viewer.viewer_id = (select auth.uid())
+    )
+  group by audience.check_in_id;
+$$;
+revoke all on function public.check_in_audience_sizes(uuid[]) from public, anon;
+grant execute on function public.check_in_audience_sizes(uuid[]) to authenticated;
 
 -- Replace circle-derived reads with the immutable viewer snapshot.
 drop policy if exists profiles_select_circle_peers on public.profiles;
@@ -379,11 +611,13 @@ on public.profiles for select to authenticated
 using (id = (select auth.uid()) or private.are_direct_friends(id, (select auth.uid())));
 
 drop policy if exists habits_select_shared on public.habits;
+drop policy if exists habits_select_circle_members on public.habits;
 create policy habits_select_explicit_audience
 on public.habits for select to authenticated
 using (private.habit_visible_to_current_user(id));
 
 drop policy if exists check_ins_select_shared on public.check_ins;
+drop policy if exists check_ins_select_circle_members on public.check_ins;
 create policy check_ins_select_snapshotted_viewer
 on public.check_ins for select to authenticated
 using (exists (
@@ -392,6 +626,8 @@ using (exists (
 ));
 
 drop policy if exists check_ins_insert_self on public.check_ins;
+drop policy if exists check_ins_update_self on public.check_ins;
+drop policy if exists check_ins_insert_owner_current_day on public.check_ins;
 create policy check_ins_insert_owner_current_day
 on public.check_ins for insert to authenticated
 with check (
@@ -579,6 +815,16 @@ grant execute on function public.delete_check_in_comment(uuid) to authenticated;
 revoke insert, update, delete on public.check_in_comments from authenticated;
 revoke insert, update, delete on public.check_in_audience_members from authenticated;
 grant select on public.friendships, public.friend_requests, public.friend_labels, public.check_in_audience_members to authenticated;
+grant select on public.friendships to service_role;
+revoke all on public.friend_invites from public, anon, authenticated;
+
+drop policy if exists nudges_select_sender_or_recipient on public.nudges;
+drop policy if exists nudges_select_by_visibility on public.nudges;
+drop policy if exists nudges_insert_sender on public.nudges;
+create policy nudges_select_sender_or_recipient
+on public.nudges for select to authenticated
+using (from_user_id = (select auth.uid()) or to_user_id = (select auth.uid()));
+revoke insert on table public.nudges from authenticated;
 
 -- Re-state the critical RLS boundary in the unified-network migration so a
 -- fresh deployment and an incremental deployment have the same guardrail.
@@ -589,6 +835,7 @@ alter table public.reactions enable row level security;
 alter table public.check_in_comments enable row level security;
 alter table public.friendships enable row level security;
 alter table public.friend_requests enable row level security;
+alter table public.friend_invites enable row level security;
 alter table public.friend_labels enable row level security;
 alter table public.check_in_audience_members enable row level security;
 

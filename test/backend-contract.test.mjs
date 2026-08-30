@@ -43,6 +43,9 @@ test('push sender is authenticated, pinned, and prunes dead subscriptions', () =
   assert.match(pushFunction, /return json\(\{ delivered, failed, pruned, suppressed: false, deduped: false \}\)/);
   assert.match(pushFunction, /Could not load nudge/);
   assert.doesNotMatch(pushFunction, /VAPID_PRIVATE_KEY/);
+  assert.match(pushFunction, /from\('friendships'\)/);
+  assert.doesNotMatch(pushFunction, /from\('circle_members'\)/);
+  assert.match(pushFunction, /if \(!directFriends\) return json\(\{ error: 'Friendship changed' \}, 403\)/);
 });
 
 test('notification migration stores scoped preferences and deduplicated contextual events', () => {

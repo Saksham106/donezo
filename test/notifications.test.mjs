@@ -13,12 +13,16 @@ import {
 } from '../src/notifications.js';
 
 test('notification deep links restore the exact in-app context safely', () => {
-  assert.deepEqual(parseNotificationDeepLink('https://donezo.app/?tab=squad&checkIn=check-1'), {
-    tab: 'squad', checkInId: 'check-1', habitId: null, circleId: null, nudgesOpen: false,
+  assert.deepEqual(parseNotificationDeepLink('https://donezo.app/?tab=friends&checkIn=check-1'), {
+    tab: 'friends', checkInId: 'check-1', habitId: null, circleId: null, nudgesOpen: false,
+  });
+  assert.deepEqual(parseNotificationDeepLink('https://donezo.app/?tab=squad&checkIn=legacy-check'), {
+    tab: 'friends', checkInId: 'legacy-check', habitId: null, circleId: null, nudgesOpen: false,
   });
   assert.deepEqual(parseNotificationDeepLink('https://donezo.app/?tab=nope&habit=h-1&nudges=1'), {
     tab: 'today', checkInId: null, habitId: 'h-1', circleId: null, nudgesOpen: true,
   });
+  assert.equal(getNotificationDeepLink('reaction', { checkInId: 'check-1' }), '/?tab=friends&checkIn=check-1');
 });
 
 test('reports unsupported when Notification or service workers are unavailable', () => {

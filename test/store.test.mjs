@@ -4,7 +4,9 @@ import { createMemoryRepository } from '../src/store.js';
 
 const seed = {
   currentUserId: 'me',
-  members: [{ id: 'me', name: 'Me', xp: 100 }],
+  members: [{ id: 'me', name: 'Me', xp: 100 }, { id: 'friend', name: 'Friend', xp: 0 }],
+  profiles: [{ id: 'me', name: 'Me', xp: 100 }, { id: 'friend', name: 'Friend', xp: 0 }],
+  friendships: [{ user_a: 'friend', user_b: 'me' }],
   habits: [{ id: 'h1', ownerId: 'me', title: 'Run', emoji: '🏃', xp: 10, proofMode: 'none', active: true }],
   checkIns: [],
   nudges: [],

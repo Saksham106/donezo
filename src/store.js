@@ -31,6 +31,12 @@ function appError(error, fallback) {
   return new Error(message);
 }
 
+function normalizeFriendInviteCode(value) {
+  const code = String(value || '').trim().toLowerCase();
+  if (!/^[a-z0-9]{12}$/.test(code)) throw new Error('Enter the 12-character invite code');
+  return code;
+}
+
 export function validateHabitInput(input = {}) {
   const title = String(input.title || '').trim();
   if (!title || title.length > 80) throw new Error('Habit name must be 1–80 characters');
@@ -85,7 +91,15 @@ export function mapDatabaseState(user, rows) {
   const memberRows = rows.members?.length
     ? rows.members
     : [{ user_id: user.id, profiles: profile }];
-  const memberProfileById = new Map(memberRows.map((membership) => {
+  const friendships = rows.friendships || [];
+  const friendIds = new Set(directFriendIds(user.id, friendships));
+  const friendProfiles = (rows.friendProfiles || rows.friends || [])
+    .filter((friendProfile) => friendIds.has(friendProfile.id));
+  const networkMemberRows = [
+    { user_id: user.id, profiles: profile },
+    ...friendProfiles.map((friendProfile) => ({ user_id: friendProfile.id, profiles: friendProfile })),
+  ].filter((membership, index, all) => all.findIndex((item) => item.user_id === membership.user_id) === index);
+  const memberProfileById = new Map([...memberRows, ...networkMemberRows].map((membership) => {
     const memberProfile = membership.profiles || {};
     return [membership.user_id || memberProfile.id, memberProfile];
   }));
@@ -181,6 +195,11 @@ export function mapDatabaseState(user, rows) {
   for (const [checkInId, viewerIds] of authorizedViewersByCheckIn) {
     audienceSizeByCheckIn.set(checkInId, viewerIds.length);
   }
+  for (const size of rows.checkInAudienceSizes || rows.audienceSizes || []) {
+    const checkInId = size.check_in_id || size.checkInId;
+    const audienceSize = Number(size.audience_size ?? size.audienceSize);
+    if (checkInId && Number.isFinite(audienceSize)) audienceSizeByCheckIn.set(checkInId, audienceSize);
+  }
   const rawCheckIns = (rows.checkIns || [])
     .filter((checkIn) => habitById.has(checkIn.habit_id))
     .map((checkIn) => ({
@@ -219,7 +238,7 @@ export function mapDatabaseState(user, rows) {
   });
 
   const today = rows.today || dateInTimezone(profile.timezone);
-  const members = memberRows.map((membership) => {
+  const mapMember = (membership) => {
     const memberProfile = membership.profiles || {};
     const memberId = membership.user_id || memberProfile.id;
     const validCheckIns = checkIns.filter((checkIn) => checkIn.userId === memberId && !checkIn.invalid);
@@ -239,8 +258,11 @@ export function mapDatabaseState(user, rows) {
       bestStreak: calculateBestStreak(dates),
       awardOptOut: memberProfile.recap_awards_enabled === false,
     };
-  });
-  const memberById = new Map(members.map((member) => [member.id, member]));
+  };
+  const members = memberRows.map(mapMember);
+  const personalizedLeague = networkMemberRows.map(mapMember);
+  const friends = personalizedLeague.filter((member) => member.id !== user.id);
+  const memberById = new Map(personalizedLeague.map((member) => [member.id, member]));
   const checkInActivities = checkIns
     .map((checkIn) => {
       const habit = habitById.get(checkIn.habitId);
@@ -367,7 +389,7 @@ export function mapDatabaseState(user, rows) {
   }));
   const currentCircleId = rows.circle?.id || null;
   const comments = (rows.comments || [])
-    .filter((comment) => checkInIds.has(comment.check_in_id) && memberProfileById.has(comment.author_id) && (!currentCircleId || comment.circle_id === currentCircleId))
+    .filter((comment) => checkInIds.has(comment.check_in_id) && (!currentCircleId || comment.circle_id === currentCircleId || comment.circle_id == null))
     .map((comment) => ({
       id: comment.id,
       checkInId: comment.check_in_id,
@@ -403,8 +425,10 @@ export function mapDatabaseState(user, rows) {
 
   return {
     currentUserId: user.id,
-    friendships: rows.friendships || [],
+    friendships,
     friendRequests: rows.friendRequests || [],
+    friends,
+    personalizedLeague,
     circles,
     circleId: rows.circle?.id || null,
     circleName: rows.circle?.name || null,
@@ -414,6 +438,7 @@ export function mapDatabaseState(user, rows) {
     checkIns,
     reactions,
     friendActivities,
+    activities: friendActivities,
     nudges,
     challenges,
     recoveries,
@@ -448,46 +473,53 @@ export function createSupabaseRepository(client, user) {
 
   async function load(requestedCircleId = state.circleId) {
     const profile = await ensureProfile();
-    const { data: notificationPreferences, error: notificationPreferencesError } = await client
-      .from('notification_preferences')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle();
-    if (notificationPreferencesError) throw appError(notificationPreferencesError, 'Could not load notification settings');
-    const { data: memberships, error: membershipError } = await client
-      .from('circle_members')
-      .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
-      .eq('user_id', user.id)
-      .order('joined_at', { ascending: true });
-    if (membershipError) throw appError(membershipError, 'Could not load your squads');
-    const circles = (memberships || []).map((membership) => ({
+    const [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult] = await Promise.all([
+      client.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle(),
+      client.from('circle_members')
+        .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
+        .eq('user_id', user.id)
+        .order('joined_at', { ascending: true }),
+      client.from('friendships').select('*'),
+      client.from('friend_requests').select('*').order('created_at', { ascending: false }),
+    ]);
+    const firstError = [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult].find((result) => result.error);
+    if (firstError) throw appError(firstError.error, 'Could not load Donezo data');
+    const notificationPreferences = notificationPreferencesResult.data;
+    const friendships = friendshipsResult.data || [];
+    const friendIds = directFriendIds(user.id, friendships);
+    const friendProfilesResult = friendIds.length
+      ? await client.from('profiles').select('id,username,display_name,avatar_url,timezone,created_at,recap_awards_enabled').in('id', friendIds)
+      : { data: [], error: null };
+    if (friendProfilesResult.error) throw appError(friendProfilesResult.error, 'Could not load friends');
+    const circles = (membershipsResult.data || []).map((membership) => ({
       ...membership.circles,
       role: membership.role,
       joinedAt: membership.joined_at,
     })).filter((circle) => circle.id);
     const circle = circles.find((item) => item.id === requestedCircleId) || circles[0] || null;
-    if (!circle) {
-      state = mapDatabaseState(user, { profile, notificationPreferences, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [], comments: [], batons: [], batonHandoffs: [], batonPreference: null });
-      return getState();
-    }
 
-    const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult, batonPreferenceResult] = await Promise.all([
-      client.from('circle_members')
-        .select('user_id, role, joined_at, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone,created_at,recap_awards_enabled)')
-        .eq('circle_id', circle.id)
-        .order('joined_at', { ascending: true }),
-      client.from('habit_circles')
-        .select('habit_id,circle_id,habits!inner(*)')
-        .eq('circle_id', circle.id)
-        .order('shared_at'),
-      client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100),
-      client.from('weekly_challenges').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
-      client.from('group_stakes').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
+    const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult, batonPreferenceResult, habitsResult] = await Promise.all([
+      circle
+        ? client.from('circle_members')
+          .select('user_id, role, joined_at, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone,created_at,recap_awards_enabled)')
+          .eq('circle_id', circle.id)
+          .order('joined_at', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+      circle
+        ? client.from('habit_circles')
+          .select('habit_id,circle_id')
+          .eq('circle_id', circle.id)
+          .order('shared_at')
+        : Promise.resolve({ data: [], error: null }),
+      circle ? client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+      circle ? client.from('weekly_challenges').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20) : Promise.resolve({ data: [], error: null }),
+      circle ? client.from('group_stakes').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20) : Promise.resolve({ data: [], error: null }),
       client.from('baton_preferences').select('opted_out').eq('user_id', user.id).maybeSingle(),
+      client.from('habits').select('*').order('created_at', { ascending: false }).limit(1000),
     ]);
-    const failed = [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult, batonPreferenceResult].find((result) => result.error);
+    const failed = [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult, batonPreferenceResult, habitsResult].find((result) => result.error);
     if (failed) throw appError(failed.error, 'Could not load Donezo data');
-    const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
+    const habits = habitsResult.data || [];
     const habitIds = habits.map((habit) => habit.id);
     const stakeIds = (stakesResult.data || []).map((stake) => stake.id);
     const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult, schedulePausesResult, scheduleVersionsResult] = await Promise.all([
@@ -511,41 +543,50 @@ export function createSupabaseRepository(client, user) {
         : Promise.resolve({ data: [], error: null }),
     ]);
     const loadError = habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error || schedulePausesResult.error || scheduleVersionsResult.error;
-    if (loadError) {
-      throw appError(loadError, 'Could not load Donezo data');
-    }
-    const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
-    const [reactionsResult, commentsResult, batonsResult, batonHandoffsResult] = await Promise.all([
+    if (loadError) throw appError(loadError, 'Could not load Donezo data');
+    const checkInIds = (checkInsResult.data || []).map((checkIn) => checkIn.id);
+    const [reactionsResult, commentsResult, audienceMembersResult, audienceSizesResult, batonsResult, batonHandoffsResult] = await Promise.all([
       checkInIds.length
         ? client.from('reactions').select('*').in('check_in_id', checkInIds).order('created_at')
         : Promise.resolve({ data: [], error: null }),
       checkInIds.length
         ? client.from('check_in_comments').select('*').in('check_in_id', checkInIds).order('created_at', { ascending: true })
         : Promise.resolve({ data: [], error: null }),
-      client.from('batons').select('*').eq('circle_id', circle.id).eq('active', true),
-      client.from('baton_handoffs').select('*').eq('circle_id', circle.id).order('handed_at', { ascending: true }).limit(1000),
+      checkInIds.length
+        ? client.from('check_in_audience_members').select('check_in_id,viewer_id').in('check_in_id', checkInIds)
+        : Promise.resolve({ data: [], error: null }),
+      checkInIds.length
+        ? client.rpc('check_in_audience_sizes', { target_check_in_ids: checkInIds })
+        : Promise.resolve({ data: [], error: null }),
+      circle ? client.from('batons').select('*').eq('circle_id', circle.id).eq('active', true) : Promise.resolve({ data: [], error: null }),
+      circle ? client.from('baton_handoffs').select('*').eq('circle_id', circle.id).order('handed_at', { ascending: true }).limit(1000) : Promise.resolve({ data: [], error: null }),
     ]);
-    const socialLoadError = reactionsResult.error || commentsResult.error || batonsResult.error || batonHandoffsResult.error;
+    const socialLoadError = reactionsResult.error || commentsResult.error || audienceMembersResult.error || audienceSizesResult.error || batonsResult.error || batonHandoffsResult.error;
     if (socialLoadError) throw appError(socialLoadError, 'Could not load social activity');
     state = mapDatabaseState(user, {
       profile,
       circles,
       circle,
       members: membersResult.data,
+      friendships,
+      friendRequests: requestsResult.data || [],
+      friendProfiles: friendProfilesResult.data || [],
       habits,
-      habitShares: habitSharesResult.data,
-      checkIns: checkInsResult.data,
-      reactions: reactionsResult.data,
-      nudges: nudgesResult.data,
-      challenges: challengesResult.data,
-      recoveries: recoveriesResult.data,
-      stakes: stakesResult.data,
-      stakeConsents: stakeConsentsResult.data,
-      schedulePauses: schedulePausesResult.data,
-      scheduleVersions: scheduleVersionsResult.data,
-      comments: commentsResult.data,
-      batons: batonsResult.data,
-      batonHandoffs: batonHandoffsResult.data,
+      habitShares: habitSharesResult.data || [],
+      checkIns: checkInsResult.data || [],
+      reactions: reactionsResult.data || [],
+      checkInAudienceMembers: audienceMembersResult.data || [],
+      checkInAudienceSizes: audienceSizesResult.data || [],
+      nudges: nudgesResult.data || [],
+      challenges: challengesResult.data || [],
+      recoveries: recoveriesResult.data || [],
+      stakes: stakesResult.data || [],
+      stakeConsents: stakeConsentsResult.data || [],
+      schedulePauses: schedulePausesResult.data || [],
+      scheduleVersions: scheduleVersionsResult.data || [],
+      comments: commentsResult.data || [],
+      batons: batonsResult.data || [],
+      batonHandoffs: batonHandoffsResult.data || [],
       batonPreference: batonPreferenceResult.data,
       notificationPreferences,
     });
@@ -641,15 +682,24 @@ export function createSupabaseRepository(client, user) {
     if (error) throw appError(error, 'Could not save the habit schedule');
   }
 
+  async function ensureFriendsWorkspace() {
+    if (state.circleId) return state.circleId;
+    const { data, error } = await client.rpc('ensure_friends_workspace');
+    if (error) throw appError(error, 'Could not prepare your Friends workspace');
+    if (!data) throw new Error('Could not prepare your Friends workspace');
+    await load(data);
+    return data;
+  }
+
   async function addHabit(input) {
-    if (!state.circleId) throw new Error('Create or join a squad first');
+    const workspaceId = await ensureFriendsWorkspace();
     const clean = validateHabitInput({
       title: input.title,
       emoji: input.emoji || '⚡',
       targetTime: input.targetTime || '',
       proofMode: input.proofMode || 'photo',
     });
-    const squadIds = [...new Set(input.squadIds?.length ? input.squadIds : [state.circleId])];
+    const squadIds = [...new Set(input.squadIds?.length ? input.squadIds : [workspaceId])];
     const { data: habitId, error } = await client.rpc('create_habit_with_squads', {
       requested_squads: squadIds,
       habit_title: clean.title,
@@ -661,7 +711,13 @@ export function createSupabaseRepository(client, user) {
       habit_proof_mode: clean.proofMode,
     });
     if (error) throw appError(error, 'Could not add habit');
-    if (input.scheduleFrequency || (input.frequency && input.frequency !== 'daily')) await saveHabitSchedule(habitId, input);
+    try {
+      await setHabitAudience(habitId, input.audienceMode || input.audience || AUDIENCES.ONLY_ME, input.audienceIds ?? input.selectedFriendIds ?? []);
+      if (input.scheduleFrequency || (input.frequency && input.frequency !== 'daily')) await saveHabitSchedule(habitId, input);
+    } catch (postWriteError) {
+      try { await load(state.circleId); } catch { /* Preserve the original actionable error. */ }
+      throw new Error(`Habit created, but its settings could not be saved: ${postWriteError?.message || 'Please refresh and try again.'}`);
+    }
     await load(state.circleId);
     return state.habits.find((habit) => habit.id === habitId) || { id: habitId };
   }
@@ -718,7 +774,13 @@ export function createSupabaseRepository(client, user) {
     });
     if (error) throw appError(error, 'Could not save habit');
     if (!updatedId) throw new Error('Habit could not be updated. Refresh and try again.');
-    if (scheduleChanged) await saveHabitSchedule(habitId, input);
+    try {
+      await setHabitAudience(habitId, input.audienceMode || input.audience || habit.audience || AUDIENCES.ONLY_ME, input.audienceIds ?? input.selectedFriendIds ?? habit.selectedFriendIds ?? []);
+      if (scheduleChanged) await saveHabitSchedule(habitId, input);
+    } catch (postWriteError) {
+      try { await load(state.circleId); } catch { /* Preserve the original actionable error. */ }
+      throw new Error(`Habit updated, but its settings could not be saved: ${postWriteError?.message || 'Please refresh and try again.'}`);
+    }
     await load(state.circleId);
     return state.habits.find((item) => item.id === habitId) || { id: updatedId };
   }
@@ -947,30 +1009,27 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
-  async function sendNudge(toUserId, message, visibility = 'squad') {
-    if (!state.circleId) throw new Error('Create or join a squad first');
-    if (!['private', 'squad'].includes(visibility)) throw new Error('Choose public or private');
+  async function sendNudge(toUserId, message, visibility = 'private') {
+    if (visibility !== 'private') throw new Error('Friend nudges are private');
     const cleanMessage = message.trim();
     if (!cleanMessage || cleanMessage.length > 140) throw new Error('Nudge must be 1–140 characters');
-    const { data, error } = await client.from('nudges').insert({
-      circle_id: state.circleId,
-      from_user_id: user.id,
-      to_user_id: toUserId,
-      message: cleanMessage,
-      visibility,
-    }).select('id').single();
+    const { data, error } = await client.rpc('send_friend_nudge', {
+      target_user_id: toUserId,
+      target_message: cleanMessage,
+    });
     if (error) throw appError(error, 'Could not send nudge');
+    const nudgeId = data?.id || data;
     let pushSent = false;
     try {
       const { error: pushError } = await client.functions.invoke('send-nudge', {
-        body: { action: 'send-nudge', nudgeId: data.id },
+        body: { action: 'send-nudge', nudgeId },
       });
       pushSent = !pushError;
     } catch {
       pushSent = false;
     }
     await load();
-    return { pushSent, nudgeId: data.id };
+    return { ...(typeof data === 'object' && data ? data : { id: nudgeId }), pushSent };
   }
 
   async function markNudgeRead(nudgeId) {
@@ -1082,6 +1141,22 @@ export function createSupabaseRepository(client, user) {
     };
   }
 
+  async function createFriendInvite() {
+    const { data, error } = await client.rpc('create_friend_invite');
+    if (error) throw appError(error, 'Could not create friend invite');
+    const code = normalizeFriendInviteCode(typeof data === 'string' ? data : data?.code);
+    state.friendInviteCode = code;
+    return { ...(typeof data === 'object' && data ? data : {}), code };
+  }
+
+  async function acceptFriendInvite(inviteCode) {
+    const code = normalizeFriendInviteCode(inviteCode);
+    const { data, error } = await client.rpc('accept_friend_invite', { supplied_code: code });
+    if (error) throw appError(error, 'Could not accept friend invite');
+    await load(state.circleId);
+    return data;
+  }
+
   async function inviteFriend(targetUserId) {
     if (!targetUserId || targetUserId === user.id) throw new Error('Choose another user');
     const { data, error } = await client.rpc('invite_friend', { target_user_id: targetUserId });
@@ -1094,6 +1169,14 @@ export function createSupabaseRepository(client, user) {
     const { data, error } = await client.rpc('accept_friend', { target_request_id: requestId });
     if (error) throw appError(error, 'Could not accept friend invite');
     return data;
+  }
+
+  async function removeFriend(targetUserId) {
+    if (!targetUserId || targetUserId === user.id) throw new Error('Choose another user');
+    const { error } = await client.rpc('remove_friend', { target_user_id: targetUserId });
+    if (error) throw appError(error, 'Could not remove friend');
+    await load(state.circleId);
+    return true;
   }
 
   async function setHabitAudience(habitId, audience, selectedFriendIds = []) {
@@ -1146,6 +1229,7 @@ export function createSupabaseRepository(client, user) {
     updateDisplayName,
     saveNotificationPreferences,
     setRecapAwardsEnabled,
+    ensureFriendsWorkspace,
     addHabit,
     updateHabit,
     archiveHabit,
@@ -1173,10 +1257,12 @@ export function createSupabaseRepository(client, user) {
     savePushSubscription,
     getProofUrl,
     loadFriends,
+    createFriendInvite,
+    acceptFriendInvite,
     inviteFriend,
     sendFriendInvite: inviteFriend,
     acceptFriend,
-    acceptFriendInvite: acceptFriend,
+    removeFriend,
     setHabitAudience,
     loadUnifiedFeed,
     loadPersonalizedLeague,
@@ -1212,6 +1298,22 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return (state.profiles || state.members || []).filter((profile) => ids.has(profile.id)).map((profile) => clone(profile));
   }
 
+  function ensureFriendsWorkspace() {
+    if (state.circleId) return state.circleId;
+    const workspaceId = uid('friends-workspace');
+    state.circleId = workspaceId;
+    state.circleName = 'My Friends';
+    state.circles ||= [];
+    state.circles.push({ id: workspaceId, name: 'My Friends', ownerId: state.currentUserId, role: 'owner' });
+    state.members ||= [];
+    if (!state.members.some((member) => member.id === state.currentUserId)) {
+      const profile = (state.profiles || []).find((item) => item.id === state.currentUserId) || { id: state.currentUserId, name: 'You' };
+      state.members.push({ ...profile, xp: Number(profile.xp || 0) });
+    }
+    emit();
+    return workspaceId;
+  }
+
   function inviteFriend(targetUserId) {
     const actor = state.currentUserId;
     if (!targetUserId || targetUserId === actor) throw new Error('Choose another user');
@@ -1231,6 +1333,44 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return clone(request);
   }
 
+  function createFriendInvite() {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let code = '';
+    state.friendInvites ||= [];
+    do {
+      code = Array.from({ length: 12 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+    } while (state.friendInvites.some((invite) => invite.code === code && !invite.usedAt));
+    const expiresAt = new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString();
+    state.friendInvites.push({ code, inviterId: state.currentUserId, expiresAt, usedAt: null, acceptedBy: null });
+    emit();
+    return { code, expires_at: expiresAt };
+  }
+
+  function acceptFriendInvite(inviteCode) {
+    const code = normalizeFriendInviteCode(inviteCode);
+    const invite = (state.friendInvites || []).find((item) => item.code === code && !item.usedAt && new Date(item.expiresAt).getTime() > Date.now());
+    if (!invite) throw new Error('Invalid or expired invite code');
+    if (invite.inviterId === state.currentUserId) throw new Error('You cannot accept your own invite');
+    if (getFriendIds().includes(invite.inviterId)) throw new Error('You are already friends');
+    const [userA, userB] = canonicalFriendPair(invite.inviterId, state.currentUserId);
+    state.friendships ||= [];
+    if (!state.friendships.some((friendship) => friendship.user_a === userA && friendship.user_b === userB)) {
+      state.friendships.push({ user_a: userA, user_b: userB });
+    }
+    invite.usedAt = new Date().toISOString();
+    invite.acceptedBy = state.currentUserId;
+    for (const request of state.friendRequests || []) {
+      if (request.status === 'pending'
+        && ((request.requesterId === invite.inviterId && request.addresseeId === state.currentUserId)
+          || (request.requesterId === state.currentUserId && request.addresseeId === invite.inviterId))) {
+        request.status = 'accepted';
+        request.respondedAt = invite.usedAt;
+      }
+    }
+    emit();
+    return clone({ user_a: userA, user_b: userB, status: 'accepted' });
+  }
+
   function acceptFriend(requestId) {
     const request = (state.friendRequests || []).find((item) => item.id === requestId
       && item.addresseeId === state.currentUserId && item.status === 'pending');
@@ -1244,6 +1384,31 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     request.respondedAt = new Date().toISOString();
     emit();
     return clone({ user_a: userA, user_b: userB, status: request.status, requestId });
+  }
+
+  function removeFriend(targetUserId) {
+    const actor = state.currentUserId;
+    if (!targetUserId || targetUserId === actor) throw new Error('Choose another user');
+    const [userA, userB] = canonicalFriendPair(actor, targetUserId);
+    const friendshipIndex = (state.friendships || []).findIndex((friendship) => friendship.user_a === userA && friendship.user_b === userB);
+    if (friendshipIndex < 0) throw new Error('Friendship not found');
+    state.friendships.splice(friendshipIndex, 1);
+    for (const habit of state.habits || []) {
+      if (habit.ownerId === actor) habit.selectedFriendIds = (habit.selectedFriendIds || []).filter((id) => id !== targetUserId);
+      if (habit.ownerId === targetUserId) habit.selectedFriendIds = (habit.selectedFriendIds || []).filter((id) => id !== actor);
+    }
+    const respondedAt = new Date().toISOString();
+    for (const request of state.friendRequests || []) {
+      if (request.status === 'pending' && ((request.requesterId === actor && request.addresseeId === targetUserId)
+        || (request.requesterId === targetUserId && request.addresseeId === actor))) {
+        request.status = 'cancelled';
+        request.respondedAt = respondedAt;
+      }
+    }
+    state.friendLabels = (state.friendLabels || []).filter((label) => !((label.ownerId === actor && label.friendId === targetUserId)
+      || (label.ownerId === targetUserId && label.friendId === actor)));
+    emit();
+    return true;
   }
 
   function addFriendForTest(friendId) {
@@ -1286,6 +1451,7 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   function addHabit(input) {
+    ensureFriendsWorkspace();
     const clean = validateHabitInput({ title: input.title, emoji: input.emoji || '⚡', targetTime: input.targetTime || '', proofMode: input.proofMode || 'photo' });
     const habit = {
       id: uid('habit'),
@@ -1304,8 +1470,8 @@ export function createMemoryRepository(seed, onChange = () => {}) {
       proofMode: clean.proofMode,
       xp: Number(input.xp || 10),
       active: true,
-      audience: normalizeAudience(input.audience || AUDIENCES.ONLY_ME, input.selectedFriendIds || [], state.currentUserId, state.friendships || []),
-      selectedFriendIds: normalizedSelectedFriendIds(input.audience || AUDIENCES.ONLY_ME, input.selectedFriendIds || [], state.currentUserId, state.friendships || []),
+      audience: normalizeAudience(input.audience || input.audienceMode || AUDIENCES.ONLY_ME, input.selectedFriendIds ?? input.audienceIds ?? [], state.currentUserId, state.friendships || []),
+      selectedFriendIds: normalizedSelectedFriendIds(input.audience || input.audienceMode || AUDIENCES.ONLY_ME, input.selectedFriendIds ?? input.audienceIds ?? [], state.currentUserId, state.friendships || []),
     };
     state.habits.push(habit);
     emit();
@@ -1332,9 +1498,12 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     habit.targetUnit = input.targetUnit || habit.targetUnit || 'count';
     habit.graceMinutes = Number(input.graceMinutes ?? habit.graceMinutes ?? 0);
     habit.scheduleTimezone = input.scheduleTimezone || habit.scheduleTimezone || 'UTC';
-    if (input.audience || input.selectedFriendIds) {
-      habit.audience = normalizeAudience(input.audience || habit.audience || AUDIENCES.ONLY_ME, input.selectedFriendIds || habit.selectedFriendIds || [], state.currentUserId, state.friendships || []);
-      habit.selectedFriendIds = normalizedSelectedFriendIds(habit.audience, input.selectedFriendIds || [], state.currentUserId, state.friendships || []);
+    const hasAudienceInput = Object.hasOwn(input, 'audience') || Object.hasOwn(input, 'audienceMode') || Object.hasOwn(input, 'selectedFriendIds') || Object.hasOwn(input, 'audienceIds');
+    if (hasAudienceInput) {
+      const audience = input.audience ?? input.audienceMode ?? habit.audience ?? AUDIENCES.ONLY_ME;
+      const selected = input.selectedFriendIds ?? input.audienceIds ?? habit.selectedFriendIds ?? [];
+      habit.audience = normalizeAudience(audience, selected, state.currentUserId, state.friendships || []);
+      habit.selectedFriendIds = normalizedSelectedFriendIds(habit.audience, selected, state.currentUserId, state.friendships || []);
     }
     emit();
     return clone(habit);
@@ -1384,10 +1553,16 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return clone(habit);
   }
 
-  function sendNudge(toUserId, message) {
+  function sendNudge(toUserId, message, visibility = 'private') {
+    if (visibility !== 'private') throw new Error('Friend nudges are private');
+    if (!getFriendIds().includes(toUserId)) throw new Error('Direct friendship required');
+    const cleanMessage = String(message || '').trim();
+    if (!cleanMessage || cleanMessage.length > 140) throw new Error('Nudge must be 1–140 characters');
     state.nudges ||= [];
-    state.nudges.unshift({ id: uid('nudge'), fromUserId: state.currentUserId, toUserId, message, createdAt: new Date().toISOString() });
+    const nudge = { id: uid('nudge'), fromUserId: state.currentUserId, toUserId, message: cleanMessage, visibility: 'private', createdAt: new Date().toISOString() };
+    state.nudges.unshift(nudge);
     emit();
+    return clone(nudge);
   }
 
   function memberInCircle(userId, circleId = state.circleId) {
@@ -1484,7 +1659,7 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   return {
-    getState, asUser, getFriends, getFriendIds, inviteFriend, acceptFriend, addFriendForTest,
+    getState, asUser, ensureFriendsWorkspace, getFriends, getFriendIds, createFriendInvite, acceptFriendInvite, inviteFriend, acceptFriend, removeFriend, addFriendForTest,
     setHabitAudience, getUnifiedFeed, getPersonalizedLeague,
     toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit,
     sendNudge, startBaton, passBaton, setBatonEnabled, addComment, deleteComment,

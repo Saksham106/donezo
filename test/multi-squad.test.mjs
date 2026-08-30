@@ -78,11 +78,10 @@ test('editing a habit out of the active squad does not silently switch squads', 
   assert.doesNotMatch(store, /await load\(squadIds\.includes\(state\.circleId\)/);
 });
 
-test('nudge composer makes squad callout versus private delivery explicit', async () => {
+test('unified friend nudges are private and do not expose public callouts', async () => {
   const app = await source(appUrl);
-  assert.match(app, /name="visibility"/);
-  assert.match(app, /value="squad"/);
-  assert.match(app, /value="private"/);
-  assert.match(app, /Public callout/);
-  assert.match(app, /Private nudge/);
+  assert.doesNotMatch(app, /name="visibility"/);
+  assert.doesNotMatch(app, /Public callout/);
+  assert.match(app, /Only .* sees it\./);
+  assert.match(app, /repo\.sendNudge\([^\n]+,\s*'private'\)/);
 });

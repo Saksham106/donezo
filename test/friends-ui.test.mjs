@@ -46,6 +46,8 @@ test('habit sheet exposes all-friends, selected-friends, and only-me audience co
   assert.match(source, /friend-audience/);
   assert.match(app, /audienceMode/);
   assert.match(app, /audienceIds/);
+  assert.match(app, /habit\?\.audienceMode \|\| habit\?\.audience/);
+  assert.match(app, /habit\?\.selectedFriendIds/);
 });
 
 test('daily schedule selects all seven days and weekday edits switch to specific days', () => {
@@ -74,4 +76,22 @@ test('friend invite methods are preferred with legacy circle invite fallback', (
   assert.match(app, /repo\.createFriendInvite \? repo\.createFriendInvite/);
   assert.match(app, /repo\.acceptFriendInvite \? repo\.acceptFriendInvite/);
   assert.match(app, /repo\.joinCircle/);
+});
+
+test('friend nudges are private and do not expose unrelated friend networks', () => {
+  const composer = slice('nudgeComposerSheet', 'nudgeInboxSheet');
+  assert.match(composer, /Only .* sees it\./s);
+  assert.doesNotMatch(composer, /Public callout|whole squad|name="visibility"/i);
+});
+
+test('active Friends surfaces do not leak obsolete squad or people copy', () => {
+  assert.doesNotMatch(app, /joining your friend’s squad/i);
+  assert.doesNotMatch(app, /visible to this squad/i);
+  assert.doesNotMatch(app, /See the squad awards/i);
+  assert.doesNotMatch(app, /until the squad finishes/i);
+  assert.doesNotMatch(app, /What are squad challenges/i);
+  assert.doesNotMatch(app, /Let the squad include your name/i);
+  assert.doesNotMatch(app, /<strong>Squad Baton<\/strong>/i);
+  assert.doesNotMatch(app, /Your squad showed up/i);
+  assert.match(app, /people\.length === 1 \? 'friend' : 'friends'/);
 });
