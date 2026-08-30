@@ -139,6 +139,18 @@ test('does not auto-apply a waiting update before the parent explicitly accepts 
   assert.equal(windowTarget.location.reloadCalls, 0);
 });
 
+test('app surfaces updates without sacrificing unsaved mobile drafts', async () => {
+  const [app, social] = await Promise.all([
+    readFile(new URL('../src/app.js', import.meta.url), 'utf8'),
+    readFile(new URL('../social.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(app, /function pwaUpdateBanner\(/);
+  assert.match(app, /DonezoPWA\?\.onUpdateAvailable/);
+  assert.match(app, /hasUnsavedDraft\(\)/);
+  assert.match(app, /DonezoPWA\?\.applyUpdate/);
+  assert.match(social, /\.pwa-update-banner/);
+});
+
 test('ships the controller entry point and a versioned network-first shell worker', async () => {
   const [html, build, worker] = await Promise.all([
     readFile(new URL('../index.html', import.meta.url), 'utf8'),

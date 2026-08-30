@@ -990,7 +990,7 @@ export function createSupabaseRepository(client, user) {
   }
 
   function getMonthlyWrapped(month, options = {}) {
-    if (!/^\\d{4}-\\d{2}$/.test(String(month))) throw new Error('Month must use YYYY-MM');
+    if (!/^\d{4}-\d{2}$/.test(String(month))) throw new Error('Month must use YYYY-MM');
     return buildMonthlyWrapped({ month, circleId: state.circleId, members: state.members, habits: state.habits, checkIns: state.checkIns, reactions: state.reactions, comments: state.comments, batonHandoffs: state.batonHandoffs, nudges: state.nudges, asOfDate: options.asOfDate || dateInTimezone(options.timeZone || 'UTC'), timeZone: options.timeZone || 'UTC', recapEnabled: options.recapEnabled !== false, recapOptOut: Boolean(options.recapOptOut) });
   }
 

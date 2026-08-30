@@ -5,6 +5,7 @@ import { createRefreshCoordinator } from './refresh.js';
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, validateInviteCode } from './invite.js';
 import { createProofReviewState, formatProofFileSize, transitionProofReview, validateProofFile } from './proof.js';
 import {
+  BADGE_CATALOG,
   dailyProgress,
   localDateInTimeZone,
   proofRejectionThreshold,
@@ -53,6 +54,11 @@ let feedLimit = 12;
 let inviteSheetOpen = false;
 let peopleSheetOpen = false;
 let squadFeed = 'activity';
+let commentCheckInId = null;
+let batonSheetOpen = false;
+let badgeCabinetOpen = false;
+let wrappedOpen = false;
+let wrappedIndex = 0;
 let createdCircleInvite = null;
 let pendingInvite = parseInviteParam(window.location.href);
 let inviteMessage = pendingInvite.present && !pendingInvite.valid
@@ -67,6 +73,8 @@ let busy = false;
 let authMode = 'sign-in';
 let authMessage = '';
 let initialNavigationHandled = false;
+let pwaUpdateAvailable = Boolean(window.DonezoPWA?.updateAvailable);
+let pwaApplying = false;
 
 const starterTemplates = [
   { title: 'Move for 20 minutes', emoji: '🏃', targetTime: '18:00' },
@@ -166,6 +174,13 @@ function topbar() {
 
 function offlineIndicator() {
   return online ? '' : '<div class="offline-indicator" role="status">Offline · reconnect to refresh</div>';
+}
+
+function pwaUpdateBanner() {
+  if (!pwaUpdateAvailable) return '';
+  const draftOpen = hasUnsavedDraft();
+  const detail = draftOpen ? 'Finish or close what you are editing first.' : 'A fresh version is ready.';
+  return `<aside class="pwa-update-banner" role="status"><div><strong>${pwaApplying ? 'Updating Donezo…' : 'Update ready'}</strong><small>${esc(detail)}</small></div><button class="btn small-btn" type="button" data-apply-update ${pwaApplying || draftOpen ? 'disabled' : ''}>${draftOpen ? 'Not yet' : pwaApplying ? 'Updating…' : 'Update'}</button></aside>`;
 }
 
 function nav() {
@@ -351,8 +366,23 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(getState().members.length);
   const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">View proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
-  const positiveReactions = `<div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => `<button type="button" class="reaction-btn ${activity.userReactions?.includes(emoji) ? 'active' : ''}" data-reaction="${activity.checkInId}" data-emoji="${emoji}" aria-label="React ${emoji}">${emoji}${activity.reactionCounts?.[emoji] ? ` ${activity.reactionCounts[emoji]}` : ''}</button>`).join('')}</div>`;
+  const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
+  const positiveReactions = `<div class="activity-social-actions"><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => `<button type="button" class="reaction-btn ${activity.userReactions?.includes(emoji) ? 'active' : ''}" data-reaction="${activity.checkInId}" data-emoji="${emoji}" aria-label="React ${emoji}">${emoji}${activity.reactionCounts?.[emoji] ? ` ${activity.reactionCounts[emoji]}` : ''}</button>`).join('')}</div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
   return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+}
+
+function batonCard() {
+  const state = getState();
+  const baton = state.baton?.active ? state.baton : null;
+  const holder = baton ? member(baton.holderUserId) : null;
+  const mine = baton?.holderUserId === state.currentUserId;
+  const eligibleCheckIn = state.checkIns.find((item) => item.userId === state.currentUserId && !item.invalid);
+  const hasFriend = state.members.some((person) => person.id !== state.currentUserId);
+  if (!baton) {
+    if (!eligibleCheckIn || !hasFriend) return '';
+    return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Pass the momentum</strong><small>You checked in. Pick who goes next.</small></div><button class="btn small-btn" type="button" data-baton-open>Start</button></section>`;
+  }
+  return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>The baton is with ${esc(holder?.name || 'a friend')}</strong><small>${mine ? 'Your turn. Check in, then pass it on.' : 'One person at a time. No spam, no scoreboard.'}</small></div>${mine && eligibleCheckIn && hasFriend ? '<button class="btn small-btn" type="button" data-pass-baton>Pass</button>' : ''}</section>`;
 }
 
 function squadScreen() {
@@ -369,7 +399,7 @@ function squadScreen() {
   const empty = squadFeed === 'proofs'
     ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Photo check-ins will land here.</p></div>'
     : '<div class="empty compact-empty"><b>No activity yet.</b><p>Somebody has to go first.</p></div>';
-  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD', 'See what happened. Hype your people.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div><div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
+  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD', 'See what happened. Hype your people.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div>${batonCard()}<div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
 function challengeProgress(challenge) {
@@ -500,12 +530,45 @@ function habitSettingsRow(habit) {
   return `<button type="button" class="habit-setting habit-setting-button" data-edit-habit="${habit.id}" aria-label="Edit ${esc(habit.title)}"><span>${esc(habit.emoji)}</span><div><strong>${esc(habit.title)}</strong><small>${esc(formatTime(habit.targetTime))}${habit.proofMode === 'photo' ? ' · Photo proof' : ' · Truuust mode'}</small></div><span class="setting-chevron" aria-hidden="true">›</span></button>`;
 }
 
+function previousMonthKey() {
+  const date = new Date();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() - 1);
+  return date.toISOString().slice(0, 7);
+}
+
+function monthLabel(month) {
+  const [year, value] = month.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(year, value - 1, 1)));
+}
+
+function badgeIcon(category) {
+  return ({ streak: '🔥', completion: '✓', consistency: '◆', variety: '✦', proof: '🧾', baton: '↗', longevity: '⌛' })[category] || '✦';
+}
+
+function earnedBadges() {
+  return repo.getEarnedBadges({ asOfDate: today(), timeZone: me()?.timeZone || 'UTC' });
+}
+
+function badgePreview() {
+  const earned = earnedBadges();
+  const visible = earned.slice(-3).reverse();
+  return `<section class="badge-preview"><div class="settings-title"><div><strong>Milestones</strong><p>${earned.length} of ${BADGE_CATALOG.length} unlocked</p></div><button class="btn small-btn" type="button" data-badge-cabinet>View all</button></div>${visible.length ? `<div class="badge-grid">${visible.map((badge) => `<article class="badge-tile earned" title="${esc(badge.description)}"><i>${badgeIcon(badge.category)}</i><strong>${esc(badge.name)}</strong></article>`).join('')}</div>` : '<p class="settings-empty">Your first badge is one check-in away.</p>'}</section>`;
+}
+
+function wrappedEntry() {
+  const month = previousMonthKey();
+  const wrapped = repo.getMonthlyWrapped(month, { asOfDate: today(), timeZone: me()?.timeZone || 'UTC', recapOptOut: me()?.awardOptOut });
+  if (!wrapped.summary.completionCount) return '';
+  return `<button class="wrapped-entry" type="button" data-wrapped-open><span><small>${esc(monthLabel(month).toUpperCase())}</small><strong>Your month, wrapped</strong><p>${wrapped.summary.completionCount} check-ins. See the squad awards.</p></span><b aria-hidden="true">›</b></button>`;
+}
+
 function meScreen() {
   const state = getState();
   const total = state.checkIns.filter((checkIn) => checkIn.userId === me().id && !checkIn.invalid).length;
   const weekly = weeklyCompletionScore(me().id, state.habits, state.checkIns, today());
   const habits = myHabits(state);
-  return `${pageHeading(me().name, me().handle || session.user.email, 'Your numbers and your commitments. Settings live upstairs ↗')}<section class="stats"><div><b>${weekly.percent}%</b><small>This week</small></div><div><b>🔥 ${me().currentStreak}</b><small>Streak</small></div><div><b>${total}</b><small>Valid check-ins</small></div><div><b>${state.members.length}</b><small>People</small></div></section><section class="settings-group clean-group"><div class="settings-title"><div><strong>Your habits</strong><p>${habits.length} active</p></div><button class="btn primary small-btn" data-open-habit>Add habit</button></div><div class="habit-settings-list">${habits.length ? habits.map(habitSettingsRow).join('') : '<p class="settings-empty">No habits yet.</p>'}</div></section>`;
+  return `${pageHeading(me().name, me().handle || session.user.email, 'Your numbers and your commitments. Settings live upstairs ↗')}<section class="stats"><div><b>${weekly.percent}%</b><small>This week</small></div><div><b>🔥 ${me().currentStreak}</b><small>Streak</small></div><div><b>${total}</b><small>Valid check-ins</small></div><div><b>${state.members.length}</b><small>People</small></div></section>${wrappedEntry()}${badgePreview()}<section class="settings-group clean-group"><div class="settings-title"><div><strong>Your habits</strong><p>${habits.length} active</p></div><button class="btn primary small-btn" data-open-habit>Add habit</button></div><div class="habit-settings-list">${habits.length ? habits.map(habitSettingsRow).join('') : '<p class="settings-empty">No habits yet.</p>'}</div></section>`;
 }
 
 function habitSheet() {
@@ -583,6 +646,49 @@ function peopleSheet() {
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${progress.completed}/${progress.total} today · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet" role="dialog" aria-modal="true" aria-label="Squad people" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${esc(state.circleName || 'SQUAD')}</p><h2>${state.members.length} ${state.members.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite people</button></section></div>`;
+}
+
+function commentSheet() {
+  if (!commentCheckInId) return '';
+  const state = getState();
+  const activity = state.friendActivities.find((item) => item.checkInId === commentCheckInId);
+  const comments = (state.comments || []).filter((item) => item.checkInId === commentCheckInId);
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><div><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><p>${esc(comment.body)}</p><small>${esc(formatWhen(comment.createdAt))}</small></div>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
+}
+
+function batonSheet() {
+  if (!batonSheetOpen) return '';
+  const state = getState();
+  const baton = state.baton?.active ? state.baton : null;
+  const source = state.checkIns.filter((item) => item.userId === state.currentUserId && !item.invalid).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+  const recipients = state.members.filter((person) => person.id !== state.currentUserId);
+  if (!source || !recipients.length) return '';
+  const mode = baton ? 'pass' : 'start';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet baton-sheet" role="dialog" aria-modal="true" aria-label="Pass the baton" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SQUAD BATON</p><h2>Who goes next?</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Your check-in starts the handoff. They get one turn, then pass it forward.</p><form id="baton-form" class="form sheet-form" data-mode="${mode}"><input type="hidden" name="sourceCheckInId" value="${esc(source.id)}"><label>Pass to<select name="recipientUserId" required>${recipients.map((person) => `<option value="${person.id}">${esc(person.name)}</option>`).join('')}</select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${mode === 'pass' ? 'Pass baton' : 'Start baton'}</button></form></section></div>`;
+}
+
+function badgeCabinet() {
+  if (!badgeCabinetOpen) return '';
+  const earned = earnedBadges();
+  const unlocked = new Map(earned.map((badge) => [badge.id, badge]));
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet badge-cabinet" role="dialog" aria-modal="true" aria-label="Milestone badges" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">PERMANENT MILESTONES</p><h2>Your badges</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Awards reset monthly. These do not.</p><div class="badge-grid">${BADGE_CATALOG.map((badge) => { const item = unlocked.get(badge.id); return `<article class="badge-tile ${item ? 'earned' : 'locked'}"><i aria-hidden="true">${item ? badgeIcon(badge.category) : '·'}</i><strong>${esc(badge.name)}</strong><p>${esc(badge.description)}</p><small>${item ? `Unlocked ${esc(item.earnedAt)}` : 'Locked'}</small></article>`; }).join('')}</div></section></div>`;
+}
+
+function wrappedSlide(screen, wrapped) {
+  if (screen.kind === 'cover') return `<div class="wrapped-slide cover"><small>${esc(monthLabel(wrapped.period.month).toUpperCase())}</small><h2>Your squad showed up.</h2><p>Here is the month in five quick taps.</p></div>`;
+  if (screen.kind === 'summary') return `<div class="wrapped-slide"><small>THE NUMBERS</small><h2>${screen.completionCount}</h2><p>valid check-ins from ${screen.activeParticipantCount} active ${screen.activeParticipantCount === 1 ? 'person' : 'people'}.</p><div class="wrapped-mini-stats"><span><b>${screen.proofCount}</b><small>proofs</small></span><span><b>${screen.participantCount}</b><small>people</small></span></div></div>`;
+  if (screen.kind === 'participants') return `<div class="wrapped-slide"><small>THE CREW</small><h2>${screen.activeParticipantIds.length} people checked in.</h2><div class="wrapped-people">${screen.activeParticipantIds.map((id) => `<span><b>${esc(member(id)?.avatar || '?')}</b>${esc(member(id)?.name || 'Friend')}</span>`).join('')}</div></div>`;
+  if (screen.kind === 'awards') return `<div class="wrapped-slide"><small>MONTHLY AWARDS</small><h2>Okay, receipts are in.</h2><div class="wrapped-awards">${screen.awards.map((award) => `<article><b>${award.type === 'most_supportive' ? '🤝' : award.type === 'baton_carrier' ? '↗' : award.type === 'longest_streak' ? '🔥' : '🏆'}</b><span><strong>${esc(award.title)}</strong><small>${award.memberIds.map((id) => esc(member(id)?.name || 'Friend')).join(' + ')}</small></span></article>`).join('')}</div></div>`;
+  return `<div class="wrapped-slide close"><small>${wrapped.period.partial ? 'MONTH IN PROGRESS' : 'THAT’S A WRAP'}</small><h2>${wrapped.period.partial ? 'Still cooking.' : 'Run it back.'}</h2><p>Badges stay forever. Awards start fresh next month.</p></div>`;
+}
+
+function monthlyWrappedSheet() {
+  if (!wrappedOpen) return '';
+  const wrapped = repo.getMonthlyWrapped(previousMonthKey(), { asOfDate: today(), timeZone: me()?.timeZone || 'UTC', recapOptOut: me()?.awardOptOut });
+  const index = Math.min(wrappedIndex, wrapped.screens.length - 1);
+  const screen = wrapped.screens[index];
+  const winner = screen.kind === 'awards' && screen.awards.some((award) => award.memberIds.includes(me().id));
+  return `<div class="wrapped-sheet" role="dialog" aria-modal="true" aria-label="Monthly Wrapped"><div class="wrapped-progress">${wrapped.screens.map((_, itemIndex) => `<i class="${itemIndex <= index ? 'active' : ''}"></i>`).join('')}</div><button class="wrapped-close" type="button" data-wrapped-close aria-label="Close Wrapped">×</button>${winner ? '<div class="wrapped-confetti" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>' : ''}${wrappedSlide(screen, wrapped)}<div class="wrapped-actions">${index > 0 ? '<button class="btn" type="button" data-wrapped-prev>Back</button>' : '<span></span>'}<button class="btn primary" type="button" ${index === wrapped.screens.length - 1 ? 'data-wrapped-close' : 'data-wrapped-next'}>${index === wrapped.screens.length - 1 ? 'Done' : 'Next'}</button></div></div>`;
 }
 
 function friendProfileSheet() {
@@ -772,13 +878,21 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${commentSheet()}${batonSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
   app.querySelector('[data-squad-switcher]')?.addEventListener('change', (event) => handleSquadSelect(event.target.value));
   app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { proofHabit = element.dataset.quickProof; chooseProofInput(proofInput); }; });
   app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.emoji); });
+  app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => { commentCheckInId = element.dataset.commentOpen; render(); }; });
+  app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
+  app.querySelectorAll('[data-baton-open], [data-pass-baton]').forEach((element) => { element.onclick = () => { batonSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-badge-cabinet]').forEach((element) => { element.onclick = () => { badgeCabinetOpen = true; render(); }; });
+  app.querySelectorAll('[data-wrapped-open]').forEach((element) => { element.onclick = () => { wrappedOpen = true; wrappedIndex = 0; render(); }; });
+  app.querySelectorAll('[data-wrapped-next]').forEach((element) => { element.onclick = () => { wrappedIndex += 1; render(); }; });
+  app.querySelectorAll('[data-wrapped-prev]').forEach((element) => { element.onclick = () => { wrappedIndex = Math.max(0, wrappedIndex - 1); render(); }; });
+  app.querySelectorAll('[data-wrapped-close]').forEach((element) => { element.onclick = () => { wrappedOpen = false; wrappedIndex = 0; render(); }; });
   app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; feedLimit = 12; render(); }; });
   app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteSheetOpen = true; render(); }; });
@@ -790,6 +904,7 @@ function render() {
   app.querySelectorAll('[data-resolve-stake]').forEach((element) => { element.onclick = () => handleStakeResolve(element.dataset.resolveStake); });
   app.querySelectorAll('[data-load-more]').forEach((element) => { element.onclick = () => { feedLimit += 12; renderPreservingScroll(); }; });
   app.querySelectorAll('[data-share-recap]').forEach((element) => { element.onclick = handleShareRecap; });
+  app.querySelectorAll('[data-apply-update]').forEach((element) => { element.onclick = handleApplyPwaUpdate; });
   app.querySelectorAll('[data-activation-next]').forEach((element) => { element.onclick = () => handleActivationNext(Number(element.dataset.activationNext)); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
   app.querySelectorAll('[data-proof]').forEach((element) => { element.onclick = () => handleProofView(element.dataset.proof); });
@@ -834,6 +949,8 @@ function render() {
   app.querySelector('[data-cancel-archive]')?.addEventListener('click', () => { archiveConfirm = false; render(); });
   app.querySelector('[data-cancel-habit]')?.addEventListener('click', closeHabitEditor);
   app.querySelector('#nudge-form')?.addEventListener('submit', handleNudgeSubmit);
+  app.querySelector('#comment-form')?.addEventListener('submit', handleCommentSubmit);
+  app.querySelector('#baton-form')?.addEventListener('submit', handleBatonSubmit);
   app.querySelector('#recovery-form')?.addEventListener('submit', handleRecoverySubmit);
   app.querySelector('#challenge-form')?.addEventListener('submit', handleChallengeSubmit);
   app.querySelector('#stake-form')?.addEventListener('submit', handleStakeSubmit);
@@ -869,6 +986,11 @@ function closeSheets() {
   nudgeInboxOpen = false;
   inviteSheetOpen = false;
   peopleSheetOpen = false;
+  commentCheckInId = null;
+  batonSheetOpen = false;
+  badgeCabinetOpen = false;
+  wrappedOpen = false;
+  wrappedIndex = 0;
   proofHabit = null;
   clearProofReview();
   proofViewer = null;
@@ -888,6 +1010,8 @@ function hasUnsavedDraft() {
     || Boolean(recoveryHabitId)
     || challengeSheetOpen
     || stakeSheetOpen
+    || Boolean(commentCheckInId)
+    || batonSheetOpen
     || Boolean(proofReview);
 }
 
@@ -916,6 +1040,22 @@ function startRefreshCoordinator(activeRepo) {
     intervalMs: 30_000,
   });
   refreshCoordinator.start();
+}
+
+async function handleApplyPwaUpdate() {
+  if (hasUnsavedDraft()) {
+    notify('Finish or close your draft before updating.');
+    return;
+  }
+  pwaApplying = true;
+  renderPreservingScroll();
+  const applied = window.DonezoPWA?.applyUpdate?.();
+  if (!applied) {
+    pwaApplying = false;
+    pwaUpdateAvailable = Boolean(window.DonezoPWA?.updateAvailable);
+    notify('Update could not start. Try again in a moment.');
+    renderPreservingScroll();
+  }
 }
 
 async function handleManualRefresh() {
@@ -1165,6 +1305,35 @@ async function handleDownvote(checkInId) {
 
 async function handleReaction(checkInId, emoji) {
   await runMutation(() => repo.toggleReaction(checkInId, emoji));
+}
+
+async function handleCommentSubmit(event) {
+  event.preventDefault();
+  const checkInId = commentCheckInId;
+  const form = new FormData(event.currentTarget);
+  const body = String(form.get('body') || '').trim();
+  if (!checkInId || !body) return;
+  const result = await runMutation(() => repo.addComment(checkInId, body), 'Reply sent');
+  if (result) commentCheckInId = checkInId;
+}
+
+async function handleDeleteComment(commentId) {
+  const result = await runMutation(() => repo.deleteComment(commentId), 'Reply deleted');
+  if (result) commentCheckInId = commentCheckInId || null;
+}
+
+async function handleBatonSubmit(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const recipientUserId = String(form.get('recipientUserId') || '');
+  const sourceCheckInId = String(form.get('sourceCheckInId') || '');
+  const mode = event.currentTarget.dataset.mode;
+  const friend = member(recipientUserId);
+  const result = await runMutation(
+    () => mode === 'pass' ? repo.passBaton(recipientUserId, sourceCheckInId) : repo.startBaton(recipientUserId, sourceCheckInId),
+    `Baton passed to ${friend?.name || 'your friend'} ↗`,
+  );
+  if (result) batonSheetOpen = false;
 }
 
 function handleActivationNext(step) {
@@ -1472,7 +1641,10 @@ for (const eventName of ['gesturestart', 'gesturechange', 'gestureend']) {
   document.addEventListener(eventName, (event) => event.preventDefault(), { passive: false });
 }
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+window.DonezoPWA?.onUpdateAvailable?.(() => {
+  pwaUpdateAvailable = true;
+  if (document.body.contains(app)) renderPreservingScroll();
+});
 const { data: { session: initialSession } } = await supabase.auth.getSession();
 await boot(initialSession);
 supabase.auth.onAuthStateChange((event, nextSession) => {
