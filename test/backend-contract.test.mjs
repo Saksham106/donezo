@@ -9,6 +9,7 @@ const notificationMigration = await readFile(new URL('../supabase/migrations/001
 const recapPreferenceMigration = await readFile(new URL('../supabase/migrations/0016_recap_award_preferences.sql', import.meta.url), 'utf8');
 const quantityMigration = await readFile(new URL('../supabase/migrations/0017_check_in_quantities.sql', import.meta.url), 'utf8');
 const socialHardeningMigration = await readFile(new URL('../supabase/migrations/0018_harden_social_resolution.sql', import.meta.url), 'utf8');
+const crossCircleMigration = await readFile(new URL('../supabase/migrations/0019_enforce_social_circle_integrity.sql', import.meta.url), 'utf8');
 const pushFunction = await readFile(new URL('../supabase/functions/send-nudge/index.ts', import.meta.url), 'utf8');
 
 test('proof vote migration prevents self downvotes and scopes votes to circle members', () => {
@@ -84,6 +85,12 @@ test('social resolution exposes only safe update columns and validates terminal 
   assert.match(socialHardeningMigration, /grant update \(status, resolution, resolved_at\).*group_stakes/is);
   assert.match(socialHardeningMigration, /current_date <= old\.ends_on/i);
   assert.match(socialHardeningMigration, /Stake resolution contains a non-participant/i);
+});
+
+test('social stakes cannot reference a challenge from another squad', () => {
+  assert.match(crossCircleMigration, /enforce_stake_challenge_circle/i);
+  assert.match(crossCircleMigration, /challenge\.circle_id = new\.circle_id/i);
+  assert.match(crossCircleMigration, /challenge_id is null or exists[\s\S]*challenge\.circle_id = group_stakes\.circle_id/i);
 });
 
 test('push sender turns a nudge into a policy-checked event and preserves its context', () => {
