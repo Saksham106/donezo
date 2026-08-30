@@ -43,7 +43,7 @@ test('League puts standings first and uses direct compact social actions', () =>
   assert.ok(source.indexOf('league-list') < source.indexOf('activeChallengeCard()'));
   assert.match(source, /data-challenge/);
   assert.match(source, /league-header-action/);
-  assert.match(source, /league-tools/);
+  assert.match(source, /league-header-actions/);
   assert.doesNotMatch(source, /league-more/);
   assert.doesNotMatch(source, /<details/);
   assert.doesNotMatch(source, /empty-challenge/);

@@ -35,3 +35,13 @@ test('sendNudge records a nudge to a friend', () => {
   assert.equal(repo.getState().nudges[0].toUserId, 'friend');
   assert.equal(repo.getState().nudges[0].message, 'get moving 💀');
 });
+
+test('setBatonEnabled stores the inverse opt-out preference', () => {
+  const repo = createMemoryRepository(seed);
+  repo.setBatonEnabled(false);
+  assert.equal(repo.getState().batonOptedOut, true);
+  assert.equal(repo.getState().members[0].batonOptedOut, true);
+  repo.setBatonEnabled(true);
+  assert.equal(repo.getState().batonOptedOut, false);
+  assert.equal(repo.getState().members[0].batonOptedOut, false);
+});
