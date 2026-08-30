@@ -25,6 +25,9 @@ test('schedule migration backfills one immutable version for every existing habi
   assert.match(migration, /unique \(habit_id, version\)/);
   assert.match(migration, /insert into public\.habit_schedule_versions[\s\S]*select[\s\S]*from public\.habits/s);
   assert.match(migration, /on conflict \(habit_id, version\) do nothing/);
+  assert.match(migration, /capture_initial_habit_schedule/);
+  assert.match(migration, /after insert on public\.habits/);
+  assert.match(migration, /if latest\.effective_from = p_effective_from[\s\S]*public\.check_ins/s);
 });
 
 test('pause windows are normalized, bounded, and protected by row-level security', () => {

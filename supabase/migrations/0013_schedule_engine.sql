@@ -123,6 +123,34 @@ create table if not exists public.habit_schedule_pauses (
 create index if not exists habit_schedule_pauses_date_idx
   on public.habit_schedule_pauses(habit_id, start_date, end_date);
 
+-- New habits get an initial immutable schedule snapshot even when created by the
+-- legacy metadata RPC. A same-day schedule setup may replace this empty snapshot.
+create or replace function private.capture_initial_habit_schedule()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.habit_schedule_versions (
+    habit_id, version, effective_from, schedule_frequency, schedule_weekdays,
+    target_quantity, target_unit, due_time, grace_minutes, timezone, created_by
+  ) values (
+    new.id, 1, (new.created_at at time zone new.schedule_timezone)::date,
+    new.schedule_frequency, new.schedule_weekdays, new.target_quantity,
+    new.target_unit, new.due_time, new.grace_minutes, new.schedule_timezone,
+    new.owner_id
+  ) on conflict (habit_id, version) do nothing;
+  return new;
+end;
+$$;
+
+revoke all on function private.capture_initial_habit_schedule() from public, anon, authenticated;
+drop trigger if exists capture_initial_habit_schedule on public.habits;
+create trigger capture_initial_habit_schedule
+after insert on public.habits
+for each row execute function private.capture_initial_habit_schedule();
+
 -- The first version is a snapshot of the pre-migration daily rule. The local
 -- creation date is deliberately derived in the habit's timezone, not UTC.
 insert into public.habit_schedule_versions (
@@ -245,8 +273,36 @@ begin
   order by version desc
   limit 1
   for update;
-  if latest.effective_from is not null and p_effective_from <= latest.effective_from then
-    raise exception 'Effective date must be after the latest schedule version';
+  if latest.effective_from = p_effective_from then
+    if exists (
+      select 1 from public.check_ins ci
+      where ci.habit_id = target_habit_id and ci.check_date = p_effective_from
+    ) then raise exception 'Today already has a check-in; edit the schedule tomorrow'; end if;
+    update public.habit_schedule_versions
+    set schedule_frequency = p_schedule_frequency,
+        schedule_weekdays = coalesce(p_schedule_weekdays, '{}'),
+        target_quantity = p_target_quantity,
+        target_unit = trim(p_target_unit),
+        due_time = p_due_time,
+        grace_minutes = p_grace_minutes,
+        timezone = p_timezone
+    where id = latest.id;
+    update public.habits
+    set schedule_frequency = p_schedule_frequency,
+        schedule_weekdays = coalesce(p_schedule_weekdays, '{}'),
+        target_quantity = p_target_quantity,
+        target_unit = trim(p_target_unit),
+        due_time = p_due_time,
+        grace_minutes = p_grace_minutes,
+        schedule_timezone = p_timezone,
+        frequency = p_schedule_frequency,
+        target_time = p_due_time,
+        updated_at = now()
+    where id = target_habit_id;
+    return latest.id;
+  end if;
+  if latest.effective_from is not null and p_effective_from < latest.effective_from then
+    raise exception 'Effective date must not precede the latest schedule version';
   end if;
   new_version := coalesce(latest.version, 0) + 1;
 

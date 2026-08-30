@@ -42,6 +42,20 @@ test('onboarding progress targets the first shared win and templates remain edit
   assert.match(app, /data-activation-next/);
 });
 
+test('habit settings expose real schedules and pause windows end to end', () => {
+  assert.match(app, /getScheduleOccurrence/);
+  assert.match(app, /name="scheduleFrequency"/);
+  assert.match(app, /name="scheduleWeekdays"/);
+  assert.match(app, /name="targetQuantity"/);
+  assert.match(app, /name="targetUnit"/);
+  assert.match(app, /name="graceMinutes"/);
+  assert.match(app, /id="pause-form"/);
+  assert.match(store, /create_habit_schedule_version/);
+  assert.match(store, /create_habit_schedule_pause/);
+  assert.match(store, /scheduleFrequency: habit\.schedule_frequency/);
+  assert.match(store, /habit_schedule_pauses/);
+});
+
 test('social migration locks stakes after activation and preserves auditable history', () => {
   assert.match(migration, /create table if not exists public\.weekly_challenges/i);
   assert.match(migration, /create table if not exists public\.habit_recoveries/i);

@@ -4,6 +4,7 @@ import {
   localDateInTimeZone,
   rejectedCheckInIds,
 } from './domain.js';
+import { normalizeSchedule } from './schedule.js';
 import { validateStake } from './stakes.js';
 
 const clone = (value) => structuredClone(value);
@@ -78,6 +79,18 @@ export function mapDatabaseState(user, rows) {
     sharesByHabit.set(share.habit_id, ids);
   }
 
+  const pausesByHabit = new Map();
+  for (const pause of rows.schedulePauses || []) {
+    const pauses = pausesByHabit.get(pause.habit_id) || [];
+    pauses.push({
+      id: pause.id,
+      startDate: pause.start_date,
+      endDate: pause.end_date,
+      reason: pause.reason || '',
+    });
+    pausesByHabit.set(pause.habit_id, pauses);
+  }
+
   const habits = (rows.habits || []).map((habit) => {
     const ownerProfile = memberProfileById.get(habit.owner_id) || {};
     const ownerTimeZone = ownerProfile.timezone || 'UTC';
@@ -89,7 +102,14 @@ export function mapDatabaseState(user, rows) {
       title: habit.title,
       emoji: habit.emoji,
       frequency: habit.frequency,
-      targetTime: habit.target_time?.slice(0, 5) || '',
+      scheduleFrequency: habit.schedule_frequency || habit.frequency || 'daily',
+      scheduleWeekdays: habit.schedule_weekdays || [],
+      targetQuantity: Number(habit.target_quantity ?? 1),
+      targetUnit: habit.target_unit || 'count',
+      targetTime: (habit.due_time || habit.target_time)?.slice(0, 5) || '',
+      graceMinutes: Number(habit.grace_minutes || 0),
+      scheduleTimezone: habit.schedule_timezone || ownerTimeZone,
+      pauseWindows: pausesByHabit.get(habit.id) || [],
       proofMode: habit.proof_mode,
       xp: habit.xp,
       active: habit.active,
@@ -327,7 +347,7 @@ export function createSupabaseRepository(client, user) {
     const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
     const habitIds = habits.map((habit) => habit.id);
     const stakeIds = (stakesResult.data || []).map((stake) => stake.id);
-    const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult] = await Promise.all([
+    const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult, schedulePausesResult] = await Promise.all([
       habitIds.length
         ? client.from('habit_circles').select('habit_id,circle_id').in('habit_id', habitIds)
         : Promise.resolve({ data: [], error: null }),
@@ -340,9 +360,13 @@ export function createSupabaseRepository(client, user) {
       stakeIds.length
         ? client.from('stake_consents').select('*').in('stake_id', stakeIds)
         : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('habit_schedule_pauses').select('*').in('habit_id', habitIds).order('start_date', { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ]);
-    if (habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error) {
-      throw appError(habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error, 'Could not load Donezo data');
+    const loadError = habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error || schedulePausesResult.error;
+    if (loadError) {
+      throw appError(loadError, 'Could not load Donezo data');
     }
     const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
     const reactionsResult = checkInIds.length
@@ -363,6 +387,7 @@ export function createSupabaseRepository(client, user) {
       recoveries: recoveriesResult.data,
       stakes: stakesResult.data,
       stakeConsents: stakeConsentsResult.data,
+      schedulePauses: schedulePausesResult.data,
     });
     return getState();
   }
@@ -400,6 +425,31 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
+  async function saveHabitSchedule(habitId, input) {
+    const fallbackTimeZone = state.members.find((member) => member.id === user.id)?.timeZone || 'UTC';
+    const schedule = normalizeSchedule({
+      frequency: input.scheduleFrequency || input.frequency || 'daily',
+      weekdays: input.scheduleWeekdays || [],
+      targetQuantity: input.targetQuantity ?? 1,
+      targetUnit: input.targetUnit || 'count',
+      dueTime: input.targetTime || null,
+      graceMinutes: input.graceMinutes ?? 0,
+      timezone: input.scheduleTimezone || fallbackTimeZone,
+    });
+    const { error } = await client.rpc('create_habit_schedule_version', {
+      target_habit_id: habitId,
+      p_effective_from: dateInTimezone(schedule.timezone),
+      p_schedule_frequency: schedule.frequency,
+      p_schedule_weekdays: schedule.weekdays,
+      p_target_quantity: schedule.targetQuantity,
+      p_target_unit: schedule.targetUnit,
+      p_due_time: schedule.dueTime,
+      p_grace_minutes: schedule.graceMinutes,
+      p_timezone: schedule.timezone,
+    });
+    if (error) throw appError(error, 'Could not save the habit schedule');
+  }
+
   async function addHabit(input) {
     if (!state.circleId) throw new Error('Create or join a squad first');
     const clean = validateHabitInput({
@@ -418,6 +468,7 @@ export function createSupabaseRepository(client, user) {
       habit_proof_mode: clean.proofMode,
     });
     if (error) throw appError(error, 'Could not add habit');
+    if (input.scheduleFrequency) await saveHabitSchedule(habitId, input);
     await load(state.circleId);
     return state.habits.find((habit) => habit.id === habitId) || { id: habitId };
   }
@@ -434,6 +485,15 @@ export function createSupabaseRepository(client, user) {
     const habit = ownedHabit(habitId);
     const clean = validateHabitInput(input);
     const squadIds = [...new Set(input.squadIds?.length ? input.squadIds : habit.squadIds)];
+    const scheduleChanged = Boolean(input.scheduleFrequency) && (
+      input.scheduleFrequency !== (habit.scheduleFrequency || habit.frequency || 'daily')
+      || (input.scheduleWeekdays || []).join(',') !== (habit.scheduleWeekdays || []).join(',')
+      || Number(input.targetQuantity ?? 1) !== Number(habit.targetQuantity ?? 1)
+      || String(input.targetUnit || 'count').trim() !== String(habit.targetUnit || 'count')
+      || String(input.targetTime || '') !== String(habit.targetTime || '')
+      || Number(input.graceMinutes || 0) !== Number(habit.graceMinutes || 0)
+      || String(input.scheduleTimezone || habit.scheduleTimezone || '') !== String(habit.scheduleTimezone || '')
+    );
     const { data: updatedId, error } = await client.rpc('update_habit_with_squads', {
       target_habit_id: habitId,
       requested_squads: squadIds,
@@ -445,6 +505,7 @@ export function createSupabaseRepository(client, user) {
     });
     if (error) throw appError(error, 'Could not save habit');
     if (!updatedId) throw new Error('Habit could not be updated. Refresh and try again.');
+    if (scheduleChanged) await saveHabitSchedule(habitId, input);
     await load(state.circleId);
     return state.habits.find((item) => item.id === habitId) || { id: updatedId };
   }
@@ -458,6 +519,25 @@ export function createSupabaseRepository(client, user) {
     if (error) throw appError(error, 'Could not archive habit');
     if (!archived) throw new Error('Habit could not be archived. Refresh and try again.');
     await load();
+    return state.habits.find((habit) => habit.id === habitId);
+  }
+
+  async function pauseHabit(habitId, input) {
+    ownedHabit(habitId);
+    const startDate = String(input.startDate || '');
+    const endDate = String(input.endDate || '');
+    const reason = String(input.reason || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new Error('Choose a start and end date');
+    if (endDate < startDate) throw new Error('Pause end must be on or after start');
+    if (reason.length > 280) throw new Error('Pause note must be 280 characters or less');
+    const { error } = await client.rpc('create_habit_schedule_pause', {
+      target_habit_id: habitId,
+      p_start_date: startDate,
+      p_end_date: endDate,
+      p_reason: reason || null,
+    });
+    if (error) throw appError(error, 'Could not pause the habit');
+    await load(state.circleId);
     return state.habits.find((habit) => habit.id === habitId);
   }
 
@@ -682,6 +762,7 @@ export function createSupabaseRepository(client, user) {
     addHabit,
     updateHabit,
     archiveHabit,
+    pauseHabit,
     toggleHabit,
     completeWithProof,
     toggleDownvote,
@@ -727,7 +808,24 @@ export function createMemoryRepository(seed, onChange = () => {}) {
 
   function addHabit(input) {
     const clean = validateHabitInput({ title: input.title, emoji: input.emoji || '⚡', targetTime: input.targetTime || '', proofMode: input.proofMode || 'photo' });
-    const habit = { id: uid('habit'), ownerId: state.currentUserId, title: clean.title, emoji: clean.emoji, frequency: input.frequency || 'daily', targetTime: clean.targetTime, proofMode: clean.proofMode, xp: Number(input.xp || 10), active: true };
+    const habit = {
+      id: uid('habit'),
+      ownerId: state.currentUserId,
+      title: clean.title,
+      emoji: clean.emoji,
+      frequency: input.scheduleFrequency || input.frequency || 'daily',
+      scheduleFrequency: input.scheduleFrequency || input.frequency || 'daily',
+      scheduleWeekdays: input.scheduleWeekdays || [],
+      targetQuantity: Number(input.targetQuantity ?? 1),
+      targetUnit: input.targetUnit || 'count',
+      targetTime: clean.targetTime,
+      graceMinutes: Number(input.graceMinutes || 0),
+      scheduleTimezone: input.scheduleTimezone || 'UTC',
+      pauseWindows: [],
+      proofMode: clean.proofMode,
+      xp: Number(input.xp || 10),
+      active: true,
+    };
     state.habits.push(habit);
     emit();
     return clone(habit);
@@ -746,6 +844,22 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     habit.emoji = clean.emoji;
     habit.targetTime = clean.targetTime;
     habit.proofMode = clean.proofMode;
+    habit.frequency = input.scheduleFrequency || input.frequency || habit.frequency || 'daily';
+    habit.scheduleFrequency = habit.frequency;
+    habit.scheduleWeekdays = input.scheduleWeekdays || habit.scheduleWeekdays || [];
+    habit.targetQuantity = Number(input.targetQuantity ?? habit.targetQuantity ?? 1);
+    habit.targetUnit = input.targetUnit || habit.targetUnit || 'count';
+    habit.graceMinutes = Number(input.graceMinutes ?? habit.graceMinutes ?? 0);
+    habit.scheduleTimezone = input.scheduleTimezone || habit.scheduleTimezone || 'UTC';
+    emit();
+    return clone(habit);
+  }
+
+  function pauseHabit(habitId, input) {
+    const habit = ownedMemoryHabit(habitId);
+    if (String(input.endDate) < String(input.startDate)) throw new Error('Pause end must be on or after start');
+    habit.pauseWindows ||= [];
+    habit.pauseWindows.push({ id: uid('pause'), startDate: String(input.startDate), endDate: String(input.endDate), reason: String(input.reason || '') });
     emit();
     return clone(habit);
   }
@@ -762,5 +876,5 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     emit();
   }
 
-  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, archiveHabit, sendNudge };
+  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, sendNudge };
 }
