@@ -61,7 +61,7 @@ export function contextualHabitStatus(habit = {}, { now = new Date(), date = nul
 
 function canGroup(activity, commentedIds) {
   return activity
-    && activity.type === 'checkin'
+    && activity.type === 'completed'
     && !activity.proofPath
     && !activity.invalid
     && !commentedIds.has(activity.checkInId);

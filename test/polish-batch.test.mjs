@@ -70,9 +70,9 @@ test('navigation state and scroll positions survive rerenders', () => {
 
 test('activity grouping and visual signatures avoid grouping proofs or comments', () => {
   const grouped = groupSquadActivity([
-    { checkInId: 'a', type: 'checkin', userId: 'u1', habitTitle: 'Run', when: '2026-08-30T10:00:00Z' },
-    { checkInId: 'b', type: 'checkin', userId: 'u2', habitTitle: 'Run', when: '2026-08-30T09:57:00Z' },
-    { checkInId: 'c', type: 'checkin', userId: 'u3', habitTitle: 'Read', proofPath: 'proof.jpg', when: '2026-08-30T09:55:00Z' },
+    { checkInId: 'a', type: 'completed', userId: 'u1', habitTitle: 'Run', when: '2026-08-30T10:00:00Z' },
+    { checkInId: 'b', type: 'completed', userId: 'u2', habitTitle: 'Run', when: '2026-08-30T09:57:00Z' },
+    { checkInId: 'c', type: 'completed', userId: 'u3', habitTitle: 'Read', proofPath: 'proof.jpg', when: '2026-08-30T09:55:00Z' },
   ], []);
   assert.equal(grouped[0].type, 'grouped_checkin');
   assert.equal(grouped[0].items.length, 2);
