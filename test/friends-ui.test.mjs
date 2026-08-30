@@ -17,15 +17,20 @@ test('primary navigation and topbar speak in Friends, not squad switching', () =
   assert.doesNotMatch(app.slice(app.indexOf('function topbar()'), app.indexOf('function offlineIndicator')), /squad-switcher/);
 });
 
-test('Friends renders one authorized proof feed with heading actions on the same row', () => {
+test('Friends renders authorized Proofs and Activity feeds with compact heading actions', () => {
   const source = slice('friendsScreen', 'challengeProgress');
   assert.match(source, /friends-heading-row/);
   assert.match(source, /data-people-open/);
   assert.match(source, /data-manual-refresh/);
   assert.match(source, /activityList\(state\)/);
-  assert.match(source, /filter\(\(activity\) => activity\.proofPath/);
-  assert.doesNotMatch(source, /data-squad-feed/);
+  assert.match(source, /data-squad-feed="proofs"/);
+  assert.match(source, /data-squad-feed="activity"/);
+  assert.match(source, /squadFeed === 'proofs'/);
+  assert.match(source, /groupSquadActivity/);
+  assert.doesNotMatch(source, /One feed for the people you choose to show up with/);
   assert.doesNotMatch(source, /Hype your people|See what happened/);
+  assert.match(social, /\.friends-heading-row\{[^}]*align-items:center/);
+  assert.match(social, /\.friends-heading-actions\{[^}]*padding-bottom:0/);
 });
 
 test('Friends and League prefer new state while preserving member fallbacks', () => {
@@ -49,6 +54,23 @@ test('habit sheet exposes all-friends, selected-friends, and only-me audience co
   assert.match(app, /audienceIds/);
   assert.match(app, /habit\?\.audienceMode \|\| habit\?\.audience/);
   assert.match(app, /habit\?\.selectedFriendIds/);
+  assert.match(source, /audience-mode-grid/);
+  assert.match(source, /data-friend-audience-list/);
+  assert.doesNotMatch(source, /audienceIds\.has\(friendId\) \|\| audienceMode === 'all_friends'/);
+  assert.match(app, /audienceMode !== 'selected_friends'/);
+  assert.match(app, /checkbox\.checked = false/);
+  assert.match(social, /\.audience-mode-card/);
+});
+
+test('editing a habit exposes a dirty-state floating Save Changes action', () => {
+  const source = slice('habitSheet', 'settingsSheet');
+  assert.match(source, /data-habit-save-dock/);
+  assert.match(source, /form="habit-form"/);
+  assert.match(source, /Save changes/);
+  assert.match(app, /markHabitDirty/);
+  assert.match(app, /habitForm\?\.addEventListener\('input', markHabitDirty\)/);
+  assert.match(app, /habitForm\?\.addEventListener\('change', markHabitDirty\)/);
+  assert.match(social, /\.habit-save-dock\{[^}]*position:fixed/);
 });
 
 test('daily schedule selects all seven days and weekday edits switch to specific days', () => {
