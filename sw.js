@@ -1,27 +1,74 @@
-const CACHE = 'donezo-shell-v9';
-const ASSETS = ['/', '/index.html', '/tokens.css', '/styles.css', '/components.css', '/social.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'donezo-shell-v10';
+const ASSETS = [
+  '/',
+  '/index.html',
+  '/pwa.js',
+  '/tokens.css',
+  '/styles.css',
+  '/components.css',
+  '/social.css',
+  '/app.js',
+  '/manifest.webmanifest',
+  '/icon.svg',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
-  self.skipWaiting();
+  // Keep the worker waiting until the page explicitly accepts the update.
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(Promise.all([
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))),
+    caches.keys().then((keys) => Promise.all(
+      keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)),
+    )),
     self.clients.claim(),
   ]));
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') event.waitUntil(self.skipWaiting());
+});
+
+async function networkFirstNavigation(request) {
+  const cache = await caches.open(CACHE);
+  try {
+    const response = await fetch(new Request(request, { cache: 'no-store' }));
+    if (response.ok) await cache.put(request, response.clone());
+    return response;
+  } catch {
+    return (await cache.match(request)) || (await cache.match('/index.html')) || Response.error();
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(request);
+  const network = fetch(request).then(async (response) => {
+    if (response.ok) await cache.put(request, response.clone());
+    return response;
+  }).catch(() => null);
+  return cached || (await network) || Response.error();
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const requestUrl = new URL(event.request.url);
-  if (requestUrl.origin !== self.location.origin) return;
+  if (requestUrl.origin !== self.location.origin || requestUrl.pathname.startsWith('/api/')) return;
+
+  if (event.request.mode === 'navigate') {
+    event.respondWith(networkFirstNavigation(event.request));
+    return;
+  }
+
+  if (['style', 'script', 'image', 'font'].includes(event.request.destination)) {
+    event.respondWith(staleWhileRevalidate(event.request));
+    return;
+  }
+
   event.respondWith(fetch(event.request).catch(async () => {
     const cached = await caches.match(event.request);
-    if (cached) return cached;
-    if (event.request.mode === 'navigate') return caches.match('/');
-    return Response.error();
+    return cached || Response.error();
   }));
 });
 

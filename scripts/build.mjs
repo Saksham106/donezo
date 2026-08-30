@@ -25,6 +25,7 @@ await build({
 });
 await Promise.all([
   cp('index.html', 'dist/index.html'),
+  cp('src/pwa.js', 'dist/pwa.js'),
   cp('tokens.css', 'dist/tokens.css'),
   cp('styles.css', 'dist/styles.css'),
   cp('components.css', 'dist/components.css'),
