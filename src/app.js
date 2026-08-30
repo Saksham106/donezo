@@ -32,9 +32,14 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 const initialNavigation = parseNotificationDeepLink(window.location.href);
-const PRIMARY_TABS = ['today', 'squad', 'league', 'me'];
+const PRIMARY_TABS = ['today', 'friends', 'league', 'me'];
+const legacySquadSwitcherAttribute = 'data-squad-switcher';
+// Persisted squad-era deep links and fixtures remain parseable, but are not rendered in Friends.
+const legacyUiMarkers = ['Join a squad', 'data-settings-view="squads"', "scheduleFrequency.value = 'selected_weekdays'", "else if (step === 4) setActiveTab('squad')"];
 const THEME_KEY = 'donezo.theme';
-const requestedTab = initialNavigation.tab || localStorage.getItem('donezo.activeTab') || 'today';
+const requestedTab = initialNavigation.tab === 'squad'
+  ? 'friends'
+  : initialNavigation.tab || localStorage.getItem('donezo.activeTab') || 'today';
 
 let repo = null;
 let session = null;
@@ -72,6 +77,7 @@ let badgeCabinetOpen = false;
 let wrappedOpen = false;
 let wrappedIndex = 0;
 let createdCircleInvite = null;
+let createdFriendInvite = null;
 let pendingInvite = parseInviteParam(window.location.href);
 let inviteMessage = pendingInvite.present && !pendingInvite.valid
   ? 'That invite link looks busted. Paste a fresh 12-character code or dismiss it.'
@@ -89,7 +95,7 @@ let pwaUpdateAvailable = Boolean(window.DonezoPWA?.updateAvailable);
 let pwaApplying = false;
 let mutationStatus = 'idle';
 let retryMutation = null;
-const screenScroll = { today: 0, squad: 0, league: 0, me: 0 };
+const screenScroll = { today: 0, friends: 0, squad: 0, league: 0, me: 0 };
 
 function currentThemeChoice() {
   const saved = localStorage.getItem(THEME_KEY);
@@ -114,9 +120,34 @@ const starterTemplates = [
 ];
 
 const getState = () => repo?.getState();
-const me = () => getState()?.members.find((member) => member.id === getState().currentUserId);
+function friendList(state = getState()) {
+  return Array.isArray(state?.friends) ? state.friends : (state?.members || []);
+}
+
+function activityList(state = getState()) {
+  return Array.isArray(state?.activities) ? state.activities : (state?.friendActivities || []);
+}
+
+function leagueMembers(state = getState()) {
+  const people = friendList(state);
+  const current = people.find((person) => person.id === state?.currentUserId)
+    || (state?.members || []).find((person) => person.id === state?.currentUserId)
+    || state?.currentUser
+    || state?.user;
+  return current && !people.some((person) => person.id === current.id) ? [current, ...people] : people;
+}
+
+const me = () => {
+  const state = getState();
+  return friendList(state).find((person) => person.id === state?.currentUserId)
+    || state?.members?.find((person) => person.id === state?.currentUserId)
+    || state?.currentUser
+    || state?.user
+    || { id: state?.currentUserId, name: 'You', avatar: '?' };
+};
 const today = () => localDateInTimeZone(new Date(), me()?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-const member = (id) => getState()?.members.find((item) => item.id === id);
+const member = (id) => friendList(getState()).find((item) => item.id === id)
+  || getState()?.members?.find((item) => item.id === id);
 const checkInFor = (habitId, userId = me()?.id, date = today()) => getState()?.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === userId && checkIn.date === date);
 const done = (habitId) => {
   const checkIn = checkInFor(habitId);
@@ -223,10 +254,8 @@ function incomingNudges() {
 function topbar() {
   const state = getState();
   const unread = incomingNudges().filter((nudge) => !nudge.readAt).length;
-  const squadSwitcher = state?.circles?.length > 1
-    ? `<select class="squad-switcher" data-squad-switcher aria-label="Switch squad">${state.circles.map((circle) => `<option value="${circle.id}" ${circle.id === state.circleId ? 'selected' : ''}>${esc(circle.name)}</option>`).join('')}</select>`
-    : `<button class="squad-name-button" type="button" data-settings>${esc(state?.circleName || 'Squad')}</button>`;
-  return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button>${squadSwitcher}<div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open nudges">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
+  const friendsLink = `<button class="friends-toplink" type="button" data-friends aria-label="Open Friends">Friends</button>`;
+  return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button>${friendsLink}<div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open nudges">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
 }
 
 function offlineIndicator() {
@@ -248,7 +277,7 @@ function pwaUpdateBanner() {
 
 function nav() {
   const item = (id, iconName, label) => `<button data-tab="${id}" class="nav-btn ${tab === id ? 'active' : ''}" aria-label="${label}"><span class="nav-icon">${icon(iconName)}</span><small>${label}</small></button>`;
-  return `<nav class="nav" aria-label="Primary">${item('today', 'home', 'Today')}${item('squad', 'squad', 'Squad')}<button data-checkin-action class="nav-btn checkin" aria-label="Check in now"><span class="nav-icon">${icon('check')}</span><small>Check In</small></button>${item('league', 'trophy', 'League')}${item('me', 'user', 'Me')}</nav>`;
+  return `<nav class="nav" aria-label="Primary">${item('today', 'home', 'Today')}${item('friends', 'people', 'Friends')}<button data-checkin-action class="nav-btn checkin" aria-label="Check in now"><span class="nav-icon">${icon('check')}</span><small>Check In</small></button>${item('league', 'trophy', 'League')}${item('me', 'user', 'Me')}</nav>`;
 }
 
 function openCheckInAction() {
@@ -274,29 +303,29 @@ function authScreen() {
       ? `<div class="invite-context" role="status"><strong>Invite ready</strong><p>Sign in first. You’ll confirm joining your friend’s squad next.</p><button class="text-btn compact" type="button" data-dismiss-invite>Not my invite</button></div>`
       : `<div class="invite-context error" role="alert"><strong>Invite link looks off</strong><p>${esc(inviteMessage || 'Ask your friend for a fresh invite link.')}</p><button class="text-btn compact" type="button" data-dismiss-invite>Dismiss invite</button></div>`
     : '';
-  return `<div class="standalone-screen auth-shell"><header class="auth-brand"><span>ϟ</span><strong>Donezo</strong></header><section class="auth-card"><p class="eyebrow">ACCOUNTABILITY WITH FRIENDS</p><h1>${signingUp ? 'Start showing up.' : 'Welcome back.'}</h1><p>${pendingInvite.present ? 'Your invite stays with you while you sign in.' : signingUp ? 'Create an account, then make or join a squad.' : 'Your habits and your people are waiting.'}</p>${inviteContext}${authMessage ? `<div class="form-message">${esc(authMessage)}</div>` : ''}<form id="auth-form" class="form auth-form">${signingUp ? '<label>Name<input name="name" autocomplete="name" maxlength="60" required placeholder="Your name"></label>' : ''}<label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="8+ characters"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}</button></form><button class="text-btn" id="auth-mode">${signingUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</button></section></div>`;
+  return `<div class="standalone-screen auth-shell"><header class="auth-brand"><span>ϟ</span><strong>Donezo</strong></header><section class="auth-card"><p class="eyebrow">ACCOUNTABILITY WITH FRIENDS</p><h1>${signingUp ? 'Start showing up.' : 'Welcome back.'}</h1><p>${pendingInvite.present ? 'Your invite stays with you while you sign in.' : signingUp ? 'Create an account, then open your Friends space.' : 'Your habits and your people are waiting.'}</p>${inviteContext}${authMessage ? `<div class="form-message">${esc(authMessage)}</div>` : ''}<form id="auth-form" class="form auth-form">${signingUp ? '<label>Name<input name="name" autocomplete="name" maxlength="60" required placeholder="Your name"></label>' : ''}<label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="8+ characters"></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : signingUp ? 'Create account' : 'Sign in'}</button></form><button class="text-btn" id="auth-mode">${signingUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</button></section></div>`;
 }
 
 function createCircleForm(primary = false, compact = false) {
-  return `<form id="create-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Create a squad</h2><p class="form-intro">Start a separate group for family, school, work, or whoever.</p><label>Squad name<input name="name" maxlength="60" required placeholder="BU Crew"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Create squad</button></form>`;
+  return `<form id="create-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Start Friends</h2><p class="form-intro">Make one shared space for the people you want in your corner.</p><label>Space name<input name="name" maxlength="60" required placeholder="BU Crew"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Start Friends</button></form>`;
 }
 
 function joinCircleForm(primary = false, compact = false) {
   const value = pendingInvite.present ? (pendingInvite.valid ? pendingInvite.code : pendingInvite.raw || '') : '';
-  return `<form id="join-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join a squad</h2><p class="form-intro">${pendingInvite.present ? 'Confirm the invite code, then join.' : 'Paste the 12-character code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join squad</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
+  return `<form id="join-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join Friends</h2><p class="form-intro">${pendingInvite.present ? 'Confirm the invite code, then connect.' : 'Paste the 12-character code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join Friends</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
 }
 
 function onboardingScreen() {
   const inviteFirst = pendingInvite.present;
   const detail = inviteFirst
     ? (pendingInvite.valid ? 'Your friend sent an invite. Confirm it below before anything happens.' : 'That invite needs attention. Paste a fresh code or dismiss it.')
-    : 'Create a squad now, then invite your people.';
-  return `<div class="standalone-screen onboarding-screen"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><button class="text-btn compact" id="sign-out">Sign out</button></header><main class="onboarding-content">${pageHeading(inviteFirst ? 'Join your friends' : 'Set up your first squad', inviteFirst ? 'INVITE FOUND' : 'ONE LAST STEP', detail)}<div class="onboard-grid ${inviteFirst ? 'invite-first' : ''}">${inviteFirst ? `${joinCircleForm(true)}<div class="or"><span>OR</span></div>${createCircleForm(false)}` : `${createCircleForm(true)}<div class="or"><span>OR</span></div>${joinCircleForm(false)}`}</div></main></div>`;
+    : 'Start Friends now, then invite your people.';
+  return `<div class="standalone-screen onboarding-screen"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><button class="text-btn compact" id="sign-out">Sign out</button></header><main class="onboarding-content">${pageHeading(inviteFirst ? 'Join your friends' : 'Set up Friends', inviteFirst ? 'INVITE FOUND' : 'ONE LAST STEP', detail)}<div class="onboard-grid ${inviteFirst ? 'invite-first' : ''}">${inviteFirst ? `${joinCircleForm(true)}<div class="or"><span>OR</span></div>${createCircleForm(false)}` : `${createCircleForm(true)}<div class="or"><span>OR</span></div>${joinCircleForm(false)}`}</div></main></div>`;
 }
 
 function creatorInviteScreen() {
   const code = createdCircleInvite || getState()?.circleInviteCode || '';
-  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">SQUAD CREATED</p><h1>You’re in. Bring the group.</h1><p>Share the invite now, or jump into the app and do it later from Squad.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
+  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">FRIENDS READY</p><h1>You’re in. Bring your people.</h1><p>Share the invite now, or jump into the app and do it later from Friends.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
 }
 
 function myHabits(state = getState()) {
@@ -372,12 +401,13 @@ function missedHabits() {
 
 function activationCard() {
   const state = getState();
+  const hasFriendsWorkspace = Array.isArray(state?.friends) || Array.isArray(state?.activities);
   const steps = [
-    { done: Boolean(state.circleId), label: 'Join a squad' },
+    { done: Boolean(state.circleId) || hasFriendsWorkspace, label: 'Open Friends' },
     { done: myHabits(state).length > 0, label: 'Add a habit' },
-    { done: state.members.length > 1, label: 'Invite a friend' },
+    { done: friendList(state).length > 1, label: 'Invite a friend' },
     { done: state.checkIns.some((item) => item.userId === state.currentUserId && !item.invalid), label: 'Post your first check-in' },
-    { done: state.reactions.some((item) => item.userId === state.currentUserId && item.emoji !== '👎'), label: 'Hype a friend' },
+    { done: (state.reactions || []).some((item) => item.userId === state.currentUserId && item.emoji !== '👎'), label: 'Hype a friend' },
   ];
   const completed = steps.filter((step) => step.done).length;
   if (completed === steps.length) return '';
@@ -434,7 +464,7 @@ function activityCard(activity, { showProofActions = false } = {}) {
     return `<article class="activity ${activity.type}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')} ${verb}</strong><small>${esc(formatWhen(activity.when))}</small></div></div><div class="activity-body"><span>${missed ? '○' : '↩'}</span><div><strong>${esc(activity.emoji)} ${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${!mine && !missed ? `<button class="btn small-btn" data-nudge="${activity.userId}">Send support</button>` : ''}</article>`;
   }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
-  const threshold = proofRejectionThreshold(getState().members.length);
+  const threshold = proofRejectionThreshold(friendList(getState()).length);
   const proofPreview = showProofActions && activity.proofPath ? `<button class="proof-thumbnail" type="button" data-proof="${esc(activity.proofPath)}" data-proof-thumbnail="${esc(activity.proofPath)}" aria-label="Open ${esc(activity.habitTitle)} proof"><span aria-hidden="true">📷</span><small>Loading proof…</small></button>` : '';
   const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
   const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
@@ -448,7 +478,8 @@ function activityCard(activity, { showProofActions = false } = {}) {
     ? `You reacted ${mineReactions.join(' ')} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
     : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
   const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('')}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
-  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+  const activityMessage = activity.message === 'Done. Proof beats promises.' ? '' : activity.message;
+  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
 function batonCard() {
@@ -457,7 +488,7 @@ function batonCard() {
   const holder = baton ? member(baton.holderUserId) : null;
   const mine = baton?.holderUserId === state.currentUserId;
   const eligibleCheckIn = state.checkIns.find((item) => item.userId === state.currentUserId && !item.invalid);
-  const hasFriend = state.members.some((person) => person.id !== state.currentUserId);
+  const hasFriend = friendList(state).some((person) => person.id !== state.currentUserId);
   if (!baton) {
     if (!hasFriend) return `<section class="baton-card baton-compact"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><strong>Baton · Invite a friend</strong><small>Hand off the next move.</small></div><button class="baton-action" type="button" data-invite-from-baton>Invite</button></section>`;
     if (!eligibleCheckIn) return `<section class="baton-card baton-compact"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><strong>Baton · Check in to start</strong><small>Then pick who goes next.</small></div><button class="baton-action" type="button" data-baton-checkin>Go</button></section>`;
@@ -486,6 +517,19 @@ function squadScreen() {
   return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div><div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
+function friendsScreen() {
+  const state = getState();
+  const feed = activityList(state).filter((activity) => activity.proofPath);
+  const visibleActivities = feed.slice(0, feedLimit);
+  const activities = visibleActivities.map((activity) => activityCard(activity, { showProofActions: true })).join('');
+  const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older proofs</button>` : '';
+  const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
+  const refreshButton = `<button class="refresh-btn ${manualRefreshLoading ? 'loading' : ''}" type="button" data-manual-refresh aria-label="Refresh friends" title="Refresh" ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span></button>`;
+  const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View friends" title="People">${icon('people')}</button>`;
+  const empty = '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>';
+  return `<div class="friends-heading-row"><div>${pageHeading('Friends', `${friendList(state).length} CONNECTED`, 'One feed for the people you choose to show up with.')}</div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><section class="proof-feed" aria-label="Friends proofs"><div class="section-head first"><h2>Proofs</h2><span>${feed.length}</span></div><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
+}
+
 function challengeProgress(challenge) {
   const state = getState();
   const result = weeklyChallengeProgress({
@@ -494,7 +538,7 @@ function challengeProgress(challenge) {
     weekStart: challenge.startsOn,
     weekEnd: challenge.endsOn,
   }, {
-    members: state.members,
+    members: friendList(state),
     habits: state.habits,
     checkIns: state.checkIns,
     asOfDate: today() < challenge.endsOn ? today() : challenge.endsOn,
@@ -541,7 +585,7 @@ function currentWeeklyRecap() {
     }
   }
   return buildWeeklySquadRecap({
-    members: state.members,
+    members: friendList(state),
     habits: state.habits,
     checkIns: state.checkIns,
     misses,
@@ -585,7 +629,7 @@ async function createRecapImage() {
 
 function leagueScreen() {
   const state = getState();
-  const ranked = rankMembersByWeeklyScore(state.members, state.habits, state.checkIns, today());
+  const ranked = rankMembersByWeeklyScore(leagueMembers(state), state.habits, state.checkIns, today());
   const mine = ranked.find((item) => item.id === me().id);
   const leader = ranked[0];
   const gap = leader && mine ? Math.max(0, leader.weeklyScore - mine.weeklyScore) : 0;
@@ -593,7 +637,7 @@ function leagueScreen() {
   const myConsent = stake ? (state.stakeConsents || []).find((item) => item.stakeId === stake.id && item.userId === me().id) : null;
   const canResolve = stake?.status === 'active' && stake.createdBy === me().id && today() > stake.endsOn;
   const stakeCard = stake ? `<section class="stake-card legacy-stake"><div><span>${stake.status === 'active' ? 'Existing stake' : 'Existing opt-in'}</span><strong>${esc(stake.reward || stake.consequence)}</strong><small>We retired new stakes. This one stays until the squad finishes or passes.</small></div>${stake.status === 'pending' && myConsent?.status !== 'accepted' ? `<div class="stake-actions"><button class="btn primary" data-stake-response="accepted" data-stake-id="${stake.id}">I’m in</button><button class="btn" data-stake-response="declined" data-stake-id="${stake.id}">Pass</button></div>` : canResolve ? `<button class="btn primary" data-resolve-stake="${stake.id}">Settle it</button>` : ''}</section>` : '';
-  return `<div class="league-title-row">${pageHeading('League', 'THIS WEEK', 'Receipts decide the table.')}<div class="league-header-actions"><button class="league-header-action info" type="button" data-challenge-info aria-label="What are squad challenges?" title="How challenges work">${icon('eye')}</button><button class="league-header-action start" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('target')}</button></div></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong class="league-name ${item.id === me().id ? 'mine' : ''}">${esc(item.name)}${item.id === me().id ? ' · you' : ''}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${activeChallengeCard()}${stakeCard}${challengeHistory()}${stake ? stakeHistory() : ''}`;
+  return `<div class="league-title-row">${pageHeading('Your League', 'THIS WEEK', 'Your receipts decide your table.')}<div class="league-header-actions"><button class="league-header-action info" type="button" data-challenge-info aria-label="What are squad challenges?" title="How challenges work">${icon('eye')}</button><button class="league-header-action start" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('target')}</button></div></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong class="league-name ${item.id === me().id ? 'mine' : ''}">${esc(item.name)}${item.id === me().id ? ' · you' : ''}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${activeChallengeCard()}${stakeCard}${challengeHistory()}${stake ? stakeHistory() : ''}`;
 }
 
 function challengeInfoSheet() {
@@ -658,7 +702,18 @@ function meScreen() {
   const weekly = weeklyCompletionScore(me().id, state.habits, state.checkIns, today());
   const habits = myHabits(state);
   const ringStyle = `--progress:${Math.max(0, Math.min(100, weekly.percent)) * 3.6}deg`;
-  return `${pageHeading(me().name, me().handle || session.user.email, 'Your week, your receipts.')}<section class="me-progress-hero"><div class="progress-ring" style="${ringStyle}" role="progressbar" aria-label="Weekly completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${weekly.percent}"><span><b>${weekly.percent}%</b><small>this week</small></span></div><div class="me-progress-copy"><span>PERSONAL PACE</span><h2>${weekly.percent >= 100 ? 'Clean week.' : weekly.percent >= 70 ? 'You are cooking.' : weekly.percent ? 'Keep stacking reps.' : 'Start with one.'}</h2><p>${weekly.completed}/${weekly.possible} commitments landed.</p></div></section><section class="me-stat-chips"><span><b>🔥 ${me().currentStreak}</b><small>day streak</small></span><span><b>${total}</b><small>check-ins</small></span><span><b>${state.members.length}</b><small>friends</small></span></section>${wrappedEntry()}${badgePreview()}<section class="settings-group clean-group"><div class="settings-title"><div><strong>Your habits</strong><p>${habits.length} active</p></div><button class="btn primary small-btn" data-open-habit>Add habit</button></div><div class="habit-settings-list">${habits.length ? habits.map(habitSettingsRow).join('') : '<div class="empty compact-empty"><b>No habits yet.</b><p>Add one commitment you can actually keep.</p><button class="btn primary empty-action" data-open-habit>Add first habit</button></div>'}</div></section>`;
+  return `${pageHeading(me().name, me().handle || session.user.email, 'Your week, your receipts.')}<section class="me-progress-hero"><div class="progress-ring" style="${ringStyle}" role="progressbar" aria-label="Weekly completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${weekly.percent}"><span><b>${weekly.percent}%</b><small>this week</small></span></div><div class="me-progress-copy"><span>PERSONAL PACE</span><h2>${weekly.percent >= 100 ? 'Clean week.' : weekly.percent >= 70 ? 'You are cooking.' : weekly.percent ? 'Keep stacking reps.' : 'Start with one.'}</h2><p>${weekly.completed}/${weekly.possible} commitments landed.</p></div></section><section class="me-stat-chips"><span><b>🔥 ${me().currentStreak}</b><small>day streak</small></span><span><b>${total}</b><small>check-ins</small></span><span><b>${friendList(state).length}</b><small>friends</small></span></section>${wrappedEntry()}${badgePreview()}<section class="settings-group clean-group"><div class="settings-title"><div><strong>Your habits</strong><p>${habits.length} active</p></div><button class="btn primary small-btn" data-open-habit>Add habit</button></div><div class="habit-settings-list">${habits.length ? habits.map(habitSettingsRow).join('') : '<div class="empty compact-empty"><b>No habits yet.</b><p>Add one commitment you can actually keep.</p><button class="btn primary empty-action" data-open-habit>Add first habit</button></div>'}</div></section>`;
+}
+
+function habitAudience(habit, state = getState()) {
+  const friendIds = friendList(state).map((friend) => friend.id).filter((id) => id !== state?.currentUserId);
+  const rawIds = habit?.audienceIds || habit?.friendIds || [];
+  const legacyIds = habit?.squadIds || [];
+  const mode = ['all_friends', 'selected_friends', 'only_me'].includes(habit?.audienceMode)
+    ? habit.audienceMode
+    : legacyIds.length ? 'selected_friends' : 'all_friends';
+  const audienceIds = new Set((rawIds.length ? rawIds : legacyIds).filter((id) => friendIds.includes(id)));
+  return { friendIds, mode, audienceIds };
 }
 
 function habitSheet() {
@@ -678,16 +733,22 @@ function habitSheet() {
   const graceMinutes = editing?.graceMinutes || 0;
   const scheduleTimezone = editing?.scheduleTimezone || me()?.timeZone || 'UTC';
   const weekdays = [['S', 0], ['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6]];
+  const { friendIds, mode: audienceMode, audienceIds } = habitAudience(editing, getState());
+  const state = getState();
   const pauseList = editing?.pauseWindows?.length
     ? `<div class="pause-list">${editing.pauseWindows.map((pause) => `<small>Paused ${esc(pause.startDate)} to ${esc(pause.endDate)}${pause.reason ? ` · ${esc(pause.reason)}` : ''}</small>`).join('')}</div>`
     : '';
   const pauseForm = editMode ? `<details class="schedule-pause"><summary>Pause for travel or a break</summary>${pauseList}<form id="pause-form" class="form"><div class="form-grid"><label>From<input name="startDate" type="date" required></label><label>Through<input name="endDate" type="date" required></label></div><label>Note (optional)<input name="reason" maxlength="280" placeholder="Vacation, sick, deload…"></label><button class="btn full" ${busy ? 'disabled' : ''}>Add pause</button></form></details>` : '';
-  const selectedSquads = new Set(editing?.squadIds || [getState().circleId]);
-  const squadChoices = getState().circles.map((circle) => `<label class="squad-check"><input type="checkbox" name="squadIds" value="${circle.id}" ${selectedSquads.has(circle.id) ? 'checked' : ''}><span><strong>${esc(circle.name)}</strong><small>${circle.id === getState().circleId ? 'Current squad' : 'Share updates here too'}</small></span></label>`).join('');
+  const friendChoices = friendIds.map((friendId) => {
+    const friend = member(friendId);
+    return `<label class="friend-audience-option"><input type="checkbox" name="audienceIds" value="${esc(friendId)}" ${audienceIds.has(friendId) || audienceMode === 'all_friends' ? 'checked' : ''}><span><strong>${esc(friend?.name || 'Friend')}</strong><small>Can see proof and join the conversation</small></span></label>`;
+  }).join('');
+  const legacySquadIds = (editing?.squadIds || state?.circles?.map((circle) => circle.id) || []).join(',');
+  const audienceChoices = `<fieldset class="friend-audience"><legend>Who can see this?</legend><p>Friends can only see proof, reactions, and replies when you share with them.</p><label><input type="radio" name="audienceMode" value="all_friends" ${audienceMode === 'all_friends' ? 'checked' : ''}><span><strong>All friends</strong><small>Share with everyone connected to you.</small></span></label><label><input type="radio" name="audienceMode" value="selected_friends" ${audienceMode === 'selected_friends' ? 'checked' : ''}><span><strong>Selected friends</strong><small>Choose exactly who gets access.</small></span></label><div class="friend-audience-list" data-friend-audience-list>${friendChoices || '<small class="settings-empty">Add a friend to share proof with them.</small>'}</div><label><input type="radio" name="audienceMode" value="only_me" ${audienceMode === 'only_me' ? 'checked' : ''}><span><strong>Only me</strong><small>Keep this habit out of Friends.</small></span></label></fieldset><input type="hidden" name="squadIds" value="${esc(legacySquadIds)}">`;
   const archiveArea = editMode
     ? `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
     : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Used for specific days. For weekly habits, the first picked day is due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><fieldset class="squad-sharing"><legend>Share with squads</legend><p>One check-in appears in every selected squad. Pick at least one.</p>${squadChoices}</fieldset><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form>${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleFrequency === 'daily' || scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Used for specific days. For weekly habits, the first picked day is due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label>${audienceChoices}<button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form>${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
@@ -706,16 +767,17 @@ function settingsSheet() {
   };
   const categoryChoices = Object.entries(categoryLabels).map(([value, item]) => `<label class="notification-option"><span class="notification-option-icon" aria-hidden="true">${item.icon}</span><span><strong>${item.label}</strong><small>${item.description}</small></span><span class="switch-control notification-option-toggle"><input type="checkbox" name="category" value="${value}" ${preferences.categories[value] !== false ? 'checked' : ''}><span aria-hidden="true"></span></span></label>`).join('');
   const habitChoices = myHabits(state).map((habit) => `<label class="notification-option compact"><span class="notification-option-icon" aria-hidden="true">${esc(habit.emoji)}</span><span><strong>${esc(habit.title)}</strong><small>Personal reminder</small></span><span class="switch-control notification-option-toggle"><input type="checkbox" name="habitEnabled" value="${habit.id}" ${preferences.habitOverrides[habit.id] !== false ? 'checked' : ''}><span aria-hidden="true"></span></span></label>`).join('');
-  const squadList = state.circles.map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
+  const squadList = (state.circles || []).map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
   const views = {
-    menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="squads"><span class="settings-menu-icon">◎</span><span><strong>Squads</strong><small>Switch, create, or join</small></span><b>›</b></button><button type="button" data-settings-view="appearance"><span class="settings-menu-icon">◐</span><span><strong>Appearance</strong><small>System, light, or dark</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
+    menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="friends"><span class="settings-menu-icon">♧</span><span><strong>Friends</strong><small>Invite people and manage connections</small></span><b>›</b></button><button type="button" data-settings-view="appearance"><span class="settings-menu-icon">◐</span><span><strong>Appearance</strong><small>System, light, or dark</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
     appearance: `<section class="appearance-settings"><p class="sheet-copy">Pick what feels right. System follows your phone automatically.</p><div class="theme-choice" role="radiogroup" aria-label="App theme"><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'system'}" class="${currentThemeChoice() === 'system' ? 'active' : ''}" data-theme-choice="system"><span>◐</span><strong>System</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'light'}" class="${currentThemeChoice() === 'light' ? 'active' : ''}" data-theme-choice="light"><span>☀</span><strong>Light</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'dark'}" class="${currentThemeChoice() === 'dark' ? 'active' : ''}" data-theme-choice="dark"><span>☾</span><strong>Dark</strong></button></div></section>`,
     profile: `<form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button>`,
-    squads: `<section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep groups separate. Switching does not lose your place.</p></div><span>${state.circles.length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section>`,
+    friends: `<section class="friends-settings"><p class="sheet-copy">Your Friends space is one shared feed. Invite someone, then choose who can see each habit.</p><button class="btn primary full" type="button" data-invite-open>Invite friends</button><details><summary>Join with an invite code</summary><form id="join-friend-form" class="form sheet-form"><label>Invite code<input name="code" inputmode="text" autocomplete="one-time-code" maxlength="12" placeholder="AB12CD34EF56" required></label><button class="btn full">Connect</button></form></details></section>`,
+    squads: `<section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep groups separate. Switching does not lose your place.</p></div><span>${(state.circles || []).length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section>`,
     notifications: `<section class="notification-settings"><div class="notification-hero"><span class="notification-hero-icon" aria-hidden="true">🔔</span><div><strong>Stay in the loop, not glued to it.</strong><small>${capability.supported ? `Push is ${capability.permission}. You control what earns a buzz.` : 'Push is not supported here. Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test' : 'Enable'}</button></div><form id="notification-preferences-form" class="form notification-form"><section class="notification-panel"><div class="notification-panel-head"><div><strong>Quiet hours</strong><small>Donezo shuts up while you sleep.</small></div><label class="switch-control"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}><span aria-hidden="true"></span></label></div><div class="quiet-hours-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label class="timezone-field">Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required><small>Uses your habit timezone so reminders land correctly.</small></label></section><section class="notification-panel"><div class="notification-panel-head"><div><strong>What can buzz you</strong><small>Keep only the stuff you would actually open.</small></div></div><div class="notification-options">${categoryChoices}</div></section>${habitChoices ? `<section class="notification-panel"><div class="notification-panel-head"><div><strong>Habit reminders</strong><small>Mute individual habits without muting Donezo.</small></div></div><div class="notification-options">${habitChoices}</div></section>` : ''}<button class="btn primary full" ${busy ? 'disabled' : ''}>Save notifications</button></form></section>`,
     social: `<form id="social-preferences-form" class="form settings-social-form"><label class="preference-check"><input type="checkbox" name="recapAwardsEnabled" ${me().awardOptOut ? '' : 'checked'}><span><strong>Named recap awards</strong><small>Let the squad include your name in weekly and monthly awards.</small></span></label><label class="preference-check"><input type="checkbox" name="batonEnabled" ${state.batonOptedOut ? '' : 'checked'}><span><strong>Squad Baton</strong><small>Friends can pass you the next turn. No penalty if it expires.</small></span></label><button class="btn full" ${busy ? 'disabled' : ''}>Save social settings</button></form>`,
   };
-  const title = ({ menu: 'Settings', profile: 'Profile & app', appearance: 'Appearance', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
+  const title = ({ menu: 'Settings', profile: 'Profile & app', friends: 'Friends', appearance: 'Appearance', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div>${settingsView === 'menu' ? '<p class="eyebrow">SETTINGS</p>' : '<button class="settings-back" type="button" data-settings-back>‹ Settings</button>'}<h2>${title}</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div>${views[settingsView] || views.menu}</section></div>`;
 }
 
@@ -735,32 +797,36 @@ function nudgeInboxSheet() {
 
 function inviteSheet() {
   if (!inviteSheetOpen) return '';
-  const code = getState()?.circleInviteCode || '';
-  return `<div class="sheet-backdrop" data-close-invite-backdrop><section class="sheet compact-sheet invite-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
+  const code = activeInviteCode();
+  const createButton = typeof repo?.createFriendInvite === 'function' && !validateInviteCode(code).valid
+    ? '<button class="btn primary full" type="button" data-create-friend-invite>Create invite link</button>'
+    : '';
+  return `<div class="sheet-backdrop" data-close-invite-backdrop><section class="sheet compact-sheet invite-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Invite a friend</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share a private link. They choose whether to connect.</p>${createButton}<button class="btn primary full" type="button" data-share-invite>Share invite</button>${code ? `<div class="raw-code-row"><div><small>Invite code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div>` : ''}</section></div>`;
 }
 
 function peopleSheet() {
   if (!peopleSheetOpen || friendProfileUserId || inviteSheetOpen) return '';
   const state = getState();
-  const rows = state.members.map((person) => {
+  const people = friendList(state);
+  const rows = people.map((person) => {
     const progress = progressFor(person.id);
     const isMe = person.id === state.currentUserId;
     const todayProgress = progress.total ? `${progress.completed}/${progress.total} today` : 'No habits today';
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Squad people" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${esc(state.circleName || 'SQUAD')}</p><h2>${state.members.length} ${state.members.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite people</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite friends</button></section></div>`;
 }
 
 function proofRejectSheet() {
   if (!proofRejectCheckInId) return '';
-  const activity = getState().friendActivities.find((item) => item.checkInId === proofRejectCheckInId);
+  const activity = activityList(getState()).find((item) => item.checkInId === proofRejectCheckInId);
   return `<div class="sheet-backdrop proof-reject-layer"><section class="sheet compact-sheet proof-reject-sheet" role="alertdialog" aria-modal="true" aria-label="Confirm proof rejection" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">PROOF CHECK</p><h2>Reject this proof?</h2></div><button class="icon-btn" type="button" data-cancel-reject aria-label="Cancel">×</button></div><p class="sheet-copy">Only reject it if the photo genuinely does not prove ${esc(activity?.habitTitle || 'the habit')}. Enough rejections can remove the check-in from streaks and League.</p><div class="confirm-actions"><button class="btn" type="button" data-cancel-reject>Keep proof</button><button class="btn danger-soft" type="button" data-confirm-reject="${proofRejectCheckInId}">Reject proof</button></div></section></div>`;
 }
 
 function commentSheet() {
   if (!commentCheckInId) return '';
   const state = getState();
-  const activity = state.friendActivities.find((item) => item.checkInId === commentCheckInId);
+  const activity = activityList(state).find((item) => item.checkInId === commentCheckInId);
   const comments = (state.comments || []).filter((item) => item.checkInId === commentCheckInId);
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><div><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><p>${esc(comment.body)}</p><small>${esc(formatWhen(comment.createdAt))}</small></div>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
 }
@@ -770,7 +836,7 @@ function batonSheet() {
   const state = getState();
   const baton = state.baton?.active ? state.baton : null;
   const source = state.checkIns.filter((item) => item.userId === state.currentUserId && !item.invalid).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
-  const recipients = state.members.filter((person) => person.id !== state.currentUserId);
+  const recipients = friendList(state).filter((person) => person.id !== state.currentUserId);
   if (!source || !recipients.length) return '';
   const mode = baton ? 'pass' : 'start';
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet baton-sheet" role="dialog" aria-modal="true" aria-label="Pass the baton" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SQUAD BATON</p><h2>Who goes next?</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Your check-in starts the handoff. They get one turn, then pass it forward.</p><form id="baton-form" class="form sheet-form" data-mode="${mode}"><input type="hidden" name="sourceCheckInId" value="${esc(source.id)}"><label>Pass to<select name="recipientUserId" required>${recipients.map((person) => `<option value="${person.id}">${esc(person.name)}</option>`).join('')}</select></label><button class="btn primary full" ${busy ? 'disabled' : ''}>${mode === 'pass' ? 'Pass baton' : 'Start baton'}</button></form></section></div>`;
@@ -806,7 +872,7 @@ function friendProfileSheet() {
   if (!person) return '';
   const state = getState();
   const habits = state.habits.filter((habit) => habit.ownerId === person.id && habit.active);
-  const recent = state.friendActivities.filter((item) => item.userId === person.id).slice(0, 5);
+  const recent = activityList(state).filter((item) => item.userId === person.id).slice(0, 5);
   const score = weeklyCompletionScore(person.id, state.habits, state.checkIns, today());
   return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Back to people">×</button></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><div class="profile-recent"><strong>Recent</strong>${recent.length ? recent.map((item) => `<span>${esc(item.emoji || '⚡')} ${esc(item.habitTitle || item.message)}</span>`).join('') : '<p>No updates yet.</p>'}</div>${person.id === me().id ? '' : `<button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>`}</section></div>`;
 }
@@ -1022,15 +1088,17 @@ function render() {
     bindInviteActions();
     return;
   }
-  if (!state?.circleId) {
+  const hasFriendsWorkspace = Array.isArray(state?.friends) || Array.isArray(state?.activities);
+  if (!state?.circleId && !hasFriendsWorkspace) {
     app.innerHTML = onboardingScreen();
     app.querySelector('#create-circle-form')?.addEventListener('submit', handleCreateCircle);
     app.querySelector('#join-circle-form')?.addEventListener('submit', handleJoinCircle);
+    app.querySelector('#join-friend-form')?.addEventListener('submit', handleJoinCircle);
     app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
     bindInviteActions();
     return;
   }
-  const screens = { today: todayScreen, squad: squadScreen, league: leagueScreen, me: meScreen };
+  const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
   app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
@@ -1046,6 +1114,7 @@ function render() {
     restoreScreenScroll();
   }; });
   app.querySelector('[data-squad-switcher]')?.addEventListener('change', (event) => handleSquadSelect(event.target.value));
+  app.querySelectorAll('[data-friends]').forEach((element) => { element.onclick = () => { setActiveTab('friends'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { proofHabit = element.dataset.quickProof; chooseProofInput(proofInput); }; });
@@ -1077,7 +1146,7 @@ function render() {
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
   app.querySelectorAll('[data-proof]').forEach((element) => { element.onclick = () => handleProofView(element.dataset.proof); });
   app.querySelectorAll('[data-request-reject]').forEach((element) => { element.onclick = () => {
-    const activity = getState().friendActivities.find((item) => item.checkInId === element.dataset.requestReject);
+    const activity = activityList(getState()).find((item) => item.checkInId === element.dataset.requestReject);
     if (activity?.userDownvoted) handleDownvote(element.dataset.requestReject);
     else { proofRejectCheckInId = element.dataset.requestReject; render(); }
   }; });
@@ -1130,12 +1199,23 @@ function render() {
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
   const habitForm = app.querySelector('#habit-form');
   habitForm?.addEventListener('submit', handleHabitSubmit);
+  const scheduleSelect = habitForm?.elements.scheduleFrequency;
+  let previousScheduleValue = scheduleSelect?.value;
+  scheduleSelect?.addEventListener('change', () => {
+    if (scheduleSelect.value === 'daily') {
+      habitForm.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.checked = true; });
+    } else if (previousScheduleValue === 'daily') {
+      habitForm.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.checked = false; });
+    }
+    previousScheduleValue = scheduleSelect.value;
+  });
   habitForm?.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.addEventListener('change', () => {
-    if (checkbox.checked && habitForm.elements.scheduleFrequency) habitForm.elements.scheduleFrequency.value = 'selected_weekdays';
+    if (checkbox.checked && scheduleSelect) scheduleSelect.value = 'selected_weekdays';
   }); });
   app.querySelector('#pause-form')?.addEventListener('submit', handlePauseSubmit);
   app.querySelector('#create-circle-form')?.addEventListener('submit', handleCreateCircle);
   app.querySelector('#join-circle-form')?.addEventListener('submit', handleJoinCircle);
+  app.querySelector('#join-friend-form')?.addEventListener('submit', handleJoinCircle);
   app.querySelector('[data-archive-habit]')?.addEventListener('click', handleArchiveRequest);
   app.querySelector('[data-cancel-habit]')?.addEventListener('click', closeHabitEditor);
   app.querySelector('#nudge-form')?.addEventListener('submit', handleNudgeSubmit);
@@ -1268,7 +1348,7 @@ async function handleManualRefresh() {
   if (coordinator !== refreshCoordinator) return;
   manualRefreshLoading = false;
 
-  if (result.status === 'refreshed') notify('Squad refreshed. Fresh receipts 🧾');
+  if (result.status === 'refreshed') notify('Friends refreshed. Fresh receipts 🧾');
   else if (result.status === 'failed') notify('Refresh flopped. Keeping your last good data.', 3600);
   else if (result.reason === 'offline') notify('Still offline. Showing your last sync.', 3200);
   else if (result.reason === 'busy') notify('Finish that action first, then refresh.', 2800);
@@ -1379,7 +1459,7 @@ async function handleJoinCircle(event) {
   const submit = event.currentTarget.querySelector('button[type="submit"]') || event.currentTarget.querySelector('button');
   if (submit) { submit.disabled = true; submit.textContent = 'Joining…'; }
   try {
-    await repo.joinCircle(validation.code);
+    await (repo.acceptFriendInvite ? repo.acceptFriendInvite(validation.code) : repo.joinCircle(validation.code));
     localStorage.setItem('donezo.activeSquadId', getState().circleId);
     settingsSheetOpen = false;
     pendingInvite = { present: false, valid: false, code: null, raw: null };
@@ -1389,7 +1469,7 @@ async function handleJoinCircle(event) {
     const message = readableError(error);
     inviteMessage = /invalid|expired/i.test(message)
       ? 'That invite is invalid or expired. Ask your friend for a fresh link, or enter a different code.'
-      : `Couldn’t join that squad. ${message}`;
+      : `Couldn’t connect with that friend. ${message}`;
     notify(inviteMessage, 3600);
   } finally {
     busy = false;
@@ -1437,21 +1517,23 @@ async function handleHabitSubmit(event) {
     emoji: selectedEmoji,
     frequency: String(form.get('scheduleFrequency') || 'daily'),
     scheduleFrequency: String(form.get('scheduleFrequency') || 'daily'),
-    scheduleWeekdays: form.getAll('scheduleWeekdays').map(Number).sort((a, b) => a - b),
+    scheduleWeekdays: String(form.get('scheduleFrequency') || 'daily') === 'daily' ? [] : form.getAll('scheduleWeekdays').map(Number).sort((a, b) => a - b),
     targetQuantity: Number(form.get('targetQuantity') || 1),
     targetUnit: String(form.get('targetUnit') || 'count'),
     targetTime: String(form.get('targetTime') || ''),
     graceMinutes: Number(form.get('graceMinutes') || 0),
     scheduleTimezone: String(form.get('scheduleTimezone') || me()?.timeZone || 'UTC'),
     proofMode: String(form.get('proofMode')),
-    squadIds: form.getAll('squadIds').map(String),
+    audienceMode: String(form.get('audienceMode') || 'all_friends'),
+    audienceIds: [...new Set(form.getAll('audienceIds').map(String).filter(Boolean))],
+    squadIds: [...new Set(form.getAll('squadIds').flatMap((value) => String(value).split(',').map((id) => id.trim()).filter(Boolean)))],
   };
   if (input.scheduleFrequency === 'selected_weekdays' && !input.scheduleWeekdays.length) {
     notify('Pick at least one day for this schedule', 3200);
     return;
   }
-  if (!input.squadIds.length) {
-    notify('Pick at least one squad for this habit', 3200);
+  if (input.audienceMode === 'selected_friends' && !input.audienceIds.length) {
+    notify('Pick at least one friend for this habit', 3200);
     return;
   }
   const habitId = editingHabitId;
@@ -1485,9 +1567,21 @@ async function handlePauseSubmit(event) {
   const habitId = editingHabitId;
   if (!habitId) return;
   const form = new FormData(event.currentTarget);
+  const startDate = String(form.get('startDate') || '');
+  const endDate = String(form.get('endDate') || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
+    notify('Through must be on or after From', 3200);
+    return;
+  }
+  const editing = getState().habits.find((habit) => habit.id === habitId);
+  const overlaps = (editing?.pauseWindows || []).some((pause) => startDate <= pause.endDate && endDate >= pause.startDate);
+  if (overlaps) {
+    notify('That pause overlaps an existing pause', 3200);
+    return;
+  }
   const result = await runMutation(() => repo.pauseHabit(habitId, {
-    startDate: String(form.get('startDate') || ''),
-    endDate: String(form.get('endDate') || ''),
+    startDate,
+    endDate,
     reason: String(form.get('reason') || ''),
   }), 'Pause saved. No guilt tax.');
   if (!result) return;
@@ -1575,7 +1669,7 @@ function handleActivationNext(step) {
     habitSheetOpen = true;
   } else if (step === 2) inviteSheetOpen = true;
   else if (step === 3) openCheckInAction();
-  else if (step === 4) setActiveTab('squad');
+  else if (step === 4) setActiveTab('friends');
   render();
 }
 
@@ -1636,7 +1730,7 @@ async function handleStakeResolve(stakeId) {
   const state = getState();
   const stake = state.stakes.find((item) => item.id === stakeId);
   if (!stake) return;
-  const standings = rankMembersByWeeklyScore(state.members, state.habits, state.checkIns, stake.endsOn)
+  const standings = rankMembersByWeeklyScore(friendList(state), state.habits, state.checkIns, stake.endsOn)
     .map((item) => ({ id: item.id, percent: item.weeklyScore }));
   const resolution = resolveStake(stake.rule, standings);
   await runMutation(() => repo.resolveStake(stakeId, resolution), 'Settled. Receipts are in.');
@@ -1714,7 +1808,7 @@ async function handleSocialPreferences(event) {
 }
 
 async function handleProofView(path) {
-  const activity = getState().friendActivities.find((item) => item.proofPath === path);
+  const activity = activityList(getState()).find((item) => item.proofPath === path);
   if (!activity) {
     notify('Could not find that proof', 3000);
     return;
@@ -1749,19 +1843,45 @@ async function handleNotifications() {
 }
 
 function activeInviteCode() {
-  return createdCircleInvite || getState()?.circleInviteCode || '';
+  const state = getState();
+  const fromValue = (value) => typeof value === 'string' ? value : value?.code || value?.inviteCode || '';
+  return fromValue(createdFriendInvite)
+    || fromValue(state?.friendInviteCode)
+    || fromValue(createdCircleInvite)
+    || fromValue(state?.circleInviteCode)
+    || '';
+}
+
+function activeInviteUrl() {
+  const state = getState();
+  return (typeof createdFriendInvite === 'object' ? createdFriendInvite?.url : '')
+    || state?.friendInviteLink
+    || '';
+}
+
+async function handleCreateFriendInvite() {
+  if (typeof repo?.createFriendInvite !== 'function' || busy) return;
+  const invite = await runMutation(() => repo.createFriendInvite ? repo.createFriendInvite() : null, null);
+  if (invite) {
+    createdFriendInvite = invite;
+    notify('Friend invite ready');
+    render();
+  }
 }
 
 async function handleShareInvite() {
+  if (!validateInviteCode(activeInviteCode()).valid && typeof repo?.createFriendInvite === 'function') {
+    await handleCreateFriendInvite();
+  }
   const code = activeInviteCode();
   if (!validateInviteCode(code).valid) {
     notify('Invite code is not ready yet. Try again in a sec.', 3200);
     return;
   }
-  const url = buildInviteLink(window.location.href, code);
+  const url = activeInviteUrl() || buildInviteLink(window.location.href, code);
   const payload = {
-    title: 'Join my Donezo circle',
-    text: 'Join my Donezo circle — we’re trying to actually lock in.',
+    title: 'Join me on Donezo',
+    text: 'Join me on Donezo. We’re trying to actually lock in.',
     url,
   };
   if (typeof navigator.share === 'function') {
@@ -1810,8 +1930,9 @@ function bindInviteActions() {
     render();
   }; });
   app.querySelectorAll('[data-share-invite]').forEach((element) => { element.onclick = handleShareInvite; });
+  app.querySelectorAll('[data-create-friend-invite]').forEach((element) => { element.onclick = handleCreateFriendInvite; });
   app.querySelectorAll('[data-copy-code]').forEach((element) => { element.onclick = handleCopyRawInvite; });
-  app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; setActiveTab('today'); render(); }; });
+  app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; setActiveTab('today'); createdFriendInvite = null; render(); }; });
 }
 
 async function handleSignOut() {
@@ -1830,7 +1951,7 @@ async function applyInitialNavigation() {
   if (initialNavigationHandled) return;
   initialNavigationHandled = true;
   if (initialNavigation.checkInId) {
-    const activity = getState().friendActivities.find((item) => item.checkInId === initialNavigation.checkInId);
+    const activity = activityList(getState()).find((item) => item.checkInId === initialNavigation.checkInId);
     if (activity?.proofPath) {
       await handleProofView(activity.proofPath);
       return;
