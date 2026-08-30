@@ -27,6 +27,7 @@ test('Squad uses a People sheet and truly separates activity from proofs', () =>
   assert.doesNotMatch(source, />Refresh<\/button>/);
   assert.match(app, /function peopleSheet\(\)/);
   assert.match(app, /data-invite-from-people/);
+  assert.match(app, /No habits today/);
   assert.match(app, /people:/);
 });
 
@@ -51,6 +52,8 @@ test('League puts standings first and uses direct compact social actions', () =>
 test('mobile social stylesheet is complete and not accidentally swallowed by a malformed rule', () => {
   assert.doesNotMatch(social, /\[truncated\]/);
   assert.match(social, /\.activation-card\{[^}]*padding:/s);
+  assert.match(social, /\.baton-card\{[^}]*grid-template-columns:auto minmax\(0,1fr\)/s);
+  assert.doesNotMatch(social, /\.baton-copy strong\{[^}]*text-overflow:ellipsis/s);
   assert.match(social, /\.pwa-update-banner\{[^}]*position:fixed/s);
 });
 
