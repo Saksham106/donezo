@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const invite = await readFile(new URL('../src/invite.js', import.meta.url), 'utf8');
 const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 const social = await readFile(new URL('../social.css', import.meta.url), 'utf8');
 
@@ -72,10 +73,9 @@ test('repeated default proof subtitle is suppressed while authored notes remain 
 
 test('friend invite methods are preferred with legacy circle invite fallback', () => {
   assert.match(app, /repo\.createFriendInvite/);
-  assert.match(app, /repo\.acceptFriendInvite/);
-  assert.match(app, /repo\.createFriendInvite \? repo\.createFriendInvite/);
-  assert.match(app, /repo\.acceptFriendInvite \? repo\.acceptFriendInvite/);
-  assert.match(app, /repo\.joinCircle/);
+  assert.match(app, /redeemInvite\(repo, validation\.code\)/);
+  assert.match(invite, /repository\?\.acceptFriendInvite/);
+  assert.match(invite, /repository\?\.joinCircle/);
 });
 
 test('friend nudges are private and do not expose unrelated friend networks', () => {

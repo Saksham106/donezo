@@ -30,6 +30,14 @@ test('client accepts hardened friend codes while preserving legacy 12-character 
   assert.equal(validateInviteCode('abcdef012345').valid, true);
   assert.match(storeSource, /\^\(\?:\[a-z0-9\]\{12\}\|\[a-f0-9\]\{24\}\)\$/);
   assert.match(appSource, /maxlength="24"/);
+  assert.doesNotMatch(appSource, /Paste the 12-character code a friend sent you/);
+});
+
+test('new Friends spaces share a direct friend invite rather than a legacy circle code', () => {
+  assert.match(appSource, /createdFriendInvite = await repo\.createFriendInvite\(\)/);
+  assert.match(appSource, /redeemInvite\(repo, validation\.code\)/);
+  assert.match(appSource, /function creatorInviteScreen\(\) \{\s*const code = activeInviteCode\(\)/);
+  assert.match(appSource, /if \(\(createdFriendInvite \|\| createdCircleInvite\) && state\?\.circleId\) \{/);
 });
 
 test('memory repository emits hardened friend codes', () => {
