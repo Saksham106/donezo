@@ -62,7 +62,8 @@ let stakeSheetOpen = false;
 let feedLimit = 12;
 let inviteSheetOpen = false;
 let peopleSheetOpen = false;
-let squadFeed = localStorage.getItem('donezo.squadFeed') || 'activity';
+let squadFeed = localStorage.getItem('donezo.squadFeed') || 'proofs';
+const proofThumbnailUrls = new Map();
 let commentCheckInId = null;
 let batonSheetOpen = false;
 let badgeCabinetOpen = false;
@@ -124,6 +125,17 @@ function haptic(pattern = 24) {
   if (typeof navigator.vibrate !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   navigator.vibrate(pattern);
 }
+
+function requestPortraitLock() {
+  if (!window.matchMedia('(display-mode: standalone)').matches) return;
+  const lockRequest = screen.orientation?.lock?.('portrait');
+  lockRequest?.catch?.(() => {});
+}
+
+requestPortraitLock();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') requestPortraitLock();
+});
 
 function readableError(error) {
   return error?.message || 'Something went wrong';
@@ -399,7 +411,8 @@ function activityCard(activity, { showProofActions = false } = {}) {
   }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(getState().members.length);
-  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">View proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
+  const proofPreview = showProofActions && activity.proofPath ? `<button class="proof-thumbnail" type="button" data-proof="${esc(activity.proofPath)}" data-proof-thumbnail="${esc(activity.proofPath)}" aria-label="Open ${esc(activity.habitTitle)} proof"><span aria-hidden="true">📷</span><small>Loading proof…</small></button>` : '';
+  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
   const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
   const mineReactions = activity.userReactions || [];
   const visibleReactionCounts = { ...(activity.reactionCounts || {}) };
@@ -411,7 +424,7 @@ function activityCard(activity, { showProofActions = false } = {}) {
     ? `You reacted ${mineReactions.join(' ')} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
     : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
   const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('')}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
-  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
 function batonCard() {
@@ -422,11 +435,11 @@ function batonCard() {
   const eligibleCheckIn = state.checkIns.find((item) => item.userId === state.currentUserId && !item.invalid);
   const hasFriend = state.members.some((person) => person.id !== state.currentUserId);
   if (!baton) {
-    if (!hasFriend) return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Pass the momentum</strong><small>Invite someone, then hand off the next move.</small></div><button class="btn small-btn" type="button" data-invite-from-baton>Invite</button></section>`;
-    if (!eligibleCheckIn) return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Start with one check-in</strong><small>Finish something, then pick who goes next.</small></div><button class="btn small-btn" type="button" data-baton-checkin>Check in</button></section>`;
-    return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Pass the momentum</strong><small>You checked in. Pick who goes next.</small></div><button class="btn small-btn" type="button" data-baton-open>Start</button></section>`;
+    if (!hasFriend) return `<section class="baton-card baton-compact"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><strong>Baton · Invite a friend</strong><small>Hand off the next move.</small></div><button class="baton-action" type="button" data-invite-from-baton>Invite</button></section>`;
+    if (!eligibleCheckIn) return `<section class="baton-card baton-compact"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><strong>Baton · Check in to start</strong><small>Then pick who goes next.</small></div><button class="baton-action" type="button" data-baton-checkin>Go</button></section>`;
+    return `<section class="baton-card baton-compact"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><strong>Baton · Pick who’s next</strong><small>Keep the momentum moving.</small></div><button class="baton-action" type="button" data-baton-open>Start</button></section>`;
   }
-  return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>The baton is with ${esc(holder?.name || 'a friend')}</strong><small>${mine ? 'Your turn. Check in, then pass it on.' : 'One person at a time. No spam, no scoreboard.'}</small></div>${mine && eligibleCheckIn && hasFriend ? '<button class="btn small-btn" type="button" data-pass-baton>Pass</button>' : ''}</section>`;
+  return `<section class="baton-card baton-compact"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><strong>${mine ? 'Baton · Your turn' : `The baton is with ${esc(holder?.name || 'a friend')}`}</strong><small>${mine ? 'Check in, then pass it on.' : 'One turn at a time.'}</small></div>${mine && eligibleCheckIn && hasFriend ? '<button class="baton-action" type="button" data-pass-baton>Pass</button>' : ''}</section>`;
 }
 
 function squadScreen() {
@@ -446,7 +459,7 @@ function squadScreen() {
   const empty = squadFeed === 'proofs'
     ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give the squad something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>'
     : '<div class="empty compact-empty"><b>No activity yet.</b><p>Somebody has to go first.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Be first</button></div>';
-  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD', 'See what happened. Hype your people.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div>${batonCard()}<div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
+  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD', 'See what happened. Hype your people.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div>${batonCard()}<div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
 function challengeProgress(challenge) {
@@ -659,17 +672,22 @@ function settingsSheet() {
   const state = getState();
   const preferences = state.notificationPreferences;
   const categoryLabels = {
-    due_soon: 'Due soon', streak_risk: 'Streak at risk', friend_activity: 'Friend check-ins',
-    nudge: 'Nudges', reaction: 'Reactions', comment: 'Comments', challenge_progress: 'Challenge progress',
+    due_soon: { icon: '⏱', label: 'Due soon', description: 'A useful heads-up before the clock wins.' },
+    streak_risk: { icon: '🔥', label: 'Streak at risk', description: 'Only when a streak is genuinely on the line.' },
+    friend_activity: { icon: '👀', label: 'Friend check-ins', description: 'See when your people show up.' },
+    nudge: { icon: '⚡', label: 'Nudges', description: 'A friend is calling you out.' },
+    reaction: { icon: '👏', label: 'Reactions', description: 'Someone hyped your check-in.' },
+    comment: { icon: '💬', label: 'Replies', description: 'Someone left a quick reply.' },
+    challenge_progress: { icon: '🏆', label: 'Challenge progress', description: 'Meaningful squad challenge updates.' },
   };
-  const categoryChoices = Object.entries(categoryLabels).map(([value, label]) => `<label class="preference-check"><input type="checkbox" name="category" value="${value}" ${preferences.categories[value] !== false ? 'checked' : ''}><span>${label}</span></label>`).join('');
-  const habitChoices = myHabits(state).map((habit) => `<label class="preference-check"><input type="checkbox" name="habitEnabled" value="${habit.id}" ${preferences.habitOverrides[habit.id] !== false ? 'checked' : ''}><span>${esc(habit.emoji)} ${esc(habit.title)}</span></label>`).join('');
+  const categoryChoices = Object.entries(categoryLabels).map(([value, item]) => `<label class="notification-option"><span class="notification-option-icon" aria-hidden="true">${item.icon}</span><span><strong>${item.label}</strong><small>${item.description}</small></span><input type="checkbox" name="category" value="${value}" ${preferences.categories[value] !== false ? 'checked' : ''}></label>`).join('');
+  const habitChoices = myHabits(state).map((habit) => `<label class="notification-option compact"><span class="notification-option-icon" aria-hidden="true">${esc(habit.emoji)}</span><span><strong>${esc(habit.title)}</strong><small>Personal reminder</small></span><input type="checkbox" name="habitEnabled" value="${habit.id}" ${preferences.habitOverrides[habit.id] !== false ? 'checked' : ''}></label>`).join('');
   const squadList = state.circles.map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
   const views = {
     menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="squads"><span class="settings-menu-icon">◎</span><span><strong>Squads</strong><small>Switch, create, or join</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
     profile: `<form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button>`,
     squads: `<section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep groups separate. Switching does not lose your place.</p></div><span>${state.circles.length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section>`,
-    notifications: `<section class="notification-settings"><div class="sheet-setting"><div><strong>Push notifications</strong><small>${capability.supported ? `Permission: ${capability.permission}` : 'Not supported here. Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test + sync' : 'Enable'}</button></div><form id="notification-preferences-form" class="form"><label class="inline-check"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}> Quiet hours</label><div class="form-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label>Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required></label><fieldset><legend>Send me</legend><div class="preference-grid">${categoryChoices}</div></fieldset>${habitChoices ? `<fieldset><legend>Habit reminders</legend><p class="field-help">Turn off anything that should stay quiet.</p><div class="preference-grid">${habitChoices}</div></fieldset>` : ''}<button class="btn full" ${busy ? 'disabled' : ''}>Save notifications</button></form></section>`,
+    notifications: `<section class="notification-settings"><div class="notification-hero"><span class="notification-hero-icon" aria-hidden="true">🔔</span><div><strong>Stay in the loop, not glued to it.</strong><small>${capability.supported ? `Push is ${capability.permission}. You control what earns a buzz.` : 'Push is not supported here. Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test' : 'Enable'}</button></div><form id="notification-preferences-form" class="form notification-form"><section class="notification-panel"><div class="notification-panel-head"><div><strong>Quiet hours</strong><small>Donezo shuts up while you sleep.</small></div><label class="switch-control"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}><span aria-hidden="true"></span></label></div><div class="quiet-hours-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label class="timezone-field">Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required><small>Uses your habit timezone so reminders land correctly.</small></label></section><section class="notification-panel"><div class="notification-panel-head"><div><strong>What can buzz you</strong><small>Keep only the stuff you would actually open.</small></div></div><div class="notification-options">${categoryChoices}</div></section>${habitChoices ? `<section class="notification-panel"><div class="notification-panel-head"><div><strong>Habit reminders</strong><small>Mute individual habits without muting Donezo.</small></div></div><div class="notification-options">${habitChoices}</div></section>` : ''}<button class="btn primary full" ${busy ? 'disabled' : ''}>Save notifications</button></form></section>`,
     social: `<form id="social-preferences-form" class="form settings-social-form"><label class="preference-check"><input type="checkbox" name="recapAwardsEnabled" ${me().awardOptOut ? '' : 'checked'}><span><strong>Named recap awards</strong><small>Let the squad include your name in weekly and monthly awards.</small></span></label><label class="preference-check"><input type="checkbox" name="batonEnabled" ${state.batonOptedOut ? '' : 'checked'}><span><strong>Squad Baton</strong><small>Friends can pass you the next turn. No penalty if it expires.</small></span></label><button class="btn full" ${busy ? 'disabled' : ''}>Save social settings</button></form>`,
   };
   const title = ({ menu: 'Settings', profile: 'Profile & app', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
@@ -693,11 +711,11 @@ function nudgeInboxSheet() {
 function inviteSheet() {
   if (!inviteSheetOpen) return '';
   const code = getState()?.circleInviteCode || '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet invite-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-invite-backdrop><section class="sheet compact-sheet invite-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
 }
 
 function peopleSheet() {
-  if (!peopleSheetOpen) return '';
+  if (!peopleSheetOpen || friendProfileUserId || inviteSheetOpen) return '';
   const state = getState();
   const rows = state.members.map((person) => {
     const progress = progressFor(person.id);
@@ -705,7 +723,7 @@ function peopleSheet() {
     const todayProgress = progress.total ? `${progress.completed}/${progress.total} today` : 'No habits today';
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet" role="dialog" aria-modal="true" aria-label="Squad people" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${esc(state.circleName || 'SQUAD')}</p><h2>${state.members.length} ${state.members.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite people</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Squad people" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${esc(state.circleName || 'SQUAD')}</p><h2>${state.members.length} ${state.members.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite people</button></section></div>`;
 }
 
 function commentSheet() {
@@ -759,7 +777,7 @@ function friendProfileSheet() {
   const habits = state.habits.filter((habit) => habit.ownerId === person.id && habit.active);
   const recent = state.friendActivities.filter((item) => item.userId === person.id).slice(0, 5);
   const score = weeklyCompletionScore(person.id, state.habits, state.checkIns, today());
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet friend-profile-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><div class="profile-recent"><strong>Recent</strong>${recent.length ? recent.map((item) => `<span>${esc(item.emoji || '⚡')} ${esc(item.habitTitle || item.message)}</span>`).join('') : '<p>No updates yet.</p>'}</div>${person.id === me().id ? '' : `<button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>`}</section></div>`;
+  return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Back to people">×</button></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><div class="profile-recent"><strong>Recent</strong>${recent.length ? recent.map((item) => `<span>${esc(item.emoji || '⚡')} ${esc(item.habitTitle || item.message)}</span>`).join('') : '<p>No updates yet.</p>'}</div>${person.id === me().id ? '' : `<button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>`}</section></div>`;
 }
 
 function recoverySheet() {
@@ -893,6 +911,48 @@ async function loadProofViewerUrl() {
   render();
 }
 
+async function loadProofThumbnail(element) {
+  const path = element.dataset.proofThumbnail;
+  if (!path || !element.isConnected) return;
+  try {
+    let url = proofThumbnailUrls.get(path);
+    if (!url) {
+      url = await repo.getProofUrl(path);
+      proofThumbnailUrls.set(path, url);
+    }
+    if (!element.isConnected || element.dataset.proofThumbnail !== path) return;
+    const image = document.createElement('img');
+    image.src = url;
+    image.alt = '';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.addEventListener('error', () => {
+      proofThumbnailUrls.delete(path);
+      if (element.isConnected) element.innerHTML = '<span aria-hidden="true">📷</span><small>Tap to open</small>';
+    });
+    element.replaceChildren(image);
+  } catch {
+    if (element.isConnected) element.innerHTML = '<span aria-hidden="true">📷</span><small>Tap to open</small>';
+  }
+}
+
+function bindProofThumbnails() {
+  const thumbnails = [...app.querySelectorAll('[data-proof-thumbnail]')];
+  if (!thumbnails.length) return;
+  if (!('IntersectionObserver' in window)) {
+    thumbnails.forEach(loadProofThumbnail);
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      observer.unobserve(entry.target);
+      loadProofThumbnail(entry.target);
+    });
+  }, { rootMargin: '160px 0px' });
+  thumbnails.forEach((element) => observer.observe(element));
+}
+
 function bindProofActions() {
   app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
   app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
@@ -910,6 +970,7 @@ function bindProofActions() {
     proofViewer = { ...proofViewer, status: 'error', url: null, error: 'That signed proof link expired. Tap try again.' };
     render();
   });
+  bindProofThumbnails();
 }
 
 function render() {
@@ -969,7 +1030,7 @@ function render() {
   app.querySelectorAll('[data-wrapped-close]').forEach((element) => { element.onclick = () => { wrappedOpen = false; wrappedIndex = 0; render(); }; });
   app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; localStorage.setItem('donezo.squadFeed', squadFeed); feedLimit = 12; render(); }; });
   app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; inviteSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-friend-profile]').forEach((element) => { element.onclick = () => { friendProfileUserId = element.dataset.friendProfile; render(); }; });
   app.querySelectorAll('[data-recover-habit]').forEach((element) => { element.onclick = () => { recoveryHabitId = element.dataset.recoverHabit; render(); }; });
   app.querySelectorAll('[data-challenge]').forEach((element) => { element.onclick = () => { challengeInfoOpen = false; challengeSheetOpen = true; render(); }; });
@@ -1015,7 +1076,18 @@ function render() {
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { setActiveTab('today'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
+  app.querySelectorAll('[data-close-habit], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
+  app.querySelectorAll('[data-close-settings]').forEach((element) => { element.onclick = () => {
+    if (settingsView !== 'menu') settingsView = 'menu';
+    else settingsSheetOpen = false;
+    render();
+  }; });
+  app.querySelectorAll('[data-close-friend-profile], [data-close-friend-profile-backdrop]').forEach((element) => { element.onclick = (event) => {
+    if (element.hasAttribute('data-close-friend-profile-backdrop') && event.target !== element) return;
+    friendProfileUserId = null;
+    peopleSheetOpen = true;
+    render();
+  }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
   const habitForm = app.querySelector('#habit-form');
   habitForm?.addEventListener('submit', handleHabitSubmit);
@@ -1692,7 +1764,11 @@ function dismissPendingInvite() {
 function bindInviteActions() {
   app.querySelectorAll('[data-dismiss-invite]').forEach((element) => { element.onclick = dismissPendingInvite; });
   app.querySelectorAll('[data-invite-open]').forEach((element) => { element.onclick = () => { inviteSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-close-invite]').forEach((element) => { element.onclick = () => { inviteSheetOpen = false; render(); }; });
+  app.querySelectorAll('[data-close-invite], [data-close-invite-backdrop]').forEach((element) => { element.onclick = (event) => {
+    if (element.hasAttribute('data-close-invite-backdrop') && event.target !== element) return;
+    inviteSheetOpen = false;
+    render();
+  }; });
   app.querySelectorAll('[data-share-invite]').forEach((element) => { element.onclick = handleShareInvite; });
   app.querySelectorAll('[data-copy-code]').forEach((element) => { element.onclick = handleCopyRawInvite; });
   app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; setActiveTab('today'); render(); }; });
