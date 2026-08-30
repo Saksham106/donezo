@@ -35,6 +35,8 @@ test('notification settings use structured mobile cards', () => {
   assert.match(app, /notification-option/);
   assert.match(css, /\.notification-hero/);
   assert.match(css, /\.notification-option/);
+  assert.match(app, /notification-option-toggle/);
+  assert.match(css, /\.notification-form\{display:grid[^}]*padding:0[^}]*border:0/);
 });
 
 test('closing a Settings detail returns to Settings menu', () => {
@@ -51,5 +53,5 @@ test('People profile and invite flows return to the People sheet', () => {
 test('People flow sheets share a stable phone height', () => {
   assert.match(app, /people-flow-sheet/);
   assert.match(css, /\.people-flow-sheet/);
-  assert.match(css, /height:min\(/);
+  assert.match(css, /height:min\(60dvh,32rem\)/);
 });
