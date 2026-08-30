@@ -6,13 +6,18 @@ import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInvitePar
 import { createProofReviewState, formatProofFileSize, transitionProofReview, validateProofFile } from './proof.js';
 import {
   dailyProgress,
+  localDateInTimeZone,
   proofRejectionThreshold,
   rankMembersByWeeklyScore,
   weeklyCompletionScore,
 } from './domain.js';
+import { getScheduleOccurrence } from './schedule.js';
+import { buildPrivacySafeExportPayload, buildWeeklySquadRecap, weeklyChallengeProgress } from './social-domain.js';
+import { resolveStake } from './stakes.js';
 import {
   enableNotifications,
   getNotificationCapability,
+  parseNotificationDeepLink,
   sendTestNotification,
   syncPushSubscription,
 } from './notifications.js';
@@ -24,10 +29,11 @@ const proofGalleryInput = document.querySelector('#proof-gallery-input');
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
+const initialNavigation = parseNotificationDeepLink(window.location.href);
 
 let repo = null;
 let session = null;
-let tab = 'today';
+let tab = initialNavigation.tab;
 let proofHabit = null;
 let proofReview = null;
 let proofViewer = null;
@@ -37,8 +43,13 @@ let habitSheetOpen = false;
 let editingHabitId = null;
 let archiveConfirm = false;
 let settingsSheetOpen = false;
-let nudgeInboxOpen = new URLSearchParams(window.location.search).get('nudges') === '1';
+let nudgeInboxOpen = initialNavigation.nudgesOpen;
 let nudgeComposerUserId = null;
+let friendProfileUserId = null;
+let recoveryHabitId = null;
+let challengeSheetOpen = false;
+let stakeSheetOpen = false;
+let feedLimit = 12;
 let inviteSheetOpen = false;
 let createdCircleInvite = null;
 let pendingInvite = parseInviteParam(window.location.href);
@@ -53,10 +64,17 @@ let online = navigator.onLine !== false;
 let busy = false;
 let authMode = 'sign-in';
 let authMessage = '';
+let initialNavigationHandled = false;
 
-const today = () => new Date().toLocaleDateString('en-CA');
+const starterTemplates = [
+  { title: 'Move for 20 minutes', emoji: '🏃', targetTime: '18:00' },
+  { title: 'Read 10 pages', emoji: '📚', targetTime: '21:00' },
+  { title: 'No phone after 10', emoji: '📵', targetTime: '22:00' },
+];
+
 const getState = () => repo?.getState();
 const me = () => getState()?.members.find((member) => member.id === getState().currentUserId);
+const today = () => localDateInTimeZone(new Date(), me()?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
 const member = (id) => getState()?.members.find((item) => item.id === id);
 const checkInFor = (habitId, userId = me()?.id, date = today()) => getState()?.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === userId && checkIn.date === date);
 const done = (habitId) => {
@@ -197,9 +215,36 @@ function myHabits(state = getState()) {
   return state.habits.filter((habit) => habit.ownerId === state.currentUserId && habit.active);
 }
 
+function habitSchedule(habit) {
+  return {
+    frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+    weekdays: habit.scheduleWeekdays || [],
+    targetQuantity: habit.targetQuantity ?? 1,
+    targetUnit: habit.targetUnit || 'count',
+    dueTime: habit.targetTime || null,
+    graceMinutes: habit.graceMinutes || 0,
+    timezone: habit.scheduleTimezone || habit.ownerTimeZone || 'UTC',
+    startDate: habit.createdDate || null,
+    pauseWindows: habit.pauseWindows || [],
+    versions: habit.scheduleVersions || [],
+  };
+}
+
+function habitIsDue(habit, date = today()) {
+  try {
+    return getScheduleOccurrence(habitSchedule(habit), date).scheduled;
+  } catch {
+    return true;
+  }
+}
+
+function dueHabitsFor(memberId, date = today(), state = getState()) {
+  return state.habits.filter((habit) => habit.ownerId === memberId && habit.active && habitIsDue(habit, date));
+}
+
 function progressFor(memberId, date = today()) {
   const state = getState();
-  const habits = state.habits.filter((habit) => habit.ownerId === memberId && habit.active);
+  const habits = dueHabitsFor(memberId, date, state);
   const completed = habits.filter((habit) => {
     const checkIn = state.checkIns.find((item) => item.habitId === habit.id && item.userId === memberId && item.date === date);
     return checkIn && !checkIn.invalid;
@@ -211,20 +256,64 @@ function sortedTodayHabits(habits) {
   return [...habits].sort((a, b) => Number(done(a.id)) - Number(done(b.id)) || (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99') || a.title.localeCompare(b.title));
 }
 
+function shiftDate(dateString, days) {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function weekBounds(dateString = today()) {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  const day = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() - (day === 0 ? 6 : day - 1));
+  const start = date.toISOString().slice(0, 10);
+  return { start, end: shiftDate(start, 6) };
+}
+
+function missedHabits() {
+  const state = getState();
+  const yesterday = shiftDate(today(), -1);
+  return myHabits(state).filter((habit) => {
+    const existed = !habit.createdDate || habit.createdDate <= yesterday;
+    const expected = habitIsDue(habit, yesterday);
+    const checked = state.checkIns.some((item) => item.habitId === habit.id && item.userId === state.currentUserId && item.date === yesterday && !item.invalid);
+    const recovered = (state.recoveries || []).some((item) => item.habitId === habit.id && item.missedDate === yesterday);
+    return existed && expected && !checked && !recovered;
+  }).map((habit) => ({ ...habit, missedDate: yesterday }));
+}
+
+function activationCard() {
+  const state = getState();
+  const steps = [
+    { done: Boolean(state.circleId), label: 'Join a squad' },
+    { done: myHabits(state).length > 0, label: 'Add a habit' },
+    { done: state.members.length > 1, label: 'Invite a friend' },
+    { done: state.checkIns.some((item) => item.userId === state.currentUserId && !item.invalid), label: 'Post your first check-in' },
+    { done: state.reactions.some((item) => item.userId === state.currentUserId && item.emoji !== '👎'), label: 'Hype a friend' },
+  ];
+  const completed = steps.filter((step) => step.done).length;
+  if (completed === steps.length) return '';
+  const next = steps.findIndex((step) => !step.done);
+  return `<section class="activation-card"><div class="activation-head"><div><span>First shared win</span><strong>${completed}/${steps.length} ready</strong></div><span>${Math.round((completed / steps.length) * 100)}%</span></div><div class="activation-steps">${steps.map((step) => `<span class="${step.done ? 'done' : ''}">${step.done ? '✓' : '○'} ${esc(step.label)}</span>`).join('')}</div><button class="btn primary full" type="button" data-activation-next="${next}">${['Set up squad', 'Add habit', 'Invite friend', 'Check in', 'Open Squad'][next]}</button></section>`;
+}
+
 function habitCard(habit, actionMode = false) {
   const checkIn = checkInFor(habit.id);
   const isDone = Boolean(checkIn && !checkIn.invalid);
   const rejected = Boolean(checkIn?.invalid);
   const action = rejected ? 'Run it back' : isDone ? 'Done' : habit.proofMode === 'photo' ? 'Add proof' : 'Check in';
+  const target = Number(habit.targetQuantity ?? 1) !== 1 || (habit.targetUnit && habit.targetUnit !== 'count')
+    ? `${habit.targetQuantity ?? 1} ${habit.targetUnit || 'count'} · `
+    : '';
   const detail = rejected
     ? 'Proof got cooked 💀'
-    : `${formatTime(habit.targetTime)}${habit.proofMode === 'photo' ? ' · Proof required' : ' · Truuust mode'}`;
+    : `${target}${formatTime(habit.targetTime)}${habit.proofMode === 'photo' ? ' · Proof required' : ' · Truuust mode'}`;
   return `<button class="habit ${isDone ? 'done' : ''} ${rejected ? 'rejected' : ''}" data-habit="${habit.id}" ${busy ? 'disabled' : ''}><span class="habit-icon">${esc(habit.emoji)}</span><span class="habit-copy"><strong>${esc(habit.title)}</strong><small>${esc(detail)}</small></span>${actionMode ? `<span class="habit-action ${isDone ? 'complete' : ''} ${rejected ? 'rejected' : ''}">${action}</span>` : `<span class="check">${isDone ? '✓' : rejected ? '↻' : ''}</span>`}</button>`;
 }
 
 function todayScreen() {
   const state = getState();
-  const habits = sortedTodayHabits(myHabits(state));
+  const habits = sortedTodayHabits(dueHabitsFor(state.currentUserId, today(), state));
   const progress = progressFor(state.currentUserId);
   const remaining = progress.total - progress.completed;
   const ranked = rankMembersByWeeklyScore(state.members, state.habits, state.checkIns, today());
@@ -232,12 +321,14 @@ function todayScreen() {
   const next = habits.find((habit) => !done(habit.id));
   const firstName = me().name.split(/\s+/)[0];
   const list = habits.length ? habits.map((habit) => habitCard(habit)).join('') : '<div class="empty"><b>No habits yet.</b><p>Add your first habit from Me.</p><button class="btn primary" data-open-habit>Add habit</button></div>';
-  return `${pageHeading(`${greeting()}, ${firstName}`, displayDate(), todayStatus(progress))}<section class="metric-strip"><div><b>${remaining}</b><small>Left</small></div><div><b>${progress.percent}%</b><small>Today</small></div><div><b>🔥 ${me().currentStreak}</b><small>Streak</small></div><div><b>#${mine?.rank || '—'}</b><small>League</small></div></section>${next ? `<section class="next-up ${checkInFor(next.id)?.invalid ? 'rejected' : ''}"><div><span class="eyebrow">NEXT UP</span><strong>${esc(next.emoji)} ${esc(next.title)}</strong><small>${checkInFor(next.id)?.invalid ? 'Your proof got cooked. Run it back 😭' : `${esc(formatTime(next.targetTime))}${next.proofMode === 'photo' ? ' · Add proof' : ''}`}</small></div><button class="btn" data-habit="${next.id}">${checkInFor(next.id)?.invalid ? 'Redo' : next.proofMode === 'photo' ? 'Proof' : 'Done'}</button></section>` : ''}<div class="section-head"><h2>Today</h2><span>${progress.completed}/${progress.total}</span></div><div class="habit-list">${list}</div>`;
+  const misses = missedHabits();
+  const recovery = misses.length ? `<section class="recovery-callout"><div><span>Missed yesterday</span><strong>${esc(misses[0].emoji)} ${esc(misses[0].title)}</strong><small>The miss stays honest. The comeback starts now.</small></div><button class="btn" data-recover-habit="${misses[0].id}" data-missed-date="${misses[0].missedDate}">Bounce back</button></section>` : '';
+  return `${pageHeading(`${greeting()}, ${firstName}`, displayDate(), todayStatus(progress))}${activationCard()}<section class="metric-strip"><div><b>${remaining}</b><small>Left</small></div><div><b>${progress.percent}%</b><small>Today</small></div><div><b>🔥 ${me().currentStreak}</b><small>Streak</small></div><div><b>#${mine?.rank || '—'}</b><small>League</small></div></section>${next ? `<section class="next-up ${checkInFor(next.id)?.invalid ? 'rejected' : ''}"><div><span class="eyebrow">NEXT UP</span><strong>${esc(next.emoji)} ${esc(next.title)}</strong><small>${checkInFor(next.id)?.invalid ? 'Your proof got cooked. Run it back 😭' : `${esc(formatTime(next.targetTime))}${next.proofMode === 'photo' ? ' · Add proof' : ''}`}</small></div><button class="btn" ${next.proofMode === 'photo' && !checkInFor(next.id)?.invalid ? `data-quick-proof="${next.id}"` : `data-habit="${next.id}"`}>${checkInFor(next.id)?.invalid ? 'Redo' : next.proofMode === 'photo' ? 'Camera' : 'Done'}</button></section>` : ''}${recovery}<div class="section-head"><h2>Today</h2><span>${progress.completed}/${progress.total}</span></div><div class="habit-list">${list}</div>`;
 }
 
 function checkInScreen() {
   const state = getState();
-  const habits = myHabits(state);
+  const habits = dueHabitsFor(state.currentUserId, today(), state);
   const incomplete = habits.filter((habit) => !done(habit.id)).sort((a, b) => (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99'));
   const completed = habits.filter((habit) => done(habit.id));
   const progress = progressFor(state.currentUserId);
@@ -251,10 +342,17 @@ function activityCard(activity) {
     const target = member(activity.toUserId);
     return `<article class="activity callout"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')} called out ${esc(target?.name || 'a friend')}</strong><small>${esc(formatWhen(activity.when))} · visible to this squad</small></div></div><div class="callout-message"><span>⚡</span><p>${esc(activity.message)}</p></div></article>`;
   }
+  if (['missed', 'recovered', 'recovery'].includes(activity.type)) {
+    const recovered = activity.type === 'recovered';
+    const missed = activity.type === 'missed';
+    const verb = missed ? 'missed one' : recovered ? 'came back' : 'made a recovery move';
+    return `<article class="activity ${activity.type}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')} ${verb}</strong><small>${esc(formatWhen(activity.when))}</small></div></div><div class="activity-body"><span>${missed ? '○' : '↩'}</span><div><strong>${esc(activity.emoji)} ${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${!mine && !missed ? `<button class="btn small-btn" data-nudge="${activity.userId}">Send support</button>` : ''}</article>`;
+  }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(getState().members.length);
   const proofActions = activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">View proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
-  return `<article class="activity ${activity.invalid ? 'invalid' : ''}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofActions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+  const positiveReactions = `<div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => `<button type="button" class="reaction-btn ${activity.userReactions?.includes(emoji) ? 'active' : ''}" data-reaction="${activity.checkInId}" data-emoji="${emoji}" aria-label="React ${emoji}">${emoji}${activity.reactionCounts?.[emoji] ? ` ${activity.reactionCounts[emoji]}` : ''}</button>`).join('')}</div>`;
+  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
 function squadScreen() {
@@ -263,13 +361,112 @@ function squadScreen() {
   const peopleRows = people.map((person) => {
     const progress = progressFor(person.id);
     const isMe = person.id === state.currentUserId;
-    return `<div class="friend-row"><div class="avatar">${esc(person.avatar)}</div><span><strong>${isMe ? `${esc(person.name)} · You` : esc(person.name)}</strong><small>${progress.completed}/${progress.total} today · 🔥 ${person.currentStreak}</small></span>${isMe ? '<span class="you-pill">you</span>' : `<button class="btn small-btn" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</div>`;
+    return `<div class="friend-row"><button class="friend-profile-trigger" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${isMe ? `${esc(person.name)} · You` : esc(person.name)}</strong><small>${progress.completed}/${progress.total} today · 🔥 ${person.currentStreak}</small></span></button>${isMe ? '<span class="you-pill">you</span>' : `<button class="btn small-btn" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</div>`;
   }).join('');
-  const activities = state.friendActivities.map(activityCard).join('');
+  const visibleActivities = state.friendActivities.slice(0, feedLimit);
+  const activities = visibleActivities.map(activityCard).join('');
+  const loadMore = state.friendActivities.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
   const refreshButton = `<button class="btn small-btn refresh-btn ${manualRefreshLoading ? 'loading' : ''}" data-manual-refresh ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span>${manualRefreshLoading ? 'Refreshing…' : 'Refresh'}</button>`;
   const inviteButton = `<button class="invite-icon-btn" type="button" data-invite-open aria-label="Invite friends" title="Invite friends">${icon('userPlus')}</button>`;
-  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR SQUAD'}`, 'Receipts, pressure, and a little public shame.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${inviteButton}</div></div><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}</div>`;
+  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR SQUAD'}`, 'Receipts, comebacks, and friends who keep you honest.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${inviteButton}</div></div><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}${loadMore}</div>`;
+}
+
+function challengeProgress(challenge) {
+  const state = getState();
+  const result = weeklyChallengeProgress({
+    ...challenge,
+    metric: challenge.kind,
+    weekStart: challenge.startsOn,
+    weekEnd: challenge.endsOn,
+  }, {
+    members: state.members,
+    habits: state.habits,
+    checkIns: state.checkIns,
+    asOfDate: today() < challenge.endsOn ? today() : challenge.endsOn,
+  });
+  return { value: result.completed, total: result.total, percent: result.percent, status: result.status };
+}
+
+function activeChallengeCard() {
+  const challenge = (getState().challenges || []).find((item) => item.status === 'active' && item.endsOn >= today());
+  if (!challenge) return `<section class="challenge-card empty-challenge"><div><span>Weekly challenge</span><strong>Give the squad one goal.</strong><small>Shared progress. No complicated game layer.</small></div><button class="btn" type="button" data-challenge>Start one</button></section>`;
+  const progress = challengeProgress(challenge);
+  return `<section class="challenge-card"><div class="challenge-copy"><span>Weekly challenge · ${esc(progress.status.replace('_', ' '))}</span><strong>${esc(challenge.title)}</strong><small>${progress.value}/${progress.total} · ends ${esc(challenge.endsOn)}</small></div><div class="challenge-meter" role="progressbar" aria-label="Challenge progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}"><i style="width:${progress.percent}%"></i></div><b>${progress.percent}%</b></section>`;
+}
+
+function challengeHistory() {
+  const history = (getState().challenges || []).filter((item) => item.status !== 'active' || item.endsOn < today()).slice(0, 3);
+  if (!history.length) return '';
+  return `<section class="challenge-history"><div class="section-head"><h2>Past challenges</h2><span>${history.length}</span></div>${history.map((challenge) => {
+    const progress = challengeProgress(challenge);
+    const result = challenge.status === 'cancelled' ? 'cancelled' : progress.percent >= 100 ? 'completed' : 'finished';
+    return `<div class="challenge-history-row"><span><strong>${esc(challenge.title)}</strong><small>${esc(challenge.startsOn)} – ${esc(challenge.endsOn)}</small></span><b>${progress.percent}% · ${result}</b></div>`;
+  }).join('')}</section>`;
+}
+
+function weeklyRecapCard() {
+  const state = getState();
+  const recap = currentWeeklyRecap();
+  const awardText = (award, suffix = '') => award.memberIds.length
+    ? `${award.memberIds.map((id) => member(id)?.name || 'Friend').join(' + ')}${suffix}`
+    : 'No award yet';
+  const change = recap.summary.changePoints;
+  return `<section class="recap-card" id="weekly-recap"><div class="recap-head"><div><span>Week in review</span><strong>${esc(state.circleName)}</strong></div><b>${recap.summary.completionPercent}%</b></div><p>${change >= 0 ? `Up ${change} points from last week.` : `Down ${Math.abs(change)} points. Fresh week, clean slate.`}</p><div class="recap-highlights"><span><small>Best streak</small><strong>${esc(awardText(recap.awards.bestStreak, recap.awards.bestStreak.value ? ` · ${recap.awards.bestStreak.value}d` : ''))}</strong></span><span><small>Biggest jump</small><strong>${esc(awardText(recap.awards.biggestImprovement, recap.awards.biggestImprovement.value ? ` · +${recap.awards.biggestImprovement.value}` : ''))}</strong></span><span><small>Fastest comeback</small><strong>${esc(awardText(recap.awards.fastestRecovery, recap.awards.fastestRecovery.memberIds.length ? ` · ${recap.awards.fastestRecovery.value}d` : ''))}</strong></span><span><small>Most supportive</small><strong>${esc(awardText(recap.awards.mostSupportive))}</strong></span></div><button class="btn primary full" type="button" data-share-recap>Share recap</button></section>`;
+}
+
+function currentWeeklyRecap() {
+  const state = getState();
+  const period = weekBounds();
+  const misses = [];
+  for (let date = period.start; date <= today() && date <= period.end; date = shiftDate(date, 1)) {
+    for (const habit of state.habits) {
+      if (!habit.active || !habitIsDue(habit, date)) continue;
+      const checked = state.checkIns.some((item) => item.habitId === habit.id && item.userId === habit.ownerId && item.date === date && !item.invalid);
+      if (!checked) misses.push({ habitId: habit.id, userId: habit.ownerId, date });
+    }
+  }
+  return buildWeeklySquadRecap({
+    members: state.members,
+    habits: state.habits,
+    checkIns: state.checkIns,
+    misses,
+    recoveries: state.recoveries,
+    nudges: state.nudges,
+    reactions: state.reactions,
+    weekStart: period.start,
+    weekEnd: period.end,
+    asOfDate: today() < period.end ? today() : period.end,
+    nextGoal: { title: 'Start next week together', cta: 'Create a challenge' },
+  });
+}
+
+async function createRecapImage() {
+  const state = getState();
+  if (!document.querySelector('#weekly-recap')) return null;
+  const payload = buildPrivacySafeExportPayload(currentWeeklyRecap());
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1350;
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#f7f2e8';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#ef6548';
+  context.fillRect(64, 64, 120, 120);
+  context.fillStyle = '#1d2433';
+  context.font = '700 52px system-ui';
+  context.fillText('Donezo', 216, 142);
+  context.font = '800 78px system-ui';
+  context.fillText(`${state.circleName} showed up`, 64, 330);
+  context.font = '800 220px system-ui';
+  context.fillText(`${payload.summary.completionPercent}%`, 64, 620);
+  context.font = '500 40px system-ui';
+  context.fillText('group completion this week', 72, 690);
+  context.font = '700 48px system-ui';
+  payload.participants.slice(0, 3).forEach((person, index) => context.fillText(`${person.name}  ${person.completionPercent}%`, 72, 820 + (index * 90)));
+  context.font = '500 34px system-ui';
+  context.fillText('No proof photos or private messages included.', 72, 1260);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
 function leagueScreen() {
@@ -278,7 +475,25 @@ function leagueScreen() {
   const mine = ranked.find((item) => item.id === me().id);
   const leader = ranked[0];
   const gap = leader && mine ? Math.max(0, leader.weeklyScore - mine.weeklyScore) : 0;
-  return `${pageHeading('League', 'THIS WEEK', 'No fake XP. Just receipts.')}<section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments counted${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row ${item.id === me().id ? 'mine' : ''}"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong>${esc(item.name)}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>`;
+  const stake = (state.stakes || []).find((item) => ['pending', 'active'].includes(item.status));
+  const myConsent = stake ? (state.stakeConsents || []).find((item) => item.stakeId === stake.id && item.userId === me().id) : null;
+  const canResolve = stake?.status === 'active' && stake.createdBy === me().id && today() > stake.endsOn;
+  const stakeCard = stake ? `<section class="stake-card"><div><span>${stake.status === 'active' ? 'Stake is live' : 'Squad opt-in'}</span><strong>${esc(stake.reward || stake.consequence)}</strong><small>${esc(stake.rule.replaceAll('_', ' '))} · ${stake.status === 'active' ? `ends ${esc(stake.endsOn)}` : 'rules lock when everyone accepts'}</small></div>${stake.status === 'pending' && myConsent?.status !== 'accepted' ? `<div class="stake-actions"><button class="btn primary" data-stake-response="accepted" data-stake-id="${stake.id}">I’m in</button><button class="btn" data-stake-response="declined" data-stake-id="${stake.id}">Pass</button></div>` : canResolve ? `<button class="btn primary" data-resolve-stake="${stake.id}">Settle it</button>` : ''}</section>` : `<button class="btn full stake-create" type="button" data-stake>Add a friendly stake</button>`;
+  return `${pageHeading('League', 'THIS WEEK', 'No fake XP. Just receipts.')}${activeChallengeCard()}${challengeHistory()}${stakeCard}${stakeHistory()}<section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments counted${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row ${item.id === me().id ? 'mine' : ''}"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong>${esc(item.name)}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${weeklyRecapCard()}`;
+}
+
+function stakeHistory() {
+  const history = (getState().stakes || []).filter((item) => ['resolved', 'declined'].includes(item.status)).slice(0, 3);
+  if (!history.length) return '';
+  return `<details class="social-history"><summary>Past stakes</summary><div>${history.map((stake) => {
+    if (stake.status === 'declined') return `<article><strong>${esc(stake.reward || stake.consequence)}</strong><small>Passed. No pressure, no penalty.</small></article>`;
+    const resultIds = stake.rule === 'loser' ? (stake.resolution?.losers || []) : (stake.resolution?.winners || []);
+    const resultNames = resultIds.map((id) => member(id)?.name).filter(Boolean);
+    const result = stake.rule === 'all_succeed'
+      ? (stake.resolution?.allSucceeded ? 'Everybody did it 🤝' : 'Not this time. Reset and run it back.')
+      : resultNames.length ? `${resultNames.map(esc).join(', ')} ${resultNames.length === 1 ? 'takes it' : 'take it'} ${stake.rule === 'loser' ? '😅' : '🏆'}` : 'Finished with no result';
+    return `<article><strong>${esc(stake.reward || stake.consequence)}</strong><small>${result}</small></article>`;
+  }).join('')}</div></details>`;
 }
 
 function habitSettingsRow(habit) {
@@ -303,6 +518,17 @@ function habitSheet() {
   const title = editing?.title || '';
   const targetTime = editMode ? (editing.targetTime ?? '') : '20:00';
   const proofMode = editing?.proofMode || 'photo';
+  const scheduleFrequency = editing?.scheduleFrequency || editing?.frequency || 'daily';
+  const scheduleWeekdays = new Set(editing?.scheduleWeekdays || []);
+  const targetQuantity = editing?.targetQuantity ?? 1;
+  const targetUnit = editing?.targetUnit || 'count';
+  const graceMinutes = editing?.graceMinutes || 0;
+  const scheduleTimezone = editing?.scheduleTimezone || me()?.timeZone || 'UTC';
+  const weekdays = [['S', 0], ['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6]];
+  const pauseList = editing?.pauseWindows?.length
+    ? `<div class="pause-list">${editing.pauseWindows.map((pause) => `<small>Paused ${esc(pause.startDate)} to ${esc(pause.endDate)}${pause.reason ? ` · ${esc(pause.reason)}` : ''}</small>`).join('')}</div>`
+    : '';
+  const pauseForm = editMode ? `<details class="schedule-pause"><summary>Pause for travel or a break</summary>${pauseList}<form id="pause-form" class="form"><div class="form-grid"><label>From<input name="startDate" type="date" required></label><label>Through<input name="endDate" type="date" required></label></div><label>Note (optional)<input name="reason" maxlength="280" placeholder="Vacation, sick, deload…"></label><button class="btn full" ${busy ? 'disabled' : ''}>Add pause</button></form></details>` : '';
   const selectedSquads = new Set(editing?.squadIds || [getState().circleId]);
   const squadChoices = getState().circles.map((circle) => `<label class="squad-check"><input type="checkbox" name="squadIds" value="${circle.id}" ${selectedSquads.has(circle.id) ? 'checked' : ''}><span><strong>${esc(circle.name)}</strong><small>${circle.id === getState().circleId ? 'Current squad' : 'Share updates here too'}</small></span></label>`).join('');
   const archiveArea = editMode
@@ -310,15 +536,22 @@ function habitSheet() {
       ? `<div class="archive-confirm" role="alert"><strong>Archive this habit?</strong><p>It disappears from Today and Check In, but your old check-ins stay in history.</p><div><button class="btn danger-soft" type="button" data-confirm-archive ${busy ? 'disabled' : ''}>Yes, archive it</button><button class="btn" type="button" data-cancel-archive ${busy ? 'disabled' : ''}>Keep habit</button></div></div>`
       : `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
     : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form"><label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><label>Target time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><fieldset class="squad-sharing"><legend>Share with squads</legend><p>One check-in appears in every selected squad. Pick at least one.</p>${squadChoices}</fieldset><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form><div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Used for specific days. For weekly habits, the first picked day is due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label><fieldset class="squad-sharing"><legend>Share with squads</legend><p>One check-in appears in every selected squad. Pick at least one.</p>${squadChoices}</fieldset><button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form>${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
   if (!settingsSheetOpen) return '';
   const capability = getNotificationCapability(window);
   const state = getState();
+  const preferences = state.notificationPreferences;
+  const categoryLabels = {
+    due_soon: 'Due soon', streak_risk: 'Streak at risk', friend_activity: 'Friend check-ins',
+    nudge: 'Nudges', reaction: 'Reactions', comment: 'Comments', challenge_progress: 'Challenge progress',
+  };
+  const categoryChoices = Object.entries(categoryLabels).map(([value, label]) => `<label class="preference-check"><input type="checkbox" name="category" value="${value}" ${preferences.categories[value] !== false ? 'checked' : ''}><span>${label}</span></label>`).join('');
+  const habitChoices = myHabits(state).map((habit) => `<label class="preference-check"><input type="checkbox" name="habitEnabled" value="${habit.id}" ${preferences.habitOverrides[habit.id] !== false ? 'checked' : ''}><span>${esc(habit.emoji)} ${esc(habit.title)}</span></label>`).join('');
   const squadList = state.circles.map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SETTINGS</p><h2>Make it yours</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div><form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep family and friend groups separate.</p></div><span>${state.circles.length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section><div class="sheet-setting"><div><strong>Notifications</strong><small>${capability.supported ? `Permission: ${capability.permission}` : 'Not supported here'}</small></div><button class="btn small-btn" id="notification-btn">${capability.permission === 'granted' ? 'Test + sync' : 'Enable'}</button></div><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Then push notifications can actually bully you.</p></div><button class="text-btn danger" id="sign-out">Sign out</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SETTINGS</p><h2>Make it yours</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div><form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep family and friend groups separate.</p></div><span>${state.circles.length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section><section class="notification-settings"><div class="sheet-setting"><div><strong>Notifications</strong><small>${capability.supported ? `Permission: ${capability.permission}` : 'Not supported here. The rest of Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test + sync' : 'Enable'}</button></div><form id="notification-preferences-form" class="form"><label class="inline-check"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}> Quiet hours</label><div class="form-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label>Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required></label><fieldset><legend>Send me</legend><div class="preference-grid">${categoryChoices}</div></fieldset>${habitChoices ? `<fieldset><legend>Habit reminders</legend><p class="field-help">Turn off any habit that should stay quiet.</p><div class="preference-grid">${habitChoices}</div></fieldset>` : ''}<label class="preference-check recap-preference"><input type="checkbox" name="recapAwardsEnabled" ${me().awardOptOut ? '' : 'checked'}><span>Include me in named weekly recap awards</span></label><button class="btn full" ${busy ? 'disabled' : ''}>Save notification settings</button></form></section><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button></section></div>`;
 }
 
 function nudgeComposerSheet() {
@@ -341,6 +574,36 @@ function inviteSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet invite-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
 }
 
+function friendProfileSheet() {
+  if (!friendProfileUserId) return '';
+  const person = member(friendProfileUserId);
+  if (!person) return '';
+  const state = getState();
+  const habits = state.habits.filter((habit) => habit.ownerId === person.id && habit.active);
+  const recent = state.friendActivities.filter((item) => item.userId === person.id).slice(0, 5);
+  const score = weeklyCompletionScore(person.id, state.habits, state.checkIns, today());
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet friend-profile-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><div class="profile-recent"><strong>Recent</strong>${recent.length ? recent.map((item) => `<span>${esc(item.emoji || '⚡')} ${esc(item.habitTitle || item.message)}</span>`).join('') : '<p>No updates yet.</p>'}</div>${person.id === me().id ? '' : `<button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>`}</section></div>`;
+}
+
+function recoverySheet() {
+  if (!recoveryHabitId) return '';
+  const item = missedHabits().find((habit) => habit.id === recoveryHabitId) || getState().habits.find((habit) => habit.id === recoveryHabitId);
+  if (!item) return '';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet recovery-sheet" role="dialog" aria-modal="true" aria-label="Recover habit" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><span class="eyebrow">BOUNCE BACK</span><h2>${esc(item.emoji)} ${esc(item.title)}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Yesterday still counts as a miss. Pick the next useful move.</p><form id="recovery-form" class="form sheet-form"><input type="hidden" name="missedDate" value="${esc(item.missedDate || shiftDate(today(), -1))}"><label>Next move<select name="action"><option value="recover_today">Recover today</option><option value="adjust_habit">Adjust this habit</option><option value="pause_habit">Pause for now</option><option value="ask_support">Ask the squad for support</option></select></label><label>Optional note<textarea name="reflection" maxlength="280" rows="3" placeholder="What got in the way?"></textarea></label><label class="inline-check"><input type="checkbox" name="share"> Let the squad encourage me</label><button class="btn primary full">Save comeback</button></form></section></div>`;
+}
+
+function challengeSheet() {
+  if (!challengeSheetOpen) return '';
+  const period = weekBounds();
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet challenge-sheet" role="dialog" aria-modal="true" aria-label="Start weekly challenge" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><span class="eyebrow">SQUAD GOAL</span><h2>One challenge. Keep it clear.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><form id="challenge-form" class="form sheet-form"><label>Challenge<select name="kind"><option value="completion_percent">Group completion percent</option><option value="total_completions">Total check-ins</option><option value="no_consecutive_miss">No back-to-back misses</option></select></label><label>Name<input name="title" maxlength="80" value="Hit 80% together" required></label><label>Target<input name="target" type="number" min="1" max="10000" value="80" required></label><input type="hidden" name="startsOn" value="${period.start}"><input type="hidden" name="endsOn" value="${period.end}"><button class="btn primary full">Start challenge</button></form></section></div>`;
+}
+
+function stakeSheet() {
+  if (!stakeSheetOpen) return '';
+  const period = weekBounds();
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet stake-sheet" role="dialog" aria-modal="true" aria-label="Propose friendly stake" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><span class="eyebrow">FRIENDLY STAKE</span><h2>Make showing up matter.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Everyone opts in. No money, betting, or retroactive rule changes.</p><form id="stake-form" class="form sheet-form"><label>Rule<select name="rule"><option value="all_succeed">Everyone succeeds</option><option value="winner">Winner gets the reward</option><option value="loser">Lowest score takes the consequence</option></select></label><label>Reward<input name="reward" maxlength="140" placeholder="Pick Friday dinner"></label><label>Consequence<input name="consequence" maxlength="140" placeholder="Post a funny selfie"></label><input type="hidden" name="startsOn" value="${period.start}"><input type="hidden" name="endsOn" value="${period.end}"><button class="btn primary full">Propose to squad</button></form></section></div>`;
+}
+
 function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
@@ -354,7 +617,7 @@ function proofReviewSheet() {
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
   const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
-  return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
+  return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div><div class="upload-status" aria-live="polite" data-upload-status>${uploading ? 'Uploading proof. Keep Donezo open.' : proofReview.status === 'error' ? 'Upload failed. Your photo is saved for retry.' : 'Ready to submit.'}</div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
 }
 
 function proofViewerSheet() {
@@ -424,6 +687,7 @@ async function handleProofSubmit() {
     if (proofReview?.previewUrl === review.previewUrl) clearProofReview();
     proofHabit = null;
     notify(`Proof saved · ${habit.title} 🧾`);
+    if (typeof navigator.vibrate === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) navigator.vibrate(35);
   } catch (error) {
     if (proofReview?.previewUrl === review.previewUrl) {
       proofReview = transitionProofReview(proofReview, { type: 'failed', error: readableError(error) });
@@ -497,11 +761,22 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
   app.querySelector('[data-squad-switcher]')?.addEventListener('change', (event) => handleSquadSelect(event.target.value));
   app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
+  app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { proofHabit = element.dataset.quickProof; chooseProofInput(proofInput); }; });
+  app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.emoji); });
+  app.querySelectorAll('[data-friend-profile]').forEach((element) => { element.onclick = () => { friendProfileUserId = element.dataset.friendProfile; render(); }; });
+  app.querySelectorAll('[data-recover-habit]').forEach((element) => { element.onclick = () => { recoveryHabitId = element.dataset.recoverHabit; render(); }; });
+  app.querySelectorAll('[data-challenge]').forEach((element) => { element.onclick = () => { challengeSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-stake]').forEach((element) => { element.onclick = () => { stakeSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-stake-response]').forEach((element) => { element.onclick = () => handleStakeResponse(element.dataset.stakeId, element.dataset.stakeResponse); });
+  app.querySelectorAll('[data-resolve-stake]').forEach((element) => { element.onclick = () => handleStakeResolve(element.dataset.resolveStake); });
+  app.querySelectorAll('[data-load-more]').forEach((element) => { element.onclick = () => { feedLimit += 12; renderPreservingScroll(); }; });
+  app.querySelectorAll('[data-share-recap]').forEach((element) => { element.onclick = handleShareRecap; });
+  app.querySelectorAll('[data-activation-next]').forEach((element) => { element.onclick = () => handleActivationNext(Number(element.dataset.activationNext)); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
   app.querySelectorAll('[data-proof]').forEach((element) => { element.onclick = () => handleProofView(element.dataset.proof); });
   app.querySelectorAll('[data-downvote]').forEach((element) => { element.onclick = () => handleDownvote(element.dataset.downvote); });
@@ -515,15 +790,29 @@ function render() {
       button.setAttribute('aria-pressed', String(selected));
     });
   }; });
+  app.querySelectorAll('[data-template]').forEach((element) => { element.onclick = () => {
+    const template = starterTemplates[Number(element.dataset.template)];
+    const form = app.querySelector('#habit-form');
+    if (!template || !form) return;
+    form.elements.title.value = template.title;
+    form.elements.targetTime.value = template.targetTime;
+    selectedEmoji = template.emoji;
+    app.querySelectorAll('[data-emoji]').forEach((button) => {
+      const selected = button.dataset.emoji === selectedEmoji;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+  }; });
   app.querySelectorAll('[data-nudge-copy]').forEach((element) => { element.onclick = () => { const textarea = app.querySelector('#nudge-form textarea'); if (textarea) textarea.value = element.dataset.nudgeCopy; }; });
   app.querySelectorAll('[data-settings]').forEach((element) => { element.onclick = () => { settingsSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-nudge-inbox]').forEach((element) => { element.onclick = () => { nudgeInboxOpen = true; render(); }; });
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { tab = 'today'; closeSheets(); render(); }; });
   app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; archiveConfirm = false; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; archiveConfirm = false; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
+  app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
   app.querySelector('#habit-form')?.addEventListener('submit', handleHabitSubmit);
+  app.querySelector('#pause-form')?.addEventListener('submit', handlePauseSubmit);
   app.querySelector('#create-circle-form')?.addEventListener('submit', handleCreateCircle);
   app.querySelector('#join-circle-form')?.addEventListener('submit', handleJoinCircle);
   app.querySelector('[data-archive-habit]')?.addEventListener('click', handleArchiveRequest);
@@ -531,7 +820,11 @@ function render() {
   app.querySelector('[data-cancel-archive]')?.addEventListener('click', () => { archiveConfirm = false; render(); });
   app.querySelector('[data-cancel-habit]')?.addEventListener('click', closeHabitEditor);
   app.querySelector('#nudge-form')?.addEventListener('submit', handleNudgeSubmit);
+  app.querySelector('#recovery-form')?.addEventListener('submit', handleRecoverySubmit);
+  app.querySelector('#challenge-form')?.addEventListener('submit', handleChallengeSubmit);
+  app.querySelector('#stake-form')?.addEventListener('submit', handleStakeSubmit);
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
+  app.querySelector('#notification-preferences-form')?.addEventListener('submit', handleNotificationPreferences);
   app.querySelector('#notification-btn')?.addEventListener('click', handleNotifications);
   bindInviteActions();
   bindProofActions();
@@ -555,6 +848,10 @@ function closeSheets() {
   archiveConfirm = false;
   settingsSheetOpen = false;
   nudgeComposerUserId = null;
+  friendProfileUserId = null;
+  recoveryHabitId = null;
+  challengeSheetOpen = false;
+  stakeSheetOpen = false;
   nudgeInboxOpen = false;
   inviteSheetOpen = false;
   proofHabit = null;
@@ -573,6 +870,9 @@ function hasUnsavedDraft() {
   return habitSheetOpen
     || settingsSheetOpen
     || Boolean(nudgeComposerUserId)
+    || Boolean(recoveryHabitId)
+    || challengeSheetOpen
+    || stakeSheetOpen
     || Boolean(proofReview);
 }
 
@@ -757,22 +1057,61 @@ async function handleHabitSubmit(event) {
   const input = {
     title: String(form.get('title')),
     emoji: selectedEmoji,
-    frequency: 'daily',
+    frequency: String(form.get('scheduleFrequency') || 'daily'),
+    scheduleFrequency: String(form.get('scheduleFrequency') || 'daily'),
+    scheduleWeekdays: form.getAll('scheduleWeekdays').map(Number).sort((a, b) => a - b),
+    targetQuantity: Number(form.get('targetQuantity') || 1),
+    targetUnit: String(form.get('targetUnit') || 'count'),
     targetTime: String(form.get('targetTime') || ''),
+    graceMinutes: Number(form.get('graceMinutes') || 0),
+    scheduleTimezone: String(form.get('scheduleTimezone') || me()?.timeZone || 'UTC'),
     proofMode: String(form.get('proofMode')),
     squadIds: form.getAll('squadIds').map(String),
   };
+  if (input.scheduleFrequency === 'selected_weekdays' && !input.scheduleWeekdays.length) {
+    notify('Pick at least one day for this schedule', 3200);
+    return;
+  }
   if (!input.squadIds.length) {
     notify('Pick at least one squad for this habit', 3200);
     return;
   }
   const habitId = editingHabitId;
+  if (habitId && checkInFor(habitId)) {
+    const existing = getState().habits.find((habit) => habit.id === habitId);
+    const scheduleChanged = existing && (
+      input.scheduleFrequency !== (existing.scheduleFrequency || existing.frequency || 'daily')
+      || input.scheduleWeekdays.join(',') !== (existing.scheduleWeekdays || []).join(',')
+      || input.targetQuantity !== Number(existing.targetQuantity ?? 1)
+      || input.targetUnit.trim() !== (existing.targetUnit || 'count')
+      || input.targetTime !== (existing.targetTime || '')
+      || input.graceMinutes !== Number(existing.graceMinutes || 0)
+    );
+    if (scheduleChanged) {
+      notify("Today's check-in already uses the current schedule. Change it tomorrow or undo today's check-in first.", 4200);
+      return;
+    }
+  }
   const result = habitId
     ? await runMutation(() => repo.updateHabit(habitId, input), 'Habit saved')
-    : await runMutation(() => repo.addHabit({ ...input, frequency: 'daily' }), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`);
+    : await runMutation(() => repo.addHabit(input), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`);
   if (!result) return;
   closeHabitEditor();
   if (!habitId) tab = 'checkin';
+  render();
+}
+
+async function handlePauseSubmit(event) {
+  event.preventDefault();
+  const habitId = editingHabitId;
+  if (!habitId) return;
+  const form = new FormData(event.currentTarget);
+  const result = await runMutation(() => repo.pauseHabit(habitId, {
+    startDate: String(form.get('startDate') || ''),
+    endDate: String(form.get('endDate') || ''),
+    reason: String(form.get('reason') || ''),
+  }), 'Pause saved. No guilt tax.');
+  if (!result) return;
   render();
 }
 
@@ -809,6 +1148,105 @@ async function handleDownvote(checkInId) {
   await runMutation(() => repo.toggleDownvote(checkInId), 'Vote counted 👎');
 }
 
+async function handleReaction(checkInId, emoji) {
+  await runMutation(() => repo.toggleReaction(checkInId, emoji));
+}
+
+function handleActivationNext(step) {
+  if (step === 1) {
+    editingHabitId = null;
+    selectedEmoji = '⚡';
+    habitSheetOpen = true;
+  } else if (step === 2) inviteSheetOpen = true;
+  else if (step === 3) tab = 'checkin';
+  else if (step === 4) tab = 'squad';
+  render();
+}
+
+async function handleRecoverySubmit(event) {
+  event.preventDefault();
+  const habitId = recoveryHabitId;
+  const form = new FormData(event.currentTarget);
+  const action = String(form.get('action'));
+  const result = await runMutation(() => repo.recoverHabit(habitId, String(form.get('missedDate')), {
+    action,
+    reflection: String(form.get('reflection') || ''),
+    visibility: form.get('share') ? 'squad' : 'private',
+  }), 'Comeback saved. Next rep.');
+  if (!result) return;
+  recoveryHabitId = null;
+  if (action === 'adjust_habit' || action === 'pause_habit') {
+    editingHabitId = habitId;
+    habitSheetOpen = true;
+  } else if (action === 'recover_today') {
+    const habit = getState().habits.find((item) => item.id === habitId);
+    if (habit?.proofMode === 'photo') proofHabit = habitId;
+    else await handleHabit(habitId);
+  }
+  render();
+}
+
+async function handleChallengeSubmit(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const result = await runMutation(() => repo.createChallenge({
+    kind: String(form.get('kind')),
+    title: String(form.get('title')),
+    target: Number(form.get('target')),
+    startsOn: String(form.get('startsOn')),
+    endsOn: String(form.get('endsOn')),
+  }), 'Challenge started. Squad goal is live.');
+  if (result) challengeSheetOpen = false;
+}
+
+async function handleStakeSubmit(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const result = await runMutation(() => repo.createStake({
+    rule: String(form.get('rule')),
+    reward: String(form.get('reward') || ''),
+    consequence: String(form.get('consequence') || ''),
+    startsOn: String(form.get('startsOn')),
+    endsOn: String(form.get('endsOn')),
+  }), 'Stake proposed. Everyone must opt in.');
+  if (result) stakeSheetOpen = false;
+}
+
+async function handleStakeResponse(stakeId, response) {
+  await runMutation(() => repo.respondToStake(stakeId, response), response === 'accepted' ? 'You’re in.' : 'Passed. Nothing activates.');
+}
+
+async function handleStakeResolve(stakeId) {
+  const state = getState();
+  const stake = state.stakes.find((item) => item.id === stakeId);
+  if (!stake) return;
+  const standings = rankMembersByWeeklyScore(state.members, state.habits, state.checkIns, stake.endsOn)
+    .map((item) => ({ id: item.id, percent: item.weeklyScore }));
+  const resolution = resolveStake(stake.rule, standings);
+  await runMutation(() => repo.resolveStake(stakeId, resolution), 'Settled. Receipts are in.');
+}
+
+async function handleShareRecap() {
+  const blob = await createRecapImage();
+  if (!blob) return;
+  const file = new File([blob], 'donezo-weekly-recap.png', { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ title: `${getState().circleName} weekly recap`, files: [file] });
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notify('Recap image saved. No proof photos or private text included.');
+}
+
 function handleRedoProof(checkInId) {
   const checkIn = getState().checkIns.find((item) => item.id === checkInId);
   if (!checkIn) return;
@@ -825,6 +1263,27 @@ async function handleDisplayName(event) {
   const form = new FormData(event.currentTarget);
   const displayName = String(form.get('displayName'));
   await runMutation(() => repo.updateDisplayName(displayName), 'Name updated ✍️');
+}
+
+async function handleNotificationPreferences(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const enabledCategories = new Set(form.getAll('category').map(String));
+  const enabledHabits = new Set(form.getAll('habitEnabled').map(String));
+  const categoryNames = ['due_soon', 'streak_risk', 'friend_activity', 'nudge', 'reaction', 'comment', 'challenge_progress'];
+  const input = {
+    quietHoursEnabled: form.has('quietHoursEnabled'),
+    quietHoursStart: String(form.get('quietHoursStart') || '22:00'),
+    quietHoursEnd: String(form.get('quietHoursEnd') || '08:00'),
+    timezone: String(form.get('timezone') || me().timeZone || 'UTC'),
+    categories: Object.fromEntries(categoryNames.map((category) => [category, enabledCategories.has(category)])),
+    habitOverrides: Object.fromEntries(myHabits().map((habit) => [habit.id, enabledHabits.has(habit.id)])),
+  };
+  await runMutation(async () => {
+    await repo.saveNotificationPreferences(input);
+    await repo.setRecapAwardsEnabled(form.has('recapAwardsEnabled'));
+    return true;
+  }, 'Notification settings saved');
 }
 
 async function handleProofView(path) {
@@ -936,6 +1395,28 @@ async function handleSignOut() {
 proofInput.addEventListener('change', () => handleProofFileSelection(proofInput));
 proofGalleryInput.addEventListener('change', () => handleProofFileSelection(proofGalleryInput));
 
+async function applyInitialNavigation() {
+  if (initialNavigationHandled) return;
+  initialNavigationHandled = true;
+  if (initialNavigation.checkInId) {
+    const activity = getState().friendActivities.find((item) => item.checkInId === initialNavigation.checkInId);
+    if (activity?.proofPath) {
+      await handleProofView(activity.proofPath);
+      return;
+    }
+  }
+  requestAnimationFrame(() => {
+    const target = initialNavigation.habitId
+      ? [...app.querySelectorAll('[data-habit]')].find((element) => element.dataset.habit === initialNavigation.habitId)
+      : [...app.querySelectorAll('[data-check-in]')].find((element) => element.dataset.checkIn === initialNavigation.checkInId);
+    if (!target) return;
+    target.setAttribute('tabindex', '-1');
+    target.classList.add('deep-link-target');
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.focus({ preventScroll: true });
+  });
+}
+
 async function boot(nextSession) {
   const generation = ++bootGeneration;
   stopRefreshCoordinator();
@@ -954,11 +1435,12 @@ async function boot(nextSession) {
   try {
     const activeRepo = createSupabaseRepository(supabase, session.user);
     repo = activeRepo;
-    await activeRepo.load(localStorage.getItem('donezo.activeSquadId') || undefined);
+    await activeRepo.load((!initialNavigationHandled && initialNavigation.circleId) || localStorage.getItem('donezo.activeSquadId') || undefined);
     if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
     lastRefreshAt = new Date().toISOString();
     render();
     startRefreshCoordinator(activeRepo);
+    await applyInitialNavigation();
     if (getNotificationCapability(window).permission === 'granted') {
       syncPushSubscription(activeRepo).catch(() => {});
     }

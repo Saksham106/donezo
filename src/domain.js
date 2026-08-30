@@ -1,3 +1,5 @@
+import { getScheduleOccurrence } from './schedule.js';
+
 export function dailyProgress(completed, total) {
   const safeTotal = Math.max(0, total);
   const safeCompleted = Math.min(Math.max(0, completed), safeTotal);
@@ -98,12 +100,14 @@ export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
   const weekStart = mondayOf(todayString);
   const eligibleHabits = habits.filter((habit) => (
     habit.ownerId === memberId
-    && (habit.frequency || 'daily') === 'daily'
     && (habit.active !== false || Boolean(habit.archivedDate))
   ));
-  const completed = new Set(checkIns
-    .filter((checkIn) => checkIn.userId === memberId && checkIn.invalid !== true)
-    .map((checkIn) => `${checkIn.habitId}:${checkIn.date}`));
+  const completed = new Map();
+  for (const checkIn of checkIns.filter((item) => item.userId === memberId && item.invalid !== true)) {
+    const key = `${checkIn.habitId}:${checkIn.date}`;
+    const quantity = Number(checkIn.completedQuantity ?? checkIn.completed_quantity ?? 1);
+    completed.set(key, (completed.get(key) || 0) + (Number.isFinite(quantity) ? Math.max(0, quantity) : 0));
+  }
   let possible = 0;
   let completedCount = 0;
 
@@ -115,8 +119,29 @@ export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
       ? habit.archivedDate
       : todayString;
     for (const day of inclusiveDays(start, end)) {
+      let occurrence;
+      try {
+        occurrence = getScheduleOccurrence({
+          frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+          weekdays: habit.scheduleWeekdays || [],
+          targetQuantity: habit.targetQuantity ?? 1,
+          targetUnit: habit.targetUnit || 'count',
+          dueTime: habit.targetTime || null,
+          graceMinutes: habit.graceMinutes || 0,
+          timezone: habit.scheduleTimezone || habit.ownerTimeZone || 'UTC',
+          startDate: createdDate,
+          pauseWindows: habit.pauseWindows || [],
+          versions: habit.scheduleVersions || habit.versions || [],
+        }, day);
+      } catch {
+        occurrence = {
+          scheduled: (habit.frequency || 'daily') === 'daily',
+          targetQuantity: Number(habit.targetQuantity ?? 1),
+        };
+      }
+      if (!occurrence.scheduled) continue;
       possible += 1;
-      if (completed.has(`${habit.id}:${day}`)) completedCount += 1;
+      if ((completed.get(`${habit.id}:${day}`) || 0) >= occurrence.targetQuantity) completedCount += 1;
     }
   }
 
@@ -141,3 +166,13 @@ export function rankMembersByWeeklyScore(members, habits, checkIns, todayString)
     .sort((a, b) => b.weeklyScore - a.weeklyScore || (b.currentStreak || 0) - (a.currentStreak || 0) || a.name.localeCompare(b.name))
     .map((member, index) => ({ ...member, rank: index + 1 }));
 }
+
+export {
+  weeklyChallengeProgress,
+  missedHabitRecoveryState,
+  createRecoveryEvent,
+  applyRecovery,
+  calculateBounceBackMetrics,
+  buildWeeklySquadRecap,
+  buildPrivacySafeExportPayload,
+} from './social-domain.js';

@@ -4,6 +4,8 @@ import {
   localDateInTimeZone,
   rejectedCheckInIds,
 } from './domain.js';
+import { getScheduleOccurrence, normalizeSchedule } from './schedule.js';
+import { validateStake } from './stakes.js';
 
 const clone = (value) => structuredClone(value);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -56,6 +58,18 @@ export function mapDatabaseState(user, rows) {
     avatar_url: null,
     timezone: 'UTC',
   };
+  const rawNotificationPreferences = rows.notificationPreferences || {};
+  const notificationPreferences = {
+    timezone: rawNotificationPreferences.timezone || profile.timezone || 'UTC',
+    quietHoursEnabled: Boolean(rawNotificationPreferences.quiet_hours_enabled),
+    quietHoursStart: String(rawNotificationPreferences.quiet_hours_start || '22:00').slice(0, 5),
+    quietHoursEnd: String(rawNotificationPreferences.quiet_hours_end || '08:00').slice(0, 5),
+    categories: rawNotificationPreferences.categories || {
+      due_soon: true, streak_risk: true, friend_activity: true, nudge: true,
+      reaction: true, comment: true, challenge_progress: true,
+    },
+    habitOverrides: rawNotificationPreferences.habit_overrides || {},
+  };
   const memberRows = rows.members?.length
     ? rows.members
     : [{ user_id: user.id, profiles: profile }];
@@ -77,6 +91,36 @@ export function mapDatabaseState(user, rows) {
     sharesByHabit.set(share.habit_id, ids);
   }
 
+  const pausesByHabit = new Map();
+  for (const pause of rows.schedulePauses || []) {
+    const pauses = pausesByHabit.get(pause.habit_id) || [];
+    pauses.push({
+      id: pause.id,
+      startDate: pause.start_date,
+      endDate: pause.end_date,
+      reason: pause.reason || '',
+    });
+    pausesByHabit.set(pause.habit_id, pauses);
+  }
+  const versionsByHabit = new Map();
+  for (const version of rows.scheduleVersions || []) {
+    const versions = versionsByHabit.get(version.habit_id) || [];
+    versions.push({
+      id: version.id,
+      version: Number(version.version),
+      effectiveFrom: version.effective_from,
+      effectiveUntil: version.effective_until,
+      frequency: version.schedule_frequency,
+      weekdays: version.schedule_weekdays || [],
+      targetQuantity: Number(version.target_quantity ?? 1),
+      targetUnit: version.target_unit || 'count',
+      dueTime: version.due_time?.slice(0, 5) || null,
+      graceMinutes: Number(version.grace_minutes || 0),
+      timezone: version.timezone || 'UTC',
+    });
+    versionsByHabit.set(version.habit_id, versions);
+  }
+
   const habits = (rows.habits || []).map((habit) => {
     const ownerProfile = memberProfileById.get(habit.owner_id) || {};
     const ownerTimeZone = ownerProfile.timezone || 'UTC';
@@ -88,7 +132,15 @@ export function mapDatabaseState(user, rows) {
       title: habit.title,
       emoji: habit.emoji,
       frequency: habit.frequency,
-      targetTime: habit.target_time?.slice(0, 5) || '',
+      scheduleFrequency: habit.schedule_frequency || habit.frequency || 'daily',
+      scheduleWeekdays: habit.schedule_weekdays || [],
+      targetQuantity: Number(habit.target_quantity ?? 1),
+      targetUnit: habit.target_unit || 'count',
+      targetTime: (habit.due_time || habit.target_time)?.slice(0, 5) || '',
+      graceMinutes: Number(habit.grace_minutes || 0),
+      scheduleTimezone: habit.schedule_timezone || ownerTimeZone,
+      pauseWindows: pausesByHabit.get(habit.id) || [],
+      scheduleVersions: versionsByHabit.get(habit.id) || [],
       proofMode: habit.proof_mode,
       xp: habit.xp,
       active: habit.active,
@@ -110,6 +162,7 @@ export function mapDatabaseState(user, rows) {
       userId: checkIn.user_id,
       date: checkIn.check_date,
       completedAt: checkIn.completed_at,
+      completedQuantity: Number(checkIn.completed_quantity ?? 1),
       proofPath: checkIn.proof_path,
       note: checkIn.note,
     }));
@@ -151,6 +204,7 @@ export function mapDatabaseState(user, rows) {
       xp,
       currentStreak: calculateStreak(dates, today),
       bestStreak: calculateBestStreak(dates),
+      awardOptOut: memberProfile.recap_awards_enabled === false,
     };
   });
   const memberById = new Map(members.map((member) => [member.id, member]));
@@ -158,6 +212,11 @@ export function mapDatabaseState(user, rows) {
     .map((checkIn) => {
       const habit = habitById.get(checkIn.habitId);
       const actor = memberById.get(checkIn.userId);
+      const activityReactions = reactions.filter((reaction) => reaction.checkInId === checkIn.id && reaction.emoji !== '👎');
+      const reactionCounts = activityReactions.reduce((counts, reaction) => {
+        counts[reaction.emoji] = (counts[reaction.emoji] || 0) + 1;
+        return counts;
+      }, {});
       return {
         id: checkIn.id,
         checkInId: checkIn.id,
@@ -172,6 +231,8 @@ export function mapDatabaseState(user, rows) {
         invalid: checkIn.invalid,
         downvotes: checkIn.downvotes,
         userDownvoted: checkIn.userDownvoted,
+        reactionCounts,
+        userReactions: activityReactions.filter((reaction) => reaction.userId === user.id).map((reaction) => reaction.emoji),
       };
     });
   const nudges = (rows.nudges || []).map((nudge) => ({
@@ -195,9 +256,82 @@ export function mapDatabaseState(user, rows) {
       when: nudge.createdAt,
       message: nudge.message,
     }));
-  const friendActivities = [...checkInActivities, ...calloutActivities]
+  const challenges = (rows.challenges || []).map((challenge) => ({
+    id: challenge.id,
+    circleId: challenge.circle_id,
+    createdBy: challenge.created_by,
+    kind: challenge.kind,
+    title: challenge.title,
+    target: challenge.target,
+    startsOn: challenge.starts_on,
+    endsOn: challenge.ends_on,
+    status: challenge.status,
+    resolvedAt: challenge.resolved_at,
+  }));
+  const recoveries = (rows.recoveries || []).map((recovery) => ({
+    id: recovery.id,
+    habitId: recovery.habit_id,
+    userId: recovery.user_id,
+    missedDate: recovery.missed_date,
+    recoveredAt: recovery.recovered_at,
+    recoveredDate: recovery.recovered_at ? localDateInTimeZone(recovery.recovered_at, memberProfileById.get(recovery.user_id)?.timezone || 'UTC') : null,
+    action: recovery.action,
+    reflection: recovery.reflection,
+    visibility: recovery.visibility,
+    createdAt: recovery.created_at,
+  }));
+  const recoveryActivities = recoveries.flatMap((recovery) => {
+    const habit = habitById.get(recovery.habitId);
+    const miss = {
+      id: `miss-${recovery.id}`,
+      userId: recovery.userId,
+      type: 'missed',
+      habitTitle: habit?.title || 'Habit',
+      emoji: habit?.emoji || '↩',
+      when: `${recovery.missedDate}T12:00:00Z`,
+      message: 'Missed it. Kept the receipt and made a next move.',
+    };
+    const actionMessages = {
+      recover_today: 'Bounced back today.',
+      adjust_habit: 'Adjusted the plan instead of forcing a bad one.',
+      pause_habit: 'Set up a pause and protected the long game.',
+      ask_support: 'Asked the squad for a hand.',
+    };
+    const recoveryActivity = {
+      id: `recovery-${recovery.id}`,
+      userId: recovery.userId,
+      type: recovery.recoveredAt ? 'recovered' : 'recovery',
+      habitTitle: habit?.title || 'Habit',
+      emoji: habit?.emoji || '↩',
+      when: recovery.recoveredAt || recovery.createdAt,
+      message: actionMessages[recovery.action] || 'Made a comeback plan.',
+    };
+    return [recoveryActivity, miss];
+  });
+  const friendActivities = [...checkInActivities, ...calloutActivities, ...recoveryActivities]
     .sort((a, b) => new Date(b.when) - new Date(a.when))
     .slice(0, 40);
+  const stakes = (rows.stakes || []).map((stake) => ({
+    id: stake.id,
+    circleId: stake.circle_id,
+    challengeId: stake.challenge_id,
+    createdBy: stake.created_by,
+    rule: stake.rule,
+    reward: stake.reward || '',
+    consequence: stake.consequence || '',
+    startsOn: stake.starts_on,
+    endsOn: stake.ends_on,
+    status: stake.status,
+    resolution: stake.resolution,
+    activatedAt: stake.activated_at,
+    resolvedAt: stake.resolved_at,
+  }));
+  const stakeConsents = (rows.stakeConsents || []).map((consent) => ({
+    stakeId: consent.stake_id,
+    userId: consent.user_id,
+    status: consent.status,
+    respondedAt: consent.responded_at,
+  }));
 
   return {
     currentUserId: user.id,
@@ -211,6 +345,11 @@ export function mapDatabaseState(user, rows) {
     reactions,
     friendActivities,
     nudges,
+    challenges,
+    recoveries,
+    stakes,
+    stakeConsents,
+    notificationPreferences,
   };
 }
 
@@ -235,6 +374,12 @@ export function createSupabaseRepository(client, user) {
 
   async function load(requestedCircleId = state.circleId) {
     const profile = await ensureProfile();
+    const { data: notificationPreferences, error: notificationPreferencesError } = await client
+      .from('notification_preferences')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (notificationPreferencesError) throw appError(notificationPreferencesError, 'Could not load notification settings');
     const { data: memberships, error: membershipError } = await client
       .from('circle_members')
       .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
@@ -248,13 +393,13 @@ export function createSupabaseRepository(client, user) {
     })).filter((circle) => circle.id);
     const circle = circles.find((item) => item.id === requestedCircleId) || circles[0] || null;
     if (!circle) {
-      state = mapDatabaseState(user, { profile, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [] });
+      state = mapDatabaseState(user, { profile, notificationPreferences, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [] });
       return getState();
     }
 
-    const [membersResult, sharedHabitsResult, nudgesResult] = await Promise.all([
+    const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult] = await Promise.all([
       client.from('circle_members')
-        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone)')
+        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone,recap_awards_enabled)')
         .eq('circle_id', circle.id)
         .order('joined_at', { ascending: true }),
       client.from('habit_circles')
@@ -262,21 +407,37 @@ export function createSupabaseRepository(client, user) {
         .eq('circle_id', circle.id)
         .order('shared_at'),
       client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100),
+      client.from('weekly_challenges').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
+      client.from('group_stakes').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
     ]);
-    const failed = [membersResult, sharedHabitsResult, nudgesResult].find((result) => result.error);
+    const failed = [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult].find((result) => result.error);
     if (failed) throw appError(failed.error, 'Could not load Donezo data');
     const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
     const habitIds = habits.map((habit) => habit.id);
-    const [habitSharesResult, checkInsResult] = await Promise.all([
+    const stakeIds = (stakesResult.data || []).map((stake) => stake.id);
+    const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult, schedulePausesResult, scheduleVersionsResult] = await Promise.all([
       habitIds.length
         ? client.from('habit_circles').select('habit_id,circle_id').in('habit_id', habitIds)
         : Promise.resolve({ data: [], error: null }),
       habitIds.length
         ? client.from('check_ins').select('*').in('habit_id', habitIds).order('completed_at', { ascending: false }).limit(1000)
         : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('habit_recoveries').select('*').in('habit_id', habitIds).order('created_at', { ascending: false }).limit(200)
+        : Promise.resolve({ data: [], error: null }),
+      stakeIds.length
+        ? client.from('stake_consents').select('*').in('stake_id', stakeIds)
+        : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('habit_schedule_pauses').select('*').in('habit_id', habitIds).order('start_date', { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('habit_schedule_versions').select('*').in('habit_id', habitIds).order('effective_from', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
     ]);
-    if (habitSharesResult.error || checkInsResult.error) {
-      throw appError(habitSharesResult.error || checkInsResult.error, 'Could not load Donezo data');
+    const loadError = habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error || schedulePausesResult.error || scheduleVersionsResult.error;
+    if (loadError) {
+      throw appError(loadError, 'Could not load Donezo data');
     }
     const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
     const reactionsResult = checkInIds.length
@@ -293,6 +454,13 @@ export function createSupabaseRepository(client, user) {
       checkIns: checkInsResult.data,
       reactions: reactionsResult.data,
       nudges: nudgesResult.data,
+      challenges: challengesResult.data,
+      recoveries: recoveriesResult.data,
+      stakes: stakesResult.data,
+      stakeConsents: stakeConsentsResult.data,
+      schedulePauses: schedulePausesResult.data,
+      scheduleVersions: scheduleVersionsResult.data,
+      notificationPreferences,
     });
     return getState();
   }
@@ -330,6 +498,62 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
+  async function saveNotificationPreferences(input = {}) {
+    const normalizeTime = (value, fallback) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || '')) ? String(value) : fallback;
+    const timezone = String(input.timezone || state.notificationPreferences?.timezone || 'UTC');
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+    } catch {
+      throw new Error('Choose a valid timezone');
+    }
+    const categoryNames = ['due_soon', 'streak_risk', 'friend_activity', 'nudge', 'reaction', 'comment', 'challenge_progress'];
+    const categories = Object.fromEntries(categoryNames.map((category) => [category, input.categories?.[category] !== false]));
+    const habitOverrides = Object.fromEntries(Object.entries(input.habitOverrides || {}).map(([habitId, enabled]) => [habitId, Boolean(enabled)]));
+    const { error } = await client.from('notification_preferences').upsert({
+      user_id: user.id,
+      timezone,
+      quiet_hours_enabled: Boolean(input.quietHoursEnabled),
+      quiet_hours_start: normalizeTime(input.quietHoursStart, '22:00'),
+      quiet_hours_end: normalizeTime(input.quietHoursEnd, '08:00'),
+      categories,
+      habit_overrides: habitOverrides,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (error) throw appError(error, 'Could not save notification settings');
+    return load(state.circleId);
+  }
+
+  async function setRecapAwardsEnabled(enabled) {
+    const { error } = await client.from('profiles').update({ recap_awards_enabled: Boolean(enabled) }).eq('id', user.id);
+    if (error) throw appError(error, 'Could not save recap preference');
+    return load(state.circleId);
+  }
+
+  async function saveHabitSchedule(habitId, input) {
+    const fallbackTimeZone = state.members.find((member) => member.id === user.id)?.timeZone || 'UTC';
+    const schedule = normalizeSchedule({
+      frequency: input.scheduleFrequency || input.frequency || 'daily',
+      weekdays: input.scheduleWeekdays || [],
+      targetQuantity: input.targetQuantity ?? 1,
+      targetUnit: input.targetUnit || 'count',
+      dueTime: input.targetTime || null,
+      graceMinutes: input.graceMinutes ?? 0,
+      timezone: input.scheduleTimezone || fallbackTimeZone,
+    });
+    const { error } = await client.rpc('create_habit_schedule_version', {
+      target_habit_id: habitId,
+      p_effective_from: dateInTimezone(schedule.timezone),
+      p_schedule_frequency: schedule.frequency,
+      p_schedule_weekdays: schedule.weekdays,
+      p_target_quantity: schedule.targetQuantity,
+      p_target_unit: schedule.targetUnit,
+      p_due_time: schedule.dueTime,
+      p_grace_minutes: schedule.graceMinutes,
+      p_timezone: schedule.timezone,
+    });
+    if (error) throw appError(error, 'Could not save the habit schedule');
+  }
+
   async function addHabit(input) {
     if (!state.circleId) throw new Error('Create or join a squad first');
     const clean = validateHabitInput({
@@ -343,11 +567,14 @@ export function createSupabaseRepository(client, user) {
       requested_squads: squadIds,
       habit_title: clean.title,
       habit_emoji: clean.emoji,
-      habit_frequency: input.frequency || 'daily',
+      // The legacy metadata RPC intentionally accepts only `daily`. The real
+      // cadence lives in the immutable schedule version written below.
+      habit_frequency: 'daily',
       habit_target_time: clean.targetTime || null,
       habit_proof_mode: clean.proofMode,
     });
     if (error) throw appError(error, 'Could not add habit');
+    if (input.scheduleFrequency || (input.frequency && input.frequency !== 'daily')) await saveHabitSchedule(habitId, input);
     await load(state.circleId);
     return state.habits.find((habit) => habit.id === habitId) || { id: habitId };
   }
@@ -360,21 +587,51 @@ export function createSupabaseRepository(client, user) {
     return habit;
   }
 
+  function fullTargetFor(habit, date) {
+    try {
+      return getScheduleOccurrence({
+        frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+        weekdays: habit.scheduleWeekdays || [],
+        targetQuantity: habit.targetQuantity ?? 1,
+        targetUnit: habit.targetUnit || 'count',
+        dueTime: habit.targetTime || null,
+        graceMinutes: habit.graceMinutes || 0,
+        timezone: habit.scheduleTimezone || habit.ownerTimeZone || 'UTC',
+        startDate: habit.createdDate || null,
+        pauseWindows: habit.pauseWindows || [],
+        versions: habit.scheduleVersions || [],
+      }, date).targetQuantity;
+    } catch {
+      return Number(habit.targetQuantity ?? 1);
+    }
+  }
+
   async function updateHabit(habitId, input) {
     const habit = ownedHabit(habitId);
     const clean = validateHabitInput(input);
     const squadIds = [...new Set(input.squadIds?.length ? input.squadIds : habit.squadIds)];
+    const scheduleChanged = Boolean(input.scheduleFrequency) && (
+      input.scheduleFrequency !== (habit.scheduleFrequency || habit.frequency || 'daily')
+      || (input.scheduleWeekdays || []).join(',') !== (habit.scheduleWeekdays || []).join(',')
+      || Number(input.targetQuantity ?? 1) !== Number(habit.targetQuantity ?? 1)
+      || String(input.targetUnit || 'count').trim() !== String(habit.targetUnit || 'count')
+      || String(input.targetTime || '') !== String(habit.targetTime || '')
+      || Number(input.graceMinutes || 0) !== Number(habit.graceMinutes || 0)
+      || String(input.scheduleTimezone || habit.scheduleTimezone || '') !== String(habit.scheduleTimezone || '')
+    );
     const { data: updatedId, error } = await client.rpc('update_habit_with_squads', {
       target_habit_id: habitId,
       requested_squads: squadIds,
       habit_title: clean.title,
       habit_emoji: clean.emoji,
-      habit_frequency: input.frequency || habit.frequency || 'daily',
+      // Keep the legacy column compatible; schedule versions are authoritative.
+      habit_frequency: 'daily',
       habit_target_time: clean.targetTime || null,
       habit_proof_mode: clean.proofMode,
     });
     if (error) throw appError(error, 'Could not save habit');
     if (!updatedId) throw new Error('Habit could not be updated. Refresh and try again.');
+    if (scheduleChanged) await saveHabitSchedule(habitId, input);
     await load(state.circleId);
     return state.habits.find((item) => item.id === habitId) || { id: updatedId };
   }
@@ -391,7 +648,27 @@ export function createSupabaseRepository(client, user) {
     return state.habits.find((habit) => habit.id === habitId);
   }
 
+  async function pauseHabit(habitId, input) {
+    ownedHabit(habitId);
+    const startDate = String(input.startDate || '');
+    const endDate = String(input.endDate || '');
+    const reason = String(input.reason || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new Error('Choose a start and end date');
+    if (endDate < startDate) throw new Error('Pause end must be on or after start');
+    if (reason.length > 280) throw new Error('Pause note must be 280 characters or less');
+    const { error } = await client.rpc('create_habit_schedule_pause', {
+      target_habit_id: habitId,
+      p_start_date: startDate,
+      p_end_date: endDate,
+      p_reason: reason || null,
+    });
+    if (error) throw appError(error, 'Could not pause the habit');
+    await load(state.circleId);
+    return state.habits.find((habit) => habit.id === habitId);
+  }
+
   async function toggleHabit(habitId, date) {
+    const habit = ownedHabit(habitId);
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
     if (existing && !existing.invalid) {
       const { error } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
@@ -408,13 +685,19 @@ export function createSupabaseRepository(client, user) {
         const { error: deleteError } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
         if (deleteError) throw appError(deleteError, 'Could not clear rejected check-in');
       }
-      const { error } = await client.from('check_ins').insert({ habit_id: habitId, user_id: user.id, check_date: date });
+      const { error } = await client.from('check_ins').insert({
+        habit_id: habitId,
+        user_id: user.id,
+        check_date: date,
+        completed_quantity: fullTargetFor(habit, date),
+      });
       if (error) throw appError(error, 'Could not complete habit');
     }
     return load();
   }
 
   async function completeWithProof(habitId, date, file) {
+    const habit = ownedHabit(habitId);
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
     if (existing && !existing.invalid) throw new Error('Already checked in today');
     const oldProofPath = existing?.proofPath || null;
@@ -436,6 +719,7 @@ export function createSupabaseRepository(client, user) {
       habit_id: habitId,
       user_id: user.id,
       check_date: date,
+      completed_quantity: fullTargetFor(habit, date),
       proof_path: path,
     });
     if (checkInError) {
@@ -459,6 +743,108 @@ export function createSupabaseRepository(client, user) {
       const { error } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji: '👎' });
       if (error) throw appError(error, 'Could not downvote proof');
     }
+    return load();
+  }
+
+  async function toggleReaction(checkInId, emoji) {
+    if (!['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
+    const checkIn = state.checkIns.find((item) => item.id === checkInId);
+    if (!checkIn) throw new Error('That update is no longer available');
+    const existing = state.reactions.find((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji === emoji);
+    if (existing) {
+      const { error } = await client.from('reactions').delete().eq('id', existing.id).eq('user_id', user.id);
+      if (error) throw appError(error, 'Could not remove reaction');
+    } else {
+      const { error } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji });
+      if (error) throw appError(error, 'Could not react');
+    }
+    return load();
+  }
+
+  async function recoverHabit(habitId, missedDate, input = {}) {
+    const habit = ownedHabit(habitId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(missedDate) || missedDate >= dateInTimezone(habit.scheduleTimezone || habit.ownerTimeZone || 'UTC')) throw new Error('Choose a past missed date');
+    const action = String(input.action || 'recover_today');
+    if (!['recover_today', 'adjust_habit', 'pause_habit', 'ask_support'].includes(action)) throw new Error('Choose a recovery action');
+    const reflection = String(input.reflection || '').trim();
+    if (reflection.length > 280) throw new Error('Keep the reflection under 280 characters');
+    const visibility = input.visibility === 'squad' ? 'squad' : 'private';
+    const { error } = await client.from('habit_recoveries').upsert({
+      habit_id: habitId,
+      user_id: user.id,
+      missed_date: missedDate,
+      recovered_at: action === 'recover_today' ? new Date().toISOString() : null,
+      action,
+      reflection: reflection || null,
+      visibility,
+    }, { onConflict: 'habit_id,user_id,missed_date' });
+    if (error) throw appError(error, 'Could not save recovery');
+    return load();
+  }
+
+  async function createChallenge(input = {}) {
+    if (!state.circleId) throw new Error('Create or join a squad first');
+    const kind = String(input.kind || 'completion_percent');
+    if (!['completion_percent', 'total_completions', 'no_consecutive_miss'].includes(kind)) throw new Error('Choose a valid challenge');
+    const target = Number(input.target || (kind === 'completion_percent' ? 80 : kind === 'no_consecutive_miss' ? 1 : 20));
+    const title = String(input.title || '').trim();
+    if (!title || title.length > 80) throw new Error('Challenge title must be 1–80 characters');
+    const { error } = await client.from('weekly_challenges').insert({
+      circle_id: state.circleId,
+      created_by: user.id,
+      kind,
+      title,
+      target,
+      starts_on: input.startsOn,
+      ends_on: input.endsOn,
+    });
+    if (error) throw appError(error, 'Could not start challenge');
+    return load();
+  }
+
+  async function createStake(input = {}) {
+    if (!state.circleId) throw new Error('Create or join a squad first');
+    const clean = validateStake(input);
+    const { data, error } = await client.from('group_stakes').insert({
+      circle_id: state.circleId,
+      challenge_id: input.challengeId || null,
+      created_by: user.id,
+      rule: clean.rule,
+      reward: clean.reward || null,
+      consequence: clean.consequence || null,
+      starts_on: input.startsOn,
+      ends_on: input.endsOn,
+    }).select('id').single();
+    if (error) throw appError(error, 'Could not propose stake');
+    const result = await client.rpc('respond_to_stake', { target_stake: data.id, response: 'accepted' });
+    if (result.error) throw appError(result.error, 'Stake created, but your opt-in failed');
+    return load();
+  }
+
+  async function respondToStake(stakeId, response) {
+    if (!['accepted', 'declined'].includes(response)) throw new Error('Choose accept or decline');
+    const { error } = await client.rpc('respond_to_stake', { target_stake: stakeId, response });
+    if (error) throw appError(error, 'Could not respond to stake');
+    return load();
+  }
+
+  async function resolveGroupStake(stakeId, resolution) {
+    const stake = state.stakes.find((item) => item.id === stakeId);
+    if (!stake || stake.createdBy !== user.id || stake.status !== 'active') throw new Error('Only the creator can settle an active stake');
+    const timeZone = state.members.find((item) => item.id === user.id)?.timeZone || 'UTC';
+    if (dateInTimezone(timeZone) <= stake.endsOn) throw new Error('Settle the stake after it ends');
+    const cleanResolution = {
+      winners: Array.isArray(resolution?.winners) ? resolution.winners.map(String) : [],
+      losers: Array.isArray(resolution?.losers) ? resolution.losers.map(String) : [],
+      allSucceeded: Boolean(resolution?.allSucceeded),
+    };
+    const { data, error } = await client.from('group_stakes').update({
+      status: 'resolved',
+      resolution: cleanResolution,
+      resolved_at: new Date().toISOString(),
+    }).eq('id', stakeId).eq('created_by', user.id).eq('status', 'active').select('id').maybeSingle();
+    if (error) throw appError(error, 'Could not settle stake');
+    if (!data) throw new Error('Stake is no longer active');
     return load();
   }
 
@@ -527,12 +913,21 @@ export function createSupabaseRepository(client, user) {
     createCircle,
     joinCircle,
     updateDisplayName,
+    saveNotificationPreferences,
+    setRecapAwardsEnabled,
     addHabit,
     updateHabit,
     archiveHabit,
+    pauseHabit,
     toggleHabit,
     completeWithProof,
     toggleDownvote,
+    toggleReaction,
+    recoverHabit,
+    createChallenge,
+    createStake,
+    respondToStake,
+    resolveStake: resolveGroupStake,
     sendNudge,
     markNudgeRead,
     getVapidPublicKey,
@@ -557,7 +952,15 @@ export function createMemoryRepository(seed, onChange = () => {}) {
       state.checkIns.splice(existingIndex, 1);
       member.xp = Math.max(0, member.xp - habit.xp);
     } else {
-      state.checkIns.unshift({ id: uid('checkin'), habitId, userId: state.currentUserId, date, completedAt: new Date().toISOString(), proofUrl: proofUrl || null });
+      state.checkIns.unshift({
+        id: uid('checkin'),
+        habitId,
+        userId: state.currentUserId,
+        date,
+        completedAt: new Date().toISOString(),
+        completedQuantity: Number(habit.targetQuantity ?? 1),
+        proofUrl: proofUrl || null,
+      });
       member.xp += habit.xp;
     }
     emit();
@@ -570,7 +973,24 @@ export function createMemoryRepository(seed, onChange = () => {}) {
 
   function addHabit(input) {
     const clean = validateHabitInput({ title: input.title, emoji: input.emoji || '⚡', targetTime: input.targetTime || '', proofMode: input.proofMode || 'photo' });
-    const habit = { id: uid('habit'), ownerId: state.currentUserId, title: clean.title, emoji: clean.emoji, frequency: input.frequency || 'daily', targetTime: clean.targetTime, proofMode: clean.proofMode, xp: Number(input.xp || 10), active: true };
+    const habit = {
+      id: uid('habit'),
+      ownerId: state.currentUserId,
+      title: clean.title,
+      emoji: clean.emoji,
+      frequency: input.scheduleFrequency || input.frequency || 'daily',
+      scheduleFrequency: input.scheduleFrequency || input.frequency || 'daily',
+      scheduleWeekdays: input.scheduleWeekdays || [],
+      targetQuantity: Number(input.targetQuantity ?? 1),
+      targetUnit: input.targetUnit || 'count',
+      targetTime: clean.targetTime,
+      graceMinutes: Number(input.graceMinutes || 0),
+      scheduleTimezone: input.scheduleTimezone || 'UTC',
+      pauseWindows: [],
+      proofMode: clean.proofMode,
+      xp: Number(input.xp || 10),
+      active: true,
+    };
     state.habits.push(habit);
     emit();
     return clone(habit);
@@ -589,6 +1009,22 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     habit.emoji = clean.emoji;
     habit.targetTime = clean.targetTime;
     habit.proofMode = clean.proofMode;
+    habit.frequency = input.scheduleFrequency || input.frequency || habit.frequency || 'daily';
+    habit.scheduleFrequency = habit.frequency;
+    habit.scheduleWeekdays = input.scheduleWeekdays || habit.scheduleWeekdays || [];
+    habit.targetQuantity = Number(input.targetQuantity ?? habit.targetQuantity ?? 1);
+    habit.targetUnit = input.targetUnit || habit.targetUnit || 'count';
+    habit.graceMinutes = Number(input.graceMinutes ?? habit.graceMinutes ?? 0);
+    habit.scheduleTimezone = input.scheduleTimezone || habit.scheduleTimezone || 'UTC';
+    emit();
+    return clone(habit);
+  }
+
+  function pauseHabit(habitId, input) {
+    const habit = ownedMemoryHabit(habitId);
+    if (String(input.endDate) < String(input.startDate)) throw new Error('Pause end must be on or after start');
+    habit.pauseWindows ||= [];
+    habit.pauseWindows.push({ id: uid('pause'), startDate: String(input.startDate), endDate: String(input.endDate), reason: String(input.reason || '') });
     emit();
     return clone(habit);
   }
@@ -605,5 +1041,5 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     emit();
   }
 
-  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, archiveHabit, sendNudge };
+  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, sendNudge };
 }
