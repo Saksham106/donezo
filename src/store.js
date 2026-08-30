@@ -705,6 +705,18 @@ export function createSupabaseRepository(client, user) {
     return state.habits.find((habit) => habit.id === habitId);
   }
 
+  async function restoreHabit(habitId) {
+    const habit = ownedHabit(habitId);
+    const { data: restored, error } = await client.from('habits').update({
+      active: true,
+      updated_at: new Date().toISOString(),
+    }).eq('id', habitId).eq('owner_id', user.id).select('*').maybeSingle();
+    if (error) throw appError(error, 'Could not restore habit');
+    if (!restored) throw new Error('Habit could not be restored. Refresh and try again.');
+    await load();
+    return state.habits.find((item) => item.id === habitId) || restored;
+  }
+
   async function pauseHabit(habitId, input) {
     ownedHabit(habitId);
     const startDate = String(input.startDate || '');
@@ -1032,6 +1044,7 @@ export function createSupabaseRepository(client, user) {
     addHabit,
     updateHabit,
     archiveHabit,
+    restoreHabit,
     pauseHabit,
     toggleHabit,
     completeWithProof,
@@ -1157,6 +1170,13 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return clone(habit);
   }
 
+  function restoreHabit(habitId) {
+    const habit = ownedMemoryHabit(habitId);
+    habit.active = true;
+    emit();
+    return clone(habit);
+  }
+
   function sendNudge(toUserId, message) {
     state.nudges ||= [];
     state.nudges.unshift({ id: uid('nudge'), fromUserId: state.currentUserId, toUserId, message, createdAt: new Date().toISOString() });
@@ -1249,5 +1269,5 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return buildMonthlyWrapped({ month, circleId: state.circleId, members: state.members, habits: state.habits, checkIns: state.checkIns, reactions: state.reactions || [], comments: state.comments || [], batonHandoffs: state.batonHandoffs || [], nudges: state.nudges || [], asOfDate: options.asOfDate, timeZone: options.timeZone || 'UTC', recapEnabled: options.recapEnabled !== false, recapOptOut: Boolean(options.recapOptOut) });
   }
 
-  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, sendNudge, startBaton, passBaton, setBatonOptOut, addComment, deleteComment, getEarnedBadges, getMonthlyWrapped };
+  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit, sendNudge, startBaton, passBaton, setBatonOptOut, addComment, deleteComment, getEarnedBadges, getMonthlyWrapped };
 }

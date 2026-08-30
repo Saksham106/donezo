@@ -13,13 +13,13 @@ test('Me habits open the existing bottom-sheet pattern for editing', () => {
   assert.match(css, /\.habit-setting-button/);
 });
 
-test('edit sheet clearly separates save archive and cancel actions', () => {
+test('edit sheet separates save archive and cancel, with reversible archive', () => {
   assert.match(app, /repo\.updateHabit\(/);
   assert.match(app, /repo\.archiveHabit\(/);
   assert.match(app, /Archive habit/);
   assert.match(app, /Cancel/);
-  assert.match(app, /archiveConfirm/);
-  assert.match(app, /Yes, archive it/);
+  assert.match(app, /handleUndoArchive/);
+  assert.match(app, /label:\s*'Undo'/);
 });
 
 test('habit management reuses mutation guard and closes after successful changes', () => {
