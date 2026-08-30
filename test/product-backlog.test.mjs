@@ -34,11 +34,12 @@ test('recovery, challenges, stakes and recap are present as simple social loops'
   assert.match(app, /Share recap/);
 });
 
-test('onboarding progress targets the first shared win and templates remain editable', () => {
+test('onboarding progress exposes one compact next step and templates remain editable', () => {
   assert.match(app, /activationCard/);
   assert.match(app, /starterTemplates/);
   assert.match(app, /data-template/);
-  assert.match(app, /first shared win/i);
+  assert.match(app, /Next setup step/i);
+  assert.doesNotMatch(app, /activation-steps/);
   assert.match(app, /data-activation-next/);
 });
 
