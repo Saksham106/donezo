@@ -567,12 +567,14 @@ export function createSupabaseRepository(client, user) {
       requested_squads: squadIds,
       habit_title: clean.title,
       habit_emoji: clean.emoji,
-      habit_frequency: input.frequency || 'daily',
+      // The legacy metadata RPC intentionally accepts only `daily`. The real
+      // cadence lives in the immutable schedule version written below.
+      habit_frequency: 'daily',
       habit_target_time: clean.targetTime || null,
       habit_proof_mode: clean.proofMode,
     });
     if (error) throw appError(error, 'Could not add habit');
-    if (input.scheduleFrequency) await saveHabitSchedule(habitId, input);
+    if (input.scheduleFrequency || (input.frequency && input.frequency !== 'daily')) await saveHabitSchedule(habitId, input);
     await load(state.circleId);
     return state.habits.find((habit) => habit.id === habitId) || { id: habitId };
   }
@@ -622,7 +624,8 @@ export function createSupabaseRepository(client, user) {
       requested_squads: squadIds,
       habit_title: clean.title,
       habit_emoji: clean.emoji,
-      habit_frequency: input.frequency || habit.frequency || 'daily',
+      // Keep the legacy column compatible; schedule versions are authoritative.
+      habit_frequency: 'daily',
       habit_target_time: clean.targetTime || null,
       habit_proof_mode: clean.proofMode,
     });

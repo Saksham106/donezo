@@ -56,6 +56,11 @@ test('habit settings expose real schedules and pause windows end to end', () => 
   assert.match(store, /habit_schedule_pauses/);
 });
 
+test('non-daily schedules keep legacy habit metadata compatible and persist through schedule versions', () => {
+  assert.equal((store.match(/habit_frequency: 'daily'/g) || []).length, 2);
+  assert.match(store, /p_schedule_frequency: schedule\.frequency/);
+});
+
 test('social migration locks stakes after activation and preserves auditable history', () => {
   assert.match(migration, /create table if not exists public\.weekly_challenges/i);
   assert.match(migration, /create table if not exists public\.habit_recoveries/i);
