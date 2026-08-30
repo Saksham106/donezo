@@ -519,15 +519,24 @@ function squadScreen() {
 
 function friendsScreen() {
   const state = getState();
-  const feed = activityList(state).filter((activity) => activity.proofPath);
+  const allActivity = activityList(state);
+  const feed = squadFeed === 'proofs'
+    ? allActivity.filter((activity) => activity.proofPath)
+    : allActivity.filter((activity) => !activity.proofPath);
   const visibleActivities = feed.slice(0, feedLimit);
-  const activities = visibleActivities.map((activity) => activityCard(activity, { showProofActions: true })).join('');
-  const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older proofs</button>` : '';
+  const displayActivities = squadFeed === 'activity'
+    ? groupSquadActivity(visibleActivities, state.comments || [])
+    : visibleActivities;
+  const activities = displayActivities.map((activity) => activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
+  const feedName = squadFeed === 'proofs' ? 'proofs' : 'activity';
+  const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older ${feedName}</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
   const refreshButton = `<button class="refresh-btn ${manualRefreshLoading ? 'loading' : ''}" type="button" data-manual-refresh aria-label="Refresh friends" title="Refresh" ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span></button>`;
   const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View friends" title="People">${icon('people')}</button>`;
-  const empty = '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>';
-  return `<div class="friends-heading-row"><div>${pageHeading('Friends', `${friendList(state).length} CONNECTED`, 'One feed for the people you choose to show up with.')}</div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><section class="proof-feed" aria-label="Friends proofs"><div class="section-head first"><h2>Proofs</h2><span>${feed.length}</span></div><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
+  const empty = squadFeed === 'proofs'
+    ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>'
+    : '<div class="empty compact-empty"><b>No activity yet.</b><p>Check-ins, callouts, and public friend updates show up here.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Be first</button></div>';
+  return `<div class="friends-heading-row"><div class="friends-heading-copy"><p class="eyebrow">${friendList(state).length} CONNECTED</p><h1>Friends</h1></div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><div class="squad-feed-tabs" role="tablist" aria-label="Friends updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><section class="proof-feed" aria-label="Friends ${feedName}"><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
 }
 
 function challengeProgress(challenge) {
@@ -742,14 +751,14 @@ function habitSheet() {
   const pauseForm = editMode ? `<details class="schedule-pause"><summary>Pause for travel or a break</summary>${pauseList}<form id="pause-form" class="form"><div class="form-grid"><label>From<input name="startDate" type="date" required></label><label>Through<input name="endDate" type="date" required></label></div><label>Note (optional)<input name="reason" maxlength="280" placeholder="Vacation, sick, deload…"></label><button class="btn full" ${busy ? 'disabled' : ''}>Add pause</button></form></details>` : '';
   const friendChoices = friendIds.map((friendId) => {
     const friend = member(friendId);
-    return `<label class="friend-audience-option"><input type="checkbox" name="audienceIds" value="${esc(friendId)}" ${audienceIds.has(friendId) || audienceMode === 'all_friends' ? 'checked' : ''}><span><strong>${esc(friend?.name || 'Friend')}</strong><small>Can see proof and join the conversation</small></span></label>`;
+    return `<label class="friend-audience-option"><input type="checkbox" name="audienceIds" value="${esc(friendId)}" ${audienceIds.has(friendId) ? 'checked' : ''} ${audienceMode === 'selected_friends' ? '' : 'disabled'}><span><strong>${esc(friend?.name || 'Friend')}</strong><small>Can see proof and join the conversation</small></span></label>`;
   }).join('');
   const legacySquadIds = (editing?.squadIds || state?.circles?.map((circle) => circle.id) || []).join(',');
-  const audienceChoices = `<fieldset class="friend-audience"><legend>Who can see this?</legend><p>Friends can only see proof, reactions, and replies when you share with them.</p><label><input type="radio" name="audienceMode" value="all_friends" ${audienceMode === 'all_friends' ? 'checked' : ''}><span><strong>All friends</strong><small>Share with everyone connected to you.</small></span></label><label><input type="radio" name="audienceMode" value="selected_friends" ${audienceMode === 'selected_friends' ? 'checked' : ''}><span><strong>Selected friends</strong><small>Choose exactly who gets access.</small></span></label><div class="friend-audience-list" data-friend-audience-list>${friendChoices || '<small class="settings-empty">Add a friend to share proof with them.</small>'}</div><label><input type="radio" name="audienceMode" value="only_me" ${audienceMode === 'only_me' ? 'checked' : ''}><span><strong>Only me</strong><small>Keep this habit out of Friends.</small></span></label></fieldset><input type="hidden" name="squadIds" value="${esc(legacySquadIds)}">`;
+  const audienceChoices = `<fieldset class="friend-audience"><legend>Who can see this?</legend><p>Pick who gets the proof, reactions, and replies.</p><div class="audience-mode-grid"><label class="audience-mode-card"><input type="radio" name="audienceMode" value="all_friends" ${audienceMode === 'all_friends' ? 'checked' : ''}><span class="audience-mode-icon" aria-hidden="true">👥</span><span><strong>All friends</strong><small>Everyone connected</small></span></label><label class="audience-mode-card"><input type="radio" name="audienceMode" value="selected_friends" ${audienceMode === 'selected_friends' ? 'checked' : ''}><span class="audience-mode-icon" aria-hidden="true">◎</span><span><strong>Selected</strong><small>You choose who</small></span></label><label class="audience-mode-card"><input type="radio" name="audienceMode" value="only_me" ${audienceMode === 'only_me' ? 'checked' : ''}><span class="audience-mode-icon" aria-hidden="true">🔒</span><span><strong>Only me</strong><small>Keep it private</small></span></label></div><div class="friend-audience-list" data-friend-audience-list ${audienceMode === 'selected_friends' ? '' : 'hidden'}>${friendChoices || '<small class="settings-empty">Add a friend to share proof with them.</small>'}</div></fieldset><input type="hidden" name="squadIds" value="${esc(legacySquadIds)}">`;
   const archiveArea = editMode
     ? `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
     : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleFrequency === 'daily' || scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Used for specific days. For weekly habits, the first picked day is due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label>${audienceChoices}<button class="btn primary full" ${busy ? 'disabled' : ''}>${editMode ? 'Save changes' : 'Add habit'}</button></form>${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet ${editMode ? 'habit-edit-sheet' : ''}" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleFrequency === 'daily' || scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Used for specific days. For weekly habits, the first picked day is due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label>${audienceChoices}${editMode ? '' : `<button class="btn primary full" ${busy ? 'disabled' : ''}>Add habit</button>`}</form>${editMode ? `<div class="habit-save-dock" data-habit-save-dock hidden><button class="btn primary full" type="submit" form="habit-form" ${busy ? 'disabled' : ''}>Save changes</button></div>` : ''}${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
@@ -1170,6 +1179,7 @@ function render() {
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
+    markHabitDirty();
   }; });
   app.querySelectorAll('[data-template]').forEach((element) => { element.onclick = () => {
     const template = starterTemplates[Number(element.dataset.template)];
@@ -1208,6 +1218,20 @@ function render() {
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
   const habitForm = app.querySelector('#habit-form');
   habitForm?.addEventListener('submit', handleHabitSubmit);
+  habitForm?.addEventListener('input', markHabitDirty);
+  habitForm?.addEventListener('change', markHabitDirty);
+  const audienceList = habitForm?.querySelector('[data-friend-audience-list]');
+  const syncAudienceControls = () => {
+    const audienceMode = habitForm?.querySelector('[name="audienceMode"]:checked')?.value || 'all_friends';
+    const selectedMode = audienceMode === 'selected_friends';
+    if (audienceList) audienceList.hidden = !selectedMode;
+    audienceList?.querySelectorAll('[name="audienceIds"]').forEach((checkbox) => {
+      if (audienceMode !== 'selected_friends') checkbox.checked = false;
+      checkbox.disabled = !selectedMode;
+    });
+  };
+  habitForm?.querySelectorAll('[name="audienceMode"]').forEach((radio) => radio.addEventListener('change', syncAudienceControls));
+  syncAudienceControls();
   const scheduleSelect = habitForm?.elements.scheduleFrequency;
   let previousScheduleValue = scheduleSelect?.value;
   scheduleSelect?.addEventListener('change', () => {
@@ -1526,6 +1550,12 @@ function closeHabitEditor() {
   render();
 }
 
+function markHabitDirty() {
+  if (!editingHabitId) return;
+  const dock = app.querySelector('[data-habit-save-dock]');
+  if (dock) dock.hidden = false;
+}
+
 async function handleHabitSubmit(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
@@ -1542,7 +1572,9 @@ async function handleHabitSubmit(event) {
     scheduleTimezone: String(form.get('scheduleTimezone') || me()?.timeZone || 'UTC'),
     proofMode: String(form.get('proofMode')),
     audienceMode: String(form.get('audienceMode') || 'all_friends'),
-    audienceIds: [...new Set(form.getAll('audienceIds').map(String).filter(Boolean))],
+    audienceIds: String(form.get('audienceMode') || 'all_friends') === 'selected_friends'
+      ? [...new Set(form.getAll('audienceIds').map(String).filter(Boolean))]
+      : [],
     squadIds: [...new Set(form.getAll('squadIds').flatMap((value) => String(value).split(',').map((id) => id.trim()).filter(Boolean)))],
   };
   if (input.scheduleFrequency === 'selected_weekdays' && !input.scheduleWeekdays.length) {
