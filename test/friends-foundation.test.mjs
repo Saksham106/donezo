@@ -84,7 +84,7 @@ test('memory repository invites and accepts a direct friend without circle switc
 test('memory repository creates a shareable code invite and accepts it by code', () => {
   const repo = createMemoryRepository({ ...seed, friendships: [], members: seed.profiles.map((profile) => ({ ...profile, xp: 0 })) });
   const invite = repo.createFriendInvite();
-  assert.match(invite.code, /^[a-z0-9]{12}$/);
+  assert.match(invite.code, /^[a-f0-9]{24}$/);
   repo.asUser('alice');
   const accepted = repo.acceptFriendInvite(invite.code);
   assert.equal(accepted.status, 'accepted');
