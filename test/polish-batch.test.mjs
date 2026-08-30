@@ -72,8 +72,8 @@ test('navigation state and scroll positions survive rerenders', () => {
   assert.match(app, /donezo\.activeTab/);
   assert.match(app, /PRIMARY_TABS\.includes\(requestedTab\) \? requestedTab : 'today'/);
   assert.match(app, /function setActiveTab\(nextTab\)/);
-  assert.match(app, /if \(!habitId\) setActiveTab\('checkin'\)/);
-  assert.match(app, /else if \(step === 3\) setActiveTab\('checkin'\)/);
+  assert.match(app, /if \(!habitId\) setActiveTab\('today'\)/);
+  assert.match(app, /else if \(step === 3\) openCheckInAction\(\)/);
   assert.match(app, /else if \(step === 4\) setActiveTab\('squad'\)/);
   assert.match(app, /createdCircleInvite = null; setActiveTab\('today'\)/);
   assert.match(app, /donezo\.squadFeed/);

@@ -71,3 +71,16 @@
 .notification-form{display:grid;gap:var(--space-3);margin-top:var(--space-3);padding:0;border:0;background:transparent}.notification-form .notification-option{display:grid;margin:0;color:var(--color-ink)}.notification-option-toggle{margin:0}.notification-option-toggle input{width:1px;min-height:1px;margin:0;padding:0}.notification-panel{box-shadow:0 1px 0 color-mix(in oklch,var(--color-ink) 5%,transparent)}
 .people-flow-sheet{height:min(60dvh,32rem);max-height:min(60dvh,32rem);overflow-y:auto;scrollbar-width:none}.people-flow-sheet::-webkit-scrollbar{display:none}.people-flow-sheet .people-list{overflow-y:auto;min-height:0}
 @media(max-width:374px){.baton-card.baton-compact{grid-template-columns:2.1rem minmax(0,1fr) auto}.baton-card.baton-compact .baton-copy small{display:none}.notification-hero{grid-template-columns:2.5rem minmax(0,1fr)}.notification-hero .btn{grid-column:1/-1;width:100%}}
+
+/* Final mobile social polish. */
+.nudge-composer-layer{z-index:96}
+.proof-reject-layer{z-index:97}
+.league-action-section{display:grid;gap:.7rem;padding:.9rem 0}
+.league-action-section+.league-action-section{border-top:var(--rule-hairline) solid var(--color-rule)}
+.league-action-section>p{margin:0;color:var(--color-muted);font-size:var(--text-xs);line-height:1.45}
+.theme-choice{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-2)}
+.theme-choice button{display:grid;place-items:center;gap:.28rem;min-height:4.35rem;padding:.65rem .4rem;border:var(--rule-hairline) solid var(--color-rule);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-muted)}
+.theme-choice button.active{border-color:var(--color-cobalt);background:var(--color-cobalt-soft);color:var(--color-ink)}
+.theme-choice button span{font-size:1.15rem;line-height:1}.theme-choice button strong{font-size:var(--text-xs)}
+.confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2);margin-top:var(--space-4)}.confirm-actions button{min-width:0}
+@media(max-width:350px){.theme-choice{grid-template-columns:1fr}.theme-choice button{grid-template-columns:auto 1fr;justify-content:start;min-height:3rem;padding:.55rem .7rem}.theme-choice button strong{text-align:left}}

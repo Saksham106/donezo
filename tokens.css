@@ -150,6 +150,10 @@
 }
 
 /* Explicit theme selection wins over the system preference. */
+[data-theme="light"] {
+  color-scheme: light;
+}
+
 [data-theme="dark"] {
   color-scheme: dark;
   --color-paper: oklch(20.5% 0.022 258);

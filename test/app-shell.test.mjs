@@ -50,7 +50,8 @@ test('social UX exposes settings, nudge inbox/composer, proof votes and invite o
   assert.match(app, /data-settings/);
   assert.match(app, /data-nudge-inbox/);
   assert.match(app, /nudge-form/);
-  assert.match(app, /data-downvote/);
+  assert.match(app, /data-request-reject/);
+  assert.match(app, /data-confirm-reject/);
   assert.match(app, /data-invite-open/);
   assert.match(app, /Lock in bro/);
 });
@@ -96,7 +97,7 @@ test('social stylesheet and service worker additions ship in production', () => 
   assert.match(build, /social\.css/);
   assert.match(serviceWorker, /social\.css/);
   assert.match(serviceWorker, /addEventListener\('push'/);
-  assert.match(serviceWorker, /donezo-shell-v17/);
+  assert.match(serviceWorker, /donezo-shell-v18/);
 });
 
 test('shared circle freshness is wired without replacing the app architecture', () => {
