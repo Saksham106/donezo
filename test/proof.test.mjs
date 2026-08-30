@@ -4,6 +4,8 @@ import {
   MAX_PROOF_BYTES,
   createProofReviewState,
   formatProofFileSize,
+  imageFileFromPasteData,
+  readClipboardImage,
   transitionProofReview,
   validateProofFile,
 } from '../src/proof.js';
@@ -59,4 +61,29 @@ test('selecting a replacement resets stale upload errors', () => {
   assert.equal(next.error, null);
   assert.equal(next.file, replacement);
   assert.equal(next.previewUrl, 'blob:second');
+});
+
+test('clipboard image reading creates a named proof File and ignores non-images', async () => {
+  const image = new Blob(['pixels'], { type: 'image/png' });
+  const clipboard = {
+    async read() {
+      return [{ types: ['text/plain', 'image/png'], getType: async (type) => type === 'image/png' ? image : new Blob(['no']) }];
+    },
+  };
+  const file = await readClipboardImage(clipboard);
+  assert.equal(file.type, 'image/png');
+  assert.equal(file.name, 'pasted-proof.png');
+  assert.equal(file.size, image.size);
+
+  await assert.rejects(
+    () => readClipboardImage({ read: async () => [{ types: ['text/plain'], getType: async () => new Blob(['no']) }] }),
+    /No photo found/i,
+  );
+});
+
+test('paste event extraction accepts only image files', () => {
+  const image = new File(['pixels'], 'shot.png', { type: 'image/png' });
+  const text = new File(['words'], 'note.txt', { type: 'text/plain' });
+  assert.equal(imageFileFromPasteData({ files: [text, image] }), image);
+  assert.equal(imageFileFromPasteData({ files: [text] }), null);
 });

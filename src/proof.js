@@ -20,6 +20,38 @@ export function formatProofFileSize(bytes) {
   return `${Math.round((size / (1024 * 1024)) * 10) / 10} MB`;
 }
 
+export function imageFileFromPasteData(dataTransfer) {
+  const files = [...(dataTransfer?.files || [])];
+  const direct = files.find((file) => file?.type?.startsWith('image/'));
+  if (direct) return direct;
+  for (const item of [...(dataTransfer?.items || [])]) {
+    if (item?.kind !== 'file' || !item.type?.startsWith('image/')) continue;
+    const file = item.getAsFile?.();
+    if (file) return file;
+  }
+  return null;
+}
+
+export async function readClipboardImage(clipboard) {
+  if (!clipboard || typeof clipboard.read !== 'function') {
+    throw new Error('Clipboard photo access is not supported here. Try pressing and holding to paste, or choose from your library.');
+  }
+  const items = await clipboard.read();
+  for (const item of items) {
+    const type = item.types?.find((candidate) => candidate.startsWith('image/'));
+    if (!type) continue;
+    const blob = await item.getType(type);
+    const extension = ({
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'image/heic': 'heic',
+    })[type] || 'png';
+    return new File([blob], `pasted-proof.${extension}`, { type, lastModified: Date.now() });
+  }
+  throw new Error('No photo found in your clipboard. Copy an image, then try again.');
+}
+
 export function createProofReviewState({ file, habitId, previewUrl }) {
   return {
     file,

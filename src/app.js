@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
 import { createRefreshCoordinator } from './refresh.js';
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, redeemInvite, validateInviteCode } from './invite.js';
-import { createProofReviewState, formatProofFileSize, transitionProofReview, validateProofFile } from './proof.js';
+import { createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, transitionProofReview, validateProofFile } from './proof.js';
 import {
   BADGE_CATALOG,
   dailyProgress,
@@ -527,7 +527,9 @@ function friendsScreen() {
   const displayActivities = squadFeed === 'activity'
     ? groupSquadActivity(visibleActivities, state.comments || [])
     : visibleActivities;
-  const activities = displayActivities.map((activity) => activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
+  const activities = displayActivities.map((activity) => activity.type === 'grouped_checkin'
+    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><p>${activity.items.map((item) => esc(member(item.userId)?.name || 'Friend')).join(', ')}</p></article>`
+    : activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const feedName = squadFeed === 'proofs' ? 'proofs' : 'activity';
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older ${feedName}</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
@@ -911,7 +913,7 @@ function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
   if (!habit) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Camera first, library if the receipt already exists.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Use the camera, pick a saved photo, or paste a screenshot you copied.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
 }
 
 function proofReviewSheet() {
@@ -957,22 +959,39 @@ function replaceProofSelection(input) {
   input?.click();
 }
 
-async function handleProofFileSelection(input) {
-  const file = input.files?.[0];
-  input.value = '';
-  if (!file) return;
+function acceptProofFile(file) {
+  if (!file) return false;
   const habitId = proofHabit || proofReview?.habitId;
-  if (!habitId) return;
+  if (!habitId) return false;
   const validation = validateProofFile(file);
   if (!validation.valid) {
     notify(validation.error, 3400);
-    return;
+    return false;
   }
   const previewUrl = URL.createObjectURL(file);
   if (proofReview?.previewUrl) URL.revokeObjectURL(proofReview.previewUrl);
   proofReview = createProofReviewState({ file, habitId, previewUrl });
   proofHabit = null;
   render();
+  return true;
+}
+
+async function handleProofFileSelection(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  acceptProofFile(file);
+}
+
+async function handlePasteProof() {
+  try {
+    const file = await readClipboardImage(navigator.clipboard);
+    acceptProofFile(file);
+  } catch (error) {
+    const blocked = error?.name === 'NotAllowedError';
+    notify(blocked
+      ? 'Clipboard access was blocked. Allow it, or choose the photo from your library.'
+      : readableError(error), 4200);
+  }
 }
 
 async function handleProofSubmit() {
@@ -1064,6 +1083,7 @@ function bindProofThumbnails() {
 function bindProofActions() {
   app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
   app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
+  app.querySelectorAll('[data-proof-paste]').forEach((element) => { element.onclick = handlePasteProof; });
   app.querySelectorAll('[data-proof-source-close]').forEach((element) => { element.onclick = () => { proofHabit = null; render(); }; });
   app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => replaceProofSelection(proofInput); });
   app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => replaceProofSelection(proofGalleryInput); });
@@ -1389,13 +1409,13 @@ async function handleManualRefresh() {
   renderPreservingScroll();
 }
 
-async function runMutation(action, successMessage) {
+async function runMutation(action, successMessage, { preserveDraft = false } = {}) {
   if (busy) return undefined;
   if (!online) {
     mutationStatus = 'failed';
-    retryMutation = () => runMutation(action, successMessage);
+    retryMutation = () => runMutation(action, successMessage, { preserveDraft });
     notify('You are offline. Nothing was saved yet.', 3600);
-    renderPreservingScroll();
+    if (!preserveDraft) renderPreservingScroll();
     return undefined;
   }
   await refreshCoordinator?.waitForIdle();
@@ -1404,7 +1424,7 @@ async function runMutation(action, successMessage) {
   busy = true;
   mutationStatus = 'saving';
   retryMutation = null;
-  renderPreservingScroll();
+  if (!preserveDraft) renderPreservingScroll();
   try {
     const result = await action();
     mutationStatus = 'saved';
@@ -1419,7 +1439,7 @@ async function runMutation(action, successMessage) {
     return undefined;
   } finally {
     busy = false;
-    renderPreservingScroll();
+    if (!preserveDraft) renderPreservingScroll();
   }
 }
 
@@ -1602,10 +1622,24 @@ async function handleHabitSubmit(event) {
       return;
     }
   }
+  const submitButtons = [...event.currentTarget.querySelectorAll('button[type="submit"]'), ...app.querySelectorAll('[data-habit-save-dock] button[type="submit"]')];
+  submitButtons.forEach((button) => {
+    button.disabled = true;
+    button.dataset.originalLabel = button.textContent;
+    button.textContent = 'Saving…';
+  });
   const result = habitId
-    ? await runMutation(() => repo.updateHabit(habitId, input), 'Habit saved')
-    : await runMutation(() => repo.addHabit(input), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`);
-  if (!result) return;
+    ? await runMutation(() => repo.updateHabit(habitId, input), 'Habit saved', { preserveDraft: true })
+    : await runMutation(() => repo.addHabit(input), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`, { preserveDraft: true });
+  if (!result) {
+    submitButtons.forEach((button) => {
+      button.disabled = false;
+      button.textContent = button.dataset.originalLabel || 'Save changes';
+      delete button.dataset.originalLabel;
+    });
+    markHabitDirty();
+    return;
+  }
   closeHabitEditor();
   if (!habitId) setActiveTab('today');
   render();
@@ -1994,6 +2028,13 @@ async function handleSignOut() {
 
 proofInput.addEventListener('change', () => handleProofFileSelection(proofInput));
 proofGalleryInput.addEventListener('change', () => handleProofFileSelection(proofGalleryInput));
+document.addEventListener('paste', (event) => {
+  if ((!proofHabit && !proofReview) || proofReview?.status === 'uploading') return;
+  const file = imageFileFromPasteData(event.clipboardData);
+  if (!file) return;
+  event.preventDefault();
+  acceptProofFile(file);
+});
 
 async function applyInitialNavigation() {
   if (initialNavigationHandled) return;

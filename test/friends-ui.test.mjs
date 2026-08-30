@@ -27,6 +27,8 @@ test('Friends renders authorized Proofs and Activity feeds with compact heading 
   assert.match(source, /data-squad-feed="activity"/);
   assert.match(source, /squadFeed === 'proofs'/);
   assert.match(source, /groupSquadActivity/);
+  assert.match(source, /activity\.type === 'grouped_checkin'/);
+  assert.match(source, /activity\.items\.length/);
   assert.doesNotMatch(source, /One feed for the people you choose to show up with/);
   assert.doesNotMatch(source, /Hype your people|See what happened/);
   assert.match(social, /\.friends-heading-row\{[^}]*align-items:center/);
@@ -70,6 +72,9 @@ test('editing a habit exposes a dirty-state floating Save Changes action', () =>
   assert.match(app, /markHabitDirty/);
   assert.match(app, /habitForm\?\.addEventListener\('input', markHabitDirty\)/);
   assert.match(app, /habitForm\?\.addEventListener\('change', markHabitDirty\)/);
+  assert.match(app, /repo\.updateHabit\(habitId, input\)[\s\S]*preserveDraft: true/);
+  assert.match(app, /repo\.addHabit\(input\)[\s\S]*preserveDraft: true/);
+  assert.match(app, /if \(!preserveDraft\) renderPreservingScroll\(\)/);
   assert.match(social, /\.habit-save-dock\{[^}]*position:fixed/);
 });
 

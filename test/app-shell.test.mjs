@@ -76,6 +76,13 @@ test('photo proof flow is review-first and mobile-camera aware', () => {
   assert.match(app, /completeWithProof/);
 });
 
+test('photo proof can be pasted from the clipboard without automatic clipboard access', () => {
+  assert.match(app, /data-proof-paste/);
+  assert.match(app, /readClipboardImage/);
+  assert.match(app, /addEventListener\('paste'/);
+  assert.match(app, /clipboardData/);
+});
+
 test('proof viewing stays inside the app and preserves context', () => {
   assert.doesNotMatch(app, /window\.open\(/);
   assert.match(app, /proofViewerSheet/);
@@ -97,7 +104,7 @@ test('social stylesheet and service worker additions ship in production', () => 
   assert.match(build, /social\.css/);
   assert.match(serviceWorker, /social\.css/);
   assert.match(serviceWorker, /addEventListener\('push'/);
-  assert.match(serviceWorker, /donezo-shell-v18/);
+  assert.match(serviceWorker, /donezo-shell-v19/);
 });
 
 test('shared circle freshness is wired without replacing the app architecture', () => {
