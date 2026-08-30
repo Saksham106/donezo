@@ -38,6 +38,11 @@ const requestedTab = initialNavigation.tab || localStorage.getItem('donezo.activ
 let repo = null;
 let session = null;
 let tab = PRIMARY_TABS.includes(requestedTab) ? requestedTab : 'today';
+
+function setActiveTab(nextTab) {
+  tab = PRIMARY_TABS.includes(nextTab) ? nextTab : 'today';
+  localStorage.setItem('donezo.activeTab', tab);
+}
 let proofHabit = null;
 let proofReview = null;
 let proofViewer = null;
@@ -941,8 +946,7 @@ function render() {
   }
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => {
     if (contentScroller) screenScroll[tab] = contentScroller.scrollTop;
-    tab = element.dataset.tab;
-    localStorage.setItem('donezo.activeTab', tab);
+    setActiveTab(element.dataset.tab);
     closeSheets();
     render();
     restoreScreenScroll();
@@ -955,7 +959,7 @@ function render() {
   app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => { commentCheckInId = element.dataset.commentOpen; render(); }; });
   app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
   app.querySelectorAll('[data-baton-open], [data-pass-baton]').forEach((element) => { element.onclick = () => { batonSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-baton-checkin], [data-empty-checkin]').forEach((element) => { element.onclick = () => { tab = 'checkin'; localStorage.setItem('donezo.activeTab', tab); render(); }; });
+  app.querySelectorAll('[data-baton-checkin], [data-empty-checkin]').forEach((element) => { element.onclick = () => { setActiveTab('checkin'); render(); }; });
   app.querySelectorAll('[data-invite-from-baton]').forEach((element) => { element.onclick = () => { inviteSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-badge-cabinet]').forEach((element) => { element.onclick = () => { badgeCabinetOpen = true; render(); }; });
   app.querySelectorAll('[data-wrapped-open]').forEach((element) => { element.onclick = () => { wrappedOpen = true; wrappedIndex = 0; render(); }; });
@@ -1007,7 +1011,7 @@ function render() {
   app.querySelectorAll('[data-settings-view]').forEach((element) => { element.onclick = () => { settingsView = element.dataset.settingsView; render(); }; });
   app.querySelectorAll('[data-settings-back]').forEach((element) => { element.onclick = () => { settingsView = 'menu'; render(); }; });
   app.querySelectorAll('[data-nudge-inbox]').forEach((element) => { element.onclick = () => { nudgeInboxOpen = true; render(); }; });
-  app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { tab = 'today'; closeSheets(); render(); }; });
+  app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { setActiveTab('today'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
@@ -1357,7 +1361,7 @@ async function handleHabitSubmit(event) {
     : await runMutation(() => repo.addHabit(input), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`);
   if (!result) return;
   closeHabitEditor();
-  if (!habitId) tab = 'checkin';
+  if (!habitId) setActiveTab('checkin');
   render();
 }
 
@@ -1455,8 +1459,8 @@ function handleActivationNext(step) {
     selectedEmoji = '⚡';
     habitSheetOpen = true;
   } else if (step === 2) inviteSheetOpen = true;
-  else if (step === 3) tab = 'checkin';
-  else if (step === 4) tab = 'squad';
+  else if (step === 3) setActiveTab('checkin');
+  else if (step === 4) setActiveTab('squad');
   render();
 }
 
@@ -1688,7 +1692,7 @@ function bindInviteActions() {
   app.querySelectorAll('[data-close-invite]').forEach((element) => { element.onclick = () => { inviteSheetOpen = false; render(); }; });
   app.querySelectorAll('[data-share-invite]').forEach((element) => { element.onclick = handleShareInvite; });
   app.querySelectorAll('[data-copy-code]').forEach((element) => { element.onclick = handleCopyRawInvite; });
-  app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; tab = 'today'; render(); }; });
+  app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; setActiveTab('today'); render(); }; });
 }
 
 async function handleSignOut() {
