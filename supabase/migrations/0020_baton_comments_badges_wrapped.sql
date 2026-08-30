@@ -214,6 +214,10 @@ begin
     raise exception 'Baton has expired';
   end if;
   if baton.holder_user_id <> caller then raise exception 'Only the current baton holder can pass it'; end if;
+  if not exists (
+    select 1 from public.circle_members cm
+    where cm.circle_id = baton.circle_id and cm.user_id = caller
+  ) then raise exception 'Current baton holder must still be an active circle member'; end if;
   if recipient_user_id = caller or not exists (
     select 1 from public.circle_members cm
     where cm.circle_id = baton.circle_id and cm.user_id = recipient_user_id

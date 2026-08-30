@@ -20,6 +20,8 @@ test('0020 uses server-authoritative RPCs and prevents cross-circle or forged au
   assert.match(migration, /source_check_in_id/i);
   assert.match(migration, /expires_at > now\(\)/i);
   assert.match(migration, /recipient.*active member|active.*recipient/i);
+  const passBaton = migration.match(/create or replace function public\.pass_baton[\s\S]*?create or replace function public\.set_baton_opt_out/i)?.[0] || '';
+  assert.match(passBaton, /cm\.circle_id = baton\.circle_id and cm\.user_id = caller/i);
   assert.match(migration, /create or replace function public\.add_check_in_comment/i);
   assert.match(migration, /insert into public\.check_in_comments[\s\S]*auth\.uid\(\)/i);
   assert.match(migration, /comment.*same.*circle|same.*circle.*comment/i);
