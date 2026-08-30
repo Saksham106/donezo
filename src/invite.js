@@ -1,4 +1,6 @@
-const INVITE_PATTERN = /^[a-z0-9]{12}$/;
+// Circle invites are legacy 12-character codes. New direct-friend invites use
+// 24 hexadecimal characters (96 random bits). Accept both during migration.
+const INVITE_PATTERN = /^(?:[a-z0-9]{12}|[a-f0-9]{24})$/;
 
 export function validateInviteCode(value) {
   const code = String(value || '').trim().toLowerCase();

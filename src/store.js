@@ -33,7 +33,7 @@ function appError(error, fallback) {
 
 function normalizeFriendInviteCode(value) {
   const code = String(value || '').trim().toLowerCase();
-  if (!/^[a-z0-9]{12}$/.test(code)) throw new Error('Enter the 12-character invite code');
+  if (!/^(?:[a-z0-9]{12}|[a-f0-9]{24})$/.test(code)) throw new Error('Enter a valid friend invite code');
   return code;
 }
 
@@ -1334,11 +1334,12 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   function createFriendInvite() {
-    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
     let code = '';
     state.friendInvites ||= [];
     do {
-      code = Array.from({ length: 12 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+      const bytes = new Uint8Array(12);
+      globalThis.crypto.getRandomValues(bytes);
+      code = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
     } while (state.friendInvites.some((invite) => invite.code === code && !invite.usedAt));
     const expiresAt = new Date(Date.now() + (30 * 24 * 60 * 60 * 1000)).toISOString();
     state.friendInvites.push({ code, inviterId: state.currentUserId, expiresAt, usedAt: null, acceptedBy: null });
