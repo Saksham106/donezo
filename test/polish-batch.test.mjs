@@ -58,6 +58,11 @@ test('mutations expose status, haptics, retry and reversible Undo actions', () =
 test('navigation state and scroll positions survive rerenders', () => {
   assert.match(app, /donezo\.activeTab/);
   assert.match(app, /PRIMARY_TABS\.includes\(requestedTab\) \? requestedTab : 'today'/);
+  assert.match(app, /function setActiveTab\(nextTab\)/);
+  assert.match(app, /if \(!habitId\) setActiveTab\('checkin'\)/);
+  assert.match(app, /else if \(step === 3\) setActiveTab\('checkin'\)/);
+  assert.match(app, /else if \(step === 4\) setActiveTab\('squad'\)/);
+  assert.match(app, /createdCircleInvite = null; setActiveTab\('today'\)/);
   assert.match(app, /donezo\.squadFeed/);
   assert.match(app, /screenScroll/);
   assert.match(app, /restoreScreenScroll/);
@@ -81,6 +86,20 @@ test('contextual habit language handles completed and upcoming commitments', () 
   assert.match(contextualHabitStatus({ completedAt: '2026-08-30T10:00:00Z' }, { now: '2026-08-30T10:03:00Z' }), /Done 3m ago/);
   assert.equal(contextualHabitStatus({ completedAt: 'not-a-date' }), 'Done');
   assert.match(contextualHabitStatus({ targetTime: '12:00' }, { now: '2026-08-30T10:00:00', date: '2026-08-30' }), /Due in 2h/);
+  assert.equal(
+    contextualHabitStatus(
+      { targetTime: '12:00', scheduleTimezone: 'UTC' },
+      { now: '2026-08-30T12:00:00Z', date: '2026-08-30' },
+    ),
+    'Due now',
+  );
+  assert.equal(
+    contextualHabitStatus(
+      { targetTime: '12:00', scheduleTimezone: 'America/New_York' },
+      { now: '2026-08-30T16:00:00Z', date: '2026-08-30' },
+    ),
+    'Due now',
+  );
   assert.match(contextualHabitStatus({ targetTime: '9:00' }, { now: '2026-08-30T08:00:00', date: '2026-08-30' }), /Due in 60m/);
 });
 
