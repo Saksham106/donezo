@@ -43,7 +43,7 @@ test('League identifies the current user by name only', () => {
   assert.match(social, /\.league-name\.mine/);
 });
 
-test('mutations expose status, haptics, retry and reversible Undo actions', () => {
+test('mutations expose status, haptics, safe retry and date-stable reversible Undo actions', () => {
   assert.match(app, /function haptic\(/);
   assert.match(app, /mutationStatus/);
   assert.match(app, /data-retry-mutation/);
@@ -53,6 +53,19 @@ test('mutations expose status, haptics, retry and reversible Undo actions', () =
   assert.match(app, /handleUndoArchive/);
   assert.match(store, /restoreHabit/);
   assert.match(app, /mutationStatus === 'failed' && retryMutation && online/);
+  const mutation = slice('async function runMutation', 'async function handleAuth');
+  const ambiguousFailure = mutation.slice(mutation.indexOf('} catch (error)'));
+  assert.doesNotMatch(ambiguousFailure, /retryMutation\s*=\s*\(\)/);
+  assert.match(ambiguousFailure, /retryMutation\s*=\s*null/);
+  assert.match(app, /const checkInDate = today\(\)/);
+  assert.match(app, /completeWithProof\(review\.habitId, checkInDate, review\.file\)/);
+  assert.match(app, /handleUndoCheckIn\(review\.habitId, checkInDate\)/);
+  assert.match(app, /handleUndoCheckIn\(id, checkInDate\)/);
+});
+
+test('schedule edit guard includes timezone changes after today check-in', () => {
+  const submit = slice('async function handleHabitSubmit', 'async function handlePauseSubmit');
+  assert.match(submit, /input\.scheduleTimezone\s*!==\s*\(existing\.scheduleTimezone/);
 });
 
 test('navigation state and scroll positions survive rerenders', () => {
