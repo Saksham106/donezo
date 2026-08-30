@@ -53,5 +53,5 @@ test('new proof rejection requires a confirmation sheet', () => {
 });
 
 test('service worker cache advances for this shell release', () => {
-  assert.match(sw, /donezo-shell-v18/);
+  assert.match(sw, /donezo-shell-v19/);
 });
