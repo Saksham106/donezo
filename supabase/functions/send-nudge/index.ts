@@ -90,6 +90,38 @@ export default {
     ]);
     if (subscriptionError) return json({ error: 'Could not load push subscriptions' }, 500);
 
+    const eventResult = await admin.rpc('enqueue_notification_event', {
+      target_recipient_user_id: nudge.to_user_id,
+      target_notification_category: 'nudge',
+      target_notification_dedupe_key: `nudge:${nudge.id}`,
+      target_notification_group_key: `nudge:${nudge.circle_id}`,
+      target_notification_title: `${sender?.display_name || 'Your friend'} nudged you ⚡`,
+      target_notification_body: nudge.message,
+      target_notification_deep_link: '/?nudges=1',
+      target_notification_circle_id: nudge.circle_id,
+      target_source_user_id: nudge.from_user_id,
+      target_source_nudge_id: nudge.id,
+      target_notification_metadata: {
+        circleId: nudge.circle_id,
+        nudgeId: nudge.id,
+        senderId: nudge.from_user_id,
+        recipientId: nudge.to_user_id,
+      },
+    });
+    if (eventResult.error) {
+      console.error('notification event enqueue failed', eventResult.error.message);
+      return json({ error: 'Could not queue notification' }, 500);
+    }
+    const event = eventResult.data as {
+      accepted?: boolean;
+      suppressed?: boolean;
+      deduped?: boolean;
+      eventId?: string;
+    } | null;
+    if (!event?.accepted) {
+      return json({ delivered: 0, failed: 0, pruned: 0, suppressed: Boolean(event?.suppressed), deduped: Boolean(event?.deduped) });
+    }
+
     webpush.setVapidDetails(
       'https://donezo-lime-two.vercel.app',
       vapid.publicKey,
@@ -100,7 +132,7 @@ export default {
       title: `${sender?.display_name || 'Your friend'} nudged you ⚡`,
       body: nudge.message,
       url: '/?nudges=1',
-      tag: `donezo-nudge-${nudge.id}`,
+      tag: `donezo-${nudge.circle_id}-nudge`,
     });
 
     let delivered = 0;
@@ -130,6 +162,14 @@ export default {
       }
     }
 
-    return json({ delivered, failed, pruned });
+    if (event.eventId && (delivered > 0 || failed > 0)) {
+      const status = delivered > 0 ? 'delivered' : 'failed';
+      const { error: eventUpdateError } = await admin
+        .from('notification_events')
+        .update({ status, delivered_at: delivered > 0 ? new Date().toISOString() : null })
+        .eq('id', event.eventId);
+      if (eventUpdateError) console.error('notification event status update failed', eventUpdateError.message);
+    }
+    return json({ delivered, failed, pruned, suppressed: false, deduped: false });
   },
 };
