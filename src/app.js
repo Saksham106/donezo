@@ -32,10 +32,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 const initialNavigation = parseNotificationDeepLink(window.location.href);
+const PRIMARY_TABS = ['today', 'squad', 'checkin', 'league', 'me'];
+const requestedTab = initialNavigation.tab || localStorage.getItem('donezo.activeTab') || 'today';
 
 let repo = null;
 let session = null;
-let tab = initialNavigation.tab || localStorage.getItem('donezo.activeTab') || 'today';
+let tab = PRIMARY_TABS.includes(requestedTab) ? requestedTab : 'today';
 let proofHabit = null;
 let proofReview = null;
 let proofViewer = null;
@@ -430,7 +432,7 @@ function squadScreen() {
   const visibleActivities = feed.slice(0, feedLimit);
   const groupedActivities = squadFeed === 'activity' ? groupSquadActivity(visibleActivities, state.comments || []) : visibleActivities;
   const activities = groupedActivities.map((activity) => activity.type === 'grouped_checkin'
-    ? `<article class="activity grouped activity-signature checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><p>${activity.items.map((item) => esc(member(item.userId)?.name || 'Friend')).join(', ')}</p></article>`
+    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><p>${activity.items.map((item) => esc(member(item.userId)?.name || 'Friend')).join(', ')}</p></article>`
     : activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';

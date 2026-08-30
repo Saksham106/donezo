@@ -23,7 +23,11 @@ export function contextualHabitStatus(habit = {}, { now = new Date(), date = nul
   const targetTime = habit.targetTime || habit.target_time;
   if (!targetTime) return 'Due today';
   const localDate = date || new Date(now).toISOString().slice(0, 10);
-  const clock = String(targetTime).slice(0, 5);
+  const [rawHour, rawMinute = '0'] = String(targetTime).trim().split(':');
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return 'Due today';
+  const clock = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   const due = new Date(`${localDate}T${clock}:00`);
   const current = new Date(now);
   if (!Number.isFinite(due.getTime()) || !Number.isFinite(current.getTime())) return 'Due today';
