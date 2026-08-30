@@ -9,6 +9,15 @@ import { validateStake } from './stakes.js';
 import { validateCommentBody } from './social-domain.js';
 import { computeEarnedBadges } from './badges-domain.js';
 import { buildMonthlyWrapped } from './wrapped-domain.js';
+import {
+  AUDIENCES,
+  canonicalFriendPair,
+  directFriendIds,
+  normalizedSelectedFriendIds,
+  normalizeAudience,
+  personalizedLeagueMemberIds,
+  snapshotAuthorizedViewers,
+} from './friends-domain.js';
 
 const clone = (value) => structuredClone(value);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -150,6 +159,8 @@ export function mapDatabaseState(user, rows) {
       createdAt: habit.created_at || null,
       updatedAt: habit.updated_at || null,
       ownerTimeZone,
+      audience: habit.audience || AUDIENCES.ONLY_ME,
+      selectedFriendIds: habit.selected_friend_ids || habit.selectedFriendIds || [],
       createdDate: habit.created_at ? localDateInTimeZone(habit.created_at, ownerTimeZone) : null,
       archivedDate: habit.active === false && habit.updated_at
         ? localDateInTimeZone(habit.updated_at, ownerTimeZone)
@@ -157,6 +168,19 @@ export function mapDatabaseState(user, rows) {
     };
   });
   const habitById = new Map(habits.map((habit) => [habit.id, habit]));
+  const audienceRows = rows.checkInAudienceMembers || rows.checkInViewers || [];
+  const audienceSizeByCheckIn = new Map();
+  const authorizedViewersByCheckIn = new Map();
+  for (const viewer of audienceRows) {
+    const checkInId = viewer.check_in_id || viewer.checkInId;
+    const viewerId = viewer.viewer_id || viewer.viewerId;
+    if (!checkInId || !viewerId) continue;
+    if (!authorizedViewersByCheckIn.has(checkInId)) authorizedViewersByCheckIn.set(checkInId, []);
+    authorizedViewersByCheckIn.get(checkInId).push(viewerId);
+  }
+  for (const [checkInId, viewerIds] of authorizedViewersByCheckIn) {
+    audienceSizeByCheckIn.set(checkInId, viewerIds.length);
+  }
   const rawCheckIns = (rows.checkIns || [])
     .filter((checkIn) => habitById.has(checkIn.habit_id))
     .map((checkIn) => ({
@@ -168,6 +192,10 @@ export function mapDatabaseState(user, rows) {
       completedQuantity: Number(checkIn.completed_quantity ?? 1),
       proofPath: checkIn.proof_path,
       note: checkIn.note,
+      authorizedViewerIds: checkIn.authorized_viewer_ids
+        || checkIn.authorizedViewerIds
+        || authorizedViewersByCheckIn.get(checkIn.id)
+        || null,
     }));
   const checkInIds = new Set(rawCheckIns.map((checkIn) => checkIn.id));
   const reactions = (rows.reactions || []).filter((reaction) => checkInIds.has(reaction.check_in_id)).map((reaction) => ({
@@ -177,7 +205,7 @@ export function mapDatabaseState(user, rows) {
     emoji: reaction.emoji,
     createdAt: reaction.created_at,
   }));
-  const rejectedIds = rejectedCheckInIds(rawCheckIns, reactions, memberRows.length);
+  const rejectedIds = rejectedCheckInIds(rawCheckIns, reactions, memberRows.length, audienceSizeByCheckIn);
   const checkIns = rawCheckIns.map((checkIn) => {
     const downvoteUsers = new Set(reactions
       .filter((reaction) => reaction.checkInId === checkIn.id && reaction.emoji === '👎' && reaction.userId !== checkIn.userId)
@@ -375,6 +403,8 @@ export function mapDatabaseState(user, rows) {
 
   return {
     currentUserId: user.id,
+    friendships: rows.friendships || [],
+    friendRequests: rows.friendRequests || [],
     circles,
     circleId: rows.circle?.id || null,
     circleName: rows.circle?.name || null,
@@ -1032,6 +1062,81 @@ export function createSupabaseRepository(client, user) {
     return data.signedUrl;
   }
 
+  async function loadFriends() {
+    const [friendshipsResult, requestsResult, profilesResult] = await Promise.all([
+      client.from('friendships').select('*'),
+      client.from('friend_requests').select('*').order('created_at', { ascending: false }),
+      client.from('profiles').select('id,username,display_name,avatar_url,timezone,created_at'),
+    ]);
+    const failed = [friendshipsResult, requestsResult, profilesResult].find((result) => result.error);
+    if (failed) throw appError(failed.error, 'Could not load friends');
+    const friendships = friendshipsResult.data || [];
+    const requests = requestsResult.data || [];
+    state.friendships = friendships;
+    state.friendRequests = requests;
+    const friendIds = new Set(directFriendIds(user.id, friendships));
+    return {
+      friends: (profilesResult.data || []).filter((profile) => friendIds.has(profile.id)),
+      friendships,
+      requests,
+    };
+  }
+
+  async function inviteFriend(targetUserId) {
+    if (!targetUserId || targetUserId === user.id) throw new Error('Choose another user');
+    const { data, error } = await client.rpc('invite_friend', { target_user_id: targetUserId });
+    if (error) throw appError(error, 'Could not send friend invite');
+    return data;
+  }
+
+  async function acceptFriend(requestId) {
+    if (!requestId) throw new Error('Friend request is required');
+    const { data, error } = await client.rpc('accept_friend', { target_request_id: requestId });
+    if (error) throw appError(error, 'Could not accept friend invite');
+    return data;
+  }
+
+  async function setHabitAudience(habitId, audience, selectedFriendIds = []) {
+    const friendState = await loadFriends();
+    const normalizedAudience = normalizeAudience(audience, selectedFriendIds, user.id, friendState.friendships);
+    const { data, error } = await client.rpc('set_habit_audience', {
+      target_habit_id: habitId,
+      requested_audience: normalizedAudience,
+      requested_friend_ids: normalizedAudience === AUDIENCES.SELECTED_FRIENDS ? selectedFriendIds : [],
+    });
+    if (error) throw appError(error, 'Could not save habit audience');
+    await load(state.circleId);
+    return data;
+  }
+
+  async function loadUnifiedFeed() {
+    const { data, error } = await client.from('check_ins')
+      .select('*, habits!inner(id,owner_id,title,emoji,proof_mode,audience,selected_friend_ids)')
+      .order('completed_at', { ascending: false }).limit(1000);
+    if (error) throw appError(error, 'Could not load friends feed');
+    return data || [];
+  }
+
+  async function loadPersonalizedLeague() {
+    const [friendsResult, habitsResult, checkInsResult] = await Promise.all([
+      loadFriends(),
+      client.from('habits').select('id,owner_id,title,emoji,frequency,audience,selected_friend_ids,active,xp'),
+      client.from('check_ins').select('id,habit_id,user_id,check_date,completed_at,completed_quantity'),
+    ]);
+    if (habitsResult.error) throw appError(habitsResult.error, 'Could not load league habits');
+    if (checkInsResult.error) throw appError(checkInsResult.error, 'Could not load league check-ins');
+    const profile = await ensureProfile();
+    const members = [{ ...profile }, ...(friendsResult.friends || [])]
+      .filter((member, index, all) => all.findIndex((item) => item.id === member.id) === index);
+    const memberIds = new Set(personalizedLeagueMemberIds(user.id, friendsResult.friendships || [], members));
+    return {
+      members: members.filter((member) => memberIds.has(member.id)),
+      habits: habitsResult.data || [],
+      checkIns: checkInsResult.data || [],
+      friendships: friendsResult.friendships || [],
+    };
+  }
+
   return {
     getState,
     load,
@@ -1067,6 +1172,14 @@ export function createSupabaseRepository(client, user) {
     getVapidPublicKey,
     savePushSubscription,
     getProofUrl,
+    loadFriends,
+    inviteFriend,
+    sendFriendInvite: inviteFriend,
+    acceptFriend,
+    acceptFriendInvite: acceptFriend,
+    setHabitAudience,
+    loadUnifiedFeed,
+    loadPersonalizedLeague,
   };
 }
 
@@ -1074,8 +1187,73 @@ export function createSupabaseRepository(client, user) {
 // createSupabaseRepository exclusively.
 export function createMemoryRepository(seed, onChange = () => {}) {
   const state = clone(seed);
+  const legacyVisibleIds = new Set((state.members || []).filter((member) => !member.circleId || member.circleId === state.circleId).map((member) => member.id));
+  for (const checkIn of state.checkIns || []) {
+    if (Array.isArray(checkIn.authorizedViewerIds) || Array.isArray(checkIn.authorized_viewer_ids)) continue;
+    const habit = (state.habits || []).find((item) => item.id === checkIn.habitId || item.id === checkIn.habit_id);
+    const ownerId = checkIn.userId || checkIn.user_id || habit?.ownerId;
+    checkIn.authorizedViewerIds = [...new Set([ownerId, ...legacyVisibleIds].filter(Boolean))];
+  }
   const emit = () => onChange(clone(state));
   function getState() { return clone(state); }
+
+  function asUser(userId) {
+    if (!userId || (state.profiles?.length && !state.profiles.some((profile) => profile.id === userId))) throw new Error('Unknown user');
+    state.currentUserId = userId;
+    return getState();
+  }
+
+  function getFriendIds() {
+    return directFriendIds(state.currentUserId, state.friendships || []);
+  }
+
+  function getFriends() {
+    const ids = new Set(getFriendIds());
+    return (state.profiles || state.members || []).filter((profile) => ids.has(profile.id)).map((profile) => clone(profile));
+  }
+
+  function inviteFriend(targetUserId) {
+    const actor = state.currentUserId;
+    if (!targetUserId || targetUserId === actor) throw new Error('Choose another user');
+    if (state.profiles?.length && !state.profiles.some((profile) => profile.id === targetUserId)) throw new Error('User not found');
+    if (getFriendIds().includes(targetUserId)) throw new Error('You are already friends');
+    state.friendRequests ||= [];
+    const existing = state.friendRequests.find((request) => request.status === 'pending'
+      && ((request.requesterId === actor && request.addresseeId === targetUserId)
+        || (request.requesterId === targetUserId && request.addresseeId === actor)));
+    if (existing) {
+      if (existing.requesterId !== actor) throw new Error('This user already invited you');
+      return clone(existing);
+    }
+    const request = { id: uid('friend-request'), requesterId: actor, addresseeId: targetUserId, status: 'pending' };
+    state.friendRequests.push(request);
+    emit();
+    return clone(request);
+  }
+
+  function acceptFriend(requestId) {
+    const request = (state.friendRequests || []).find((item) => item.id === requestId
+      && item.addresseeId === state.currentUserId && item.status === 'pending');
+    if (!request) throw new Error('Friend request is not open for this recipient');
+    const [userA, userB] = canonicalFriendPair(request.requesterId, request.addresseeId);
+    state.friendships ||= [];
+    if (!state.friendships.some((friendship) => friendship.user_a === userA && friendship.user_b === userB)) {
+      state.friendships.push({ user_a: userA, user_b: userB });
+    }
+    request.status = 'accepted';
+    request.respondedAt = new Date().toISOString();
+    emit();
+    return clone({ user_a: userA, user_b: userB, status: request.status, requestId });
+  }
+
+  function addFriendForTest(friendId) {
+    const [userA, userB] = canonicalFriendPair(state.currentUserId, friendId);
+    state.friendships ||= [];
+    if (!state.friendships.some((friendship) => friendship.user_a === userA && friendship.user_b === userB)) {
+      state.friendships.push({ user_a: userA, user_b: userB });
+    }
+    emit();
+  }
 
   function toggleHabit(habitId, date, proofUrl) {
     const existingIndex = state.checkIns.findIndex((checkIn) => checkIn.habitId === habitId && checkIn.userId === state.currentUserId && checkIn.date === date);
@@ -1094,6 +1272,8 @@ export function createMemoryRepository(seed, onChange = () => {}) {
         completedAt: new Date().toISOString(),
         completedQuantity: Number(habit.targetQuantity ?? 1),
         proofUrl: proofUrl || null,
+        proofPath: proofUrl || null,
+        authorizedViewerIds: snapshotAuthorizedViewers(habit, state.friendships || []),
       });
       member.xp += habit.xp;
     }
@@ -1124,6 +1304,8 @@ export function createMemoryRepository(seed, onChange = () => {}) {
       proofMode: clean.proofMode,
       xp: Number(input.xp || 10),
       active: true,
+      audience: normalizeAudience(input.audience || AUDIENCES.ONLY_ME, input.selectedFriendIds || [], state.currentUserId, state.friendships || []),
+      selectedFriendIds: normalizedSelectedFriendIds(input.audience || AUDIENCES.ONLY_ME, input.selectedFriendIds || [], state.currentUserId, state.friendships || []),
     };
     state.habits.push(habit);
     emit();
@@ -1150,8 +1332,33 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     habit.targetUnit = input.targetUnit || habit.targetUnit || 'count';
     habit.graceMinutes = Number(input.graceMinutes ?? habit.graceMinutes ?? 0);
     habit.scheduleTimezone = input.scheduleTimezone || habit.scheduleTimezone || 'UTC';
+    if (input.audience || input.selectedFriendIds) {
+      habit.audience = normalizeAudience(input.audience || habit.audience || AUDIENCES.ONLY_ME, input.selectedFriendIds || habit.selectedFriendIds || [], state.currentUserId, state.friendships || []);
+      habit.selectedFriendIds = normalizedSelectedFriendIds(habit.audience, input.selectedFriendIds || [], state.currentUserId, state.friendships || []);
+    }
     emit();
     return clone(habit);
+  }
+
+  function setHabitAudience(habitId, audience, selectedFriendIds = []) {
+    const habit = ownedMemoryHabit(habitId);
+    habit.audience = normalizeAudience(audience, selectedFriendIds, state.currentUserId, state.friendships || []);
+    habit.selectedFriendIds = normalizedSelectedFriendIds(habit.audience, selectedFriendIds, state.currentUserId, state.friendships || []);
+    emit();
+    return clone(habit);
+  }
+
+  function getUnifiedFeed() {
+    const viewer = state.currentUserId;
+    return (state.checkIns || []).filter((checkIn) => {
+      const snapshot = checkIn.authorizedViewerIds || checkIn.authorized_viewer_ids;
+      return Array.isArray(snapshot) && snapshot.includes(viewer);
+    }).map((checkIn) => clone(checkIn));
+  }
+
+  function getPersonalizedLeague() {
+    const ids = new Set(personalizedLeagueMemberIds(state.currentUserId, state.friendships || [], state.profiles || state.members || []));
+    return (state.members || state.profiles || []).filter((member) => ids.has(member.id)).sort((a, b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0).map((member) => clone(member));
   }
 
   function pauseHabit(habitId, input) {
@@ -1244,8 +1451,11 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   function addComment(checkInId, body) {
-    sourceCompletion(checkInId);
-    const comment = { id: uid('comment'), checkInId, circleId: state.circleId, authorId: state.currentUserId, body: validateCommentBody(body), createdAt: new Date().toISOString() };
+    const cleanBody = validateCommentBody(body);
+    const checkIn = (state.checkIns || []).find((item) => item.id === checkInId);
+    const snapshot = checkIn?.authorizedViewerIds || checkIn?.authorized_viewer_ids || [];
+    if (!checkIn || !snapshot.includes(state.currentUserId)) throw new Error('Check-in is not visible to you');
+    const comment = { id: uid('comment'), checkInId, circleId: null, authorId: state.currentUserId, body: cleanBody, createdAt: new Date().toISOString() };
     state.comments ||= [];
     state.comments.push(comment);
     emit();
@@ -1253,7 +1463,11 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   function deleteComment(commentId) {
-    const index = (state.comments || []).findIndex((comment) => comment.id === commentId && comment.authorId === state.currentUserId);
+    const index = (state.comments || []).findIndex((comment) => {
+      const checkIn = (state.checkIns || []).find((item) => item.id === comment.checkInId);
+      const snapshot = checkIn?.authorizedViewerIds || checkIn?.authorized_viewer_ids || [];
+      return comment.id === commentId && comment.authorId === state.currentUserId && snapshot.includes(state.currentUserId);
+    });
     if (index < 0) throw new Error('You can only delete your own comment');
     const [deleted] = state.comments.splice(index, 1);
     emit();
@@ -1269,5 +1483,11 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return buildMonthlyWrapped({ month, circleId: state.circleId, members: state.members, habits: state.habits, checkIns: state.checkIns, reactions: state.reactions || [], comments: state.comments || [], batonHandoffs: state.batonHandoffs || [], nudges: state.nudges || [], asOfDate: options.asOfDate, timeZone: options.timeZone || 'UTC', recapEnabled: options.recapEnabled !== false, recapOptOut: Boolean(options.recapOptOut) });
   }
 
-  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit, sendNudge, startBaton, passBaton, setBatonEnabled, addComment, deleteComment, getEarnedBadges, getMonthlyWrapped };
+  return {
+    getState, asUser, getFriends, getFriendIds, inviteFriend, acceptFriend, addFriendForTest,
+    setHabitAudience, getUnifiedFeed, getPersonalizedLeague,
+    toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit,
+    sendNudge, startBaton, passBaton, setBatonEnabled, addComment, deleteComment,
+    getEarnedBadges, getMonthlyWrapped,
+  };
 }
