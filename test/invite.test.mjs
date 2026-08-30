@@ -5,6 +5,7 @@ import {
   buildInviteLink,
   clearInviteParam,
   parseInviteParam,
+  redeemInvite,
   validateInviteCode,
 } from '../src/invite.js';
 
@@ -54,4 +55,36 @@ test('clearInviteParam removes only invite and preserves unrelated query and has
     clearInviteParam('https://donezo.app/?invite=abc123def456&utm=friend#top'),
     'https://donezo.app/?utm=friend#top',
   );
+});
+
+test('redeemInvite routes hardened codes directly to Friends', async () => {
+  const calls = [];
+  const repo = {
+    acceptFriendInvite: async (code) => calls.push(['friend', code]),
+    joinCircle: async (code) => calls.push(['circle', code]),
+  };
+  await redeemInvite(repo, 'abcdef0123456789abcdef01');
+  assert.deepEqual(calls, [['friend', 'abcdef0123456789abcdef01']]);
+});
+
+test('redeemInvite preserves both legacy 12-character invite types', async () => {
+  const friendCalls = [];
+  await redeemInvite({
+    acceptFriendInvite: async (code) => friendCalls.push(['friend', code]),
+    joinCircle: async (code) => friendCalls.push(['circle', code]),
+  }, 'abc123def456');
+  assert.deepEqual(friendCalls, [['friend', 'abc123def456']]);
+
+  const circleCalls = [];
+  await redeemInvite({
+    acceptFriendInvite: async (code) => {
+      circleCalls.push(['friend', code]);
+      throw new Error('Invalid or expired friend invite');
+    },
+    joinCircle: async (code) => circleCalls.push(['circle', code]),
+  }, 'abc123def456');
+  assert.deepEqual(circleCalls, [
+    ['friend', 'abc123def456'],
+    ['circle', 'abc123def456'],
+  ]);
 });

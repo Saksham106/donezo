@@ -9,6 +9,28 @@ export function validateInviteCode(value) {
     : { valid: false, code: null };
 }
 
+export async function redeemInvite(repository, value) {
+  const validated = validateInviteCode(value);
+  if (!validated.valid) throw new Error('Invalid invite code');
+  const { code } = validated;
+
+  if (code.length === 24) {
+    if (typeof repository?.acceptFriendInvite !== 'function') throw new Error('Friend invites are not supported');
+    return repository.acceptFriendInvite(code);
+  }
+
+  if (typeof repository?.acceptFriendInvite === 'function') {
+    try {
+      return await repository.acceptFriendInvite(code);
+    } catch (error) {
+      if (typeof repository?.joinCircle !== 'function' || !/invalid|expired|not found/i.test(error?.message || '')) throw error;
+    }
+  }
+
+  if (typeof repository?.joinCircle === 'function') return repository.joinCircle(code);
+  throw new Error('Invite redemption is not supported');
+}
+
 export function parseInviteParam(input) {
   const url = new URL(input);
   if (!url.searchParams.has('invite')) {

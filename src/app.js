@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
 import { createRefreshCoordinator } from './refresh.js';
-import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, validateInviteCode } from './invite.js';
+import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, redeemInvite, validateInviteCode } from './invite.js';
 import { createProofReviewState, formatProofFileSize, transitionProofReview, validateProofFile } from './proof.js';
 import {
   BADGE_CATALOG,
@@ -80,7 +80,7 @@ let createdCircleInvite = null;
 let createdFriendInvite = null;
 let pendingInvite = parseInviteParam(window.location.href);
 let inviteMessage = pendingInvite.present && !pendingInvite.valid
-  ? 'That invite link looks busted. Paste a fresh 12-character code or dismiss it.'
+  ? 'That invite link looks busted. Paste a fresh invite code or dismiss it.'
   : '';
 let refreshCoordinator = null;
 let bootGeneration = 0;
@@ -312,7 +312,7 @@ function createCircleForm(primary = false, compact = false) {
 
 function joinCircleForm(primary = false, compact = false) {
   const value = pendingInvite.present ? (pendingInvite.valid ? pendingInvite.code : pendingInvite.raw || '') : '';
-  return `<form id="join-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join Friends</h2><p class="form-intro">${pendingInvite.present ? 'Confirm the invite code, then connect.' : 'Paste the 12-character code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="12" autocapitalize="none" required placeholder="a1b2c3d4e5f6" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join Friends</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
+  return `<form id="join-circle-form" class="form ${compact ? 'embedded-squad-form' : primary ? 'onboard-primary' : 'onboard-secondary'}"><h2>Join Friends</h2><p class="form-intro">${pendingInvite.present ? 'Confirm the invite code, then connect.' : 'Paste the invite code a friend sent you.'}</p>${inviteMessage ? `<div class="form-message">${esc(inviteMessage)}</div>` : ''}<label>Invite code<input name="code" minlength="12" maxlength="24" autocapitalize="none" required placeholder="Paste friend code" value="${esc(value)}"></label><button class="btn ${primary ? 'primary ' : ''}full" ${busy ? 'disabled' : ''}>Join Friends</button>${pendingInvite.present ? '<button class="text-btn compact" type="button" data-dismiss-invite>Not this invite</button>' : ''}</form>`;
 }
 
 function onboardingScreen() {
@@ -324,7 +324,7 @@ function onboardingScreen() {
 }
 
 function creatorInviteScreen() {
-  const code = createdCircleInvite || getState()?.circleInviteCode || '';
+  const code = activeInviteCode();
   return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">FRIENDS READY</p><h1>You’re in. Bring your people.</h1><p>Share the invite now, or jump into the app and do it later from Friends.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
 }
 
@@ -1449,6 +1449,14 @@ async function handleCreateCircle(event) {
     settingsSheetOpen = false;
     clearPendingInvite();
     createdCircleInvite = getState().circleInviteCode;
+    if (typeof repo.createFriendInvite === 'function') {
+      try {
+        createdFriendInvite = await repo.createFriendInvite();
+        createdCircleInvite = null;
+      } catch {
+        // Keep legacy circle sharing available if friend invite creation is temporarily unavailable.
+      }
+    }
     return true;
   }, 'Squad created');
 }
@@ -1468,7 +1476,7 @@ async function handleJoinCircle(event) {
   const submit = event.currentTarget.querySelector('button[type="submit"]') || event.currentTarget.querySelector('button');
   if (submit) { submit.disabled = true; submit.textContent = 'Joining…'; }
   try {
-    await (repo.acceptFriendInvite ? repo.acceptFriendInvite(validation.code) : repo.joinCircle(validation.code));
+    await redeemInvite(repo, validation.code);
     localStorage.setItem('donezo.activeSquadId', getState().circleId);
     settingsSheetOpen = false;
     pendingInvite = { present: false, valid: false, code: null, raw: null };
@@ -1878,7 +1886,7 @@ async function handleCreateFriendInvite() {
 }
 
 async function handleShareInvite() {
-  if (!validateInviteCode(activeInviteCode()).valid && typeof repo?.createFriendInvite === 'function') {
+  if (!createdFriendInvite && !getState()?.friendInviteCode && typeof repo?.createFriendInvite === 'function') {
     await handleCreateFriendInvite();
   }
   const code = activeInviteCode();
