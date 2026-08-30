@@ -24,12 +24,15 @@ test('weekday selection automatically changes schedule to specific days', () => 
   assert.match(app, /scheduleFrequency\.value = 'selected_weekdays'/);
 });
 
-test('proof reactions expose selected state, tallies, and explicit feedback', () => {
+test('proof reactions expose selected state, tallies, and explicit feedback without colliding with the habit emoji picker', () => {
   assert.match(app, /aria-pressed="\$\{active\}"/);
   assert.match(app, /visibleReactionCounts/);
   assert.match(app, /Math\.max\(1, Number\(visibleReactionCounts\[emoji\]/);
   assert.match(app, /reaction-summary/);
   assert.match(app, /You reacted/);
+  assert.match(app, /data-reaction-emoji="\$\{emoji\}"/);
+  assert.match(app, /element\.dataset\.reactionEmoji/);
+  assert.doesNotMatch(app, /data-reaction="\$\{activity\.checkInId\}" data-emoji=/);
   assert.match(social, /\.reaction-btn\.active/);
   assert.match(social, /\.reaction-summary/);
 });
