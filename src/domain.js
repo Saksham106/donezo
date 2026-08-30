@@ -141,3 +141,13 @@ export function rankMembersByWeeklyScore(members, habits, checkIns, todayString)
     .sort((a, b) => b.weeklyScore - a.weeklyScore || (b.currentStreak || 0) - (a.currentStreak || 0) || a.name.localeCompare(b.name))
     .map((member, index) => ({ ...member, rank: index + 1 }));
 }
+
+export {
+  weeklyChallengeProgress,
+  missedHabitRecoveryState,
+  createRecoveryEvent,
+  applyRecovery,
+  calculateBounceBackMetrics,
+  buildWeeklySquadRecap,
+  buildPrivacySafeExportPayload,
+} from './social-domain.js';
