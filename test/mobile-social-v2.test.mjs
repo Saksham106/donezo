@@ -15,24 +15,43 @@ test('Today is reduced to one progress summary and the habit list', () => {
   assert.doesNotMatch(source, /rankMembersByWeeklyScore/);
 });
 
-test('Squad uses a People sheet and separates activity from proofs', () => {
+test('Squad uses a People sheet and truly separates activity from proofs', () => {
   const source = app.slice(app.indexOf('function squadScreen()'), app.indexOf('function challengeProgress'));
   assert.match(source, /data-people-open/);
   assert.match(source, /squad-feed-tabs/);
   assert.match(source, /data-squad-feed="activity"/);
   assert.match(source, /data-squad-feed="proofs"/);
+  assert.match(source, /filter\(\(activity\) => !activity\.proofPath\)/);
   assert.doesNotMatch(source, /<div class="friends-list">/);
+  assert.match(source, /aria-label="Refresh squad"/);
+  assert.doesNotMatch(source, />Refresh<\/button>/);
   assert.match(app, /function peopleSheet\(\)/);
   assert.match(app, /data-invite-from-people/);
   assert.match(app, /people:/);
 });
 
-test('League puts standings before optional social extras and challenge creation is compact', () => {
+test('Baton is discoverable before the first check-in', () => {
+  const source = app.slice(app.indexOf('function batonCard()'), app.indexOf('function squadScreen()'));
+  assert.match(source, /data-baton-checkin/);
+  assert.match(source, /data-invite-from-baton/);
+  assert.doesNotMatch(source, /if \(!eligibleCheckIn \|\| !hasFriend\) return ''/);
+});
+
+test('League puts standings first and uses direct compact social actions', () => {
   const source = app.slice(app.indexOf('function leagueScreen()'), app.indexOf('function stakeHistory()'));
   assert.ok(source.indexOf('league-list') < source.indexOf('activeChallengeCard()'));
   assert.match(source, /data-challenge/);
   assert.match(source, /league-header-action/);
+  assert.match(source, /league-tools/);
+  assert.doesNotMatch(source, /league-more/);
+  assert.doesNotMatch(source, /<details/);
   assert.doesNotMatch(source, /empty-challenge/);
+});
+
+test('mobile social stylesheet is complete and not accidentally swallowed by a malformed rule', () => {
+  assert.doesNotMatch(social, /\[truncated\]/);
+  assert.match(social, /\.activation-card\{[^}]*padding:/s);
+  assert.match(social, /\.pwa-update-banner\{[^}]*position:fixed/s);
 });
 
 test('mobile controls have robust touch targets and a thicker bottom bar anchored to the bottom', () => {

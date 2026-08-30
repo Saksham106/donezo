@@ -313,7 +313,7 @@ function activationCard() {
   const completed = steps.filter((step) => step.done).length;
   if (completed === steps.length) return '';
   const next = steps.findIndex((step) => !step.done);
-  return `<section class="activation-card"><div class="activation-head"><div><span>First shared win</span><strong>${completed}/${steps.length} ready</strong></div><span>${Math.round((completed / steps.length) * 100)}%</span></div><div class="activation-steps">${steps.map((step) => `<span class="${step.done ? 'done' : ''}">${step.done ? '✓' : '○'} ${esc(step.label)}</span>`).join('')}</div><button class="btn primary full" type="button" data-activation-next="${next}">${['Set up squad', 'Add habit', 'Invite friend', 'Check in', 'Open Squad'][next]}</button></section>`;
+  return `<section class="activation-card"><div class="activation-mark" aria-hidden="true">${completed}/${steps.length}</div><div class="activation-copy"><span>Next setup step</span><strong>${esc(steps[next].label)}</strong><small>Finish this once, then it gets out of your way.</small></div><button class="btn primary small-btn" type="button" data-activation-next="${next}">${['Set up', 'Add', 'Invite', 'Check in', 'Open'][next]}</button></section>`;
 }
 
 function habitCard(habit, actionMode = false) {
@@ -379,7 +379,8 @@ function batonCard() {
   const eligibleCheckIn = state.checkIns.find((item) => item.userId === state.currentUserId && !item.invalid);
   const hasFriend = state.members.some((person) => person.id !== state.currentUserId);
   if (!baton) {
-    if (!eligibleCheckIn || !hasFriend) return '';
+    if (!hasFriend) return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Pass the momentum</strong><small>Invite someone, then hand off the next move.</small></div><button class="btn small-btn" type="button" data-invite-from-baton>Invite</button></section>`;
+    if (!eligibleCheckIn) return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Start with one check-in</strong><small>Finish something, then pick who goes next.</small></div><button class="btn small-btn" type="button" data-baton-checkin>Check in</button></section>`;
     return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>Pass the momentum</strong><small>You checked in. Pick who goes next.</small></div><button class="btn small-btn" type="button" data-baton-open>Start</button></section>`;
   }
   return `<section class="baton-card"><span class="baton-mark" aria-hidden="true">↗</span><div class="baton-copy"><span>SQUAD BATON</span><strong>The baton is with ${esc(holder?.name || 'a friend')}</strong><small>${mine ? 'Your turn. Check in, then pass it on.' : 'One person at a time. No spam, no scoreboard.'}</small></div>${mine && eligibleCheckIn && hasFriend ? '<button class="btn small-btn" type="button" data-pass-baton>Pass</button>' : ''}</section>`;
@@ -389,12 +390,12 @@ function squadScreen() {
   const state = getState();
   const feed = squadFeed === 'proofs'
     ? state.friendActivities.filter((activity) => activity.proofPath)
-    : state.friendActivities;
+    : state.friendActivities.filter((activity) => !activity.proofPath);
   const visibleActivities = feed.slice(0, feedLimit);
   const activities = visibleActivities.map((activity) => activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
-  const refreshButton = `<button class="btn small-btn refresh-btn ${manualRefreshLoading ? 'loading' : ''}" data-manual-refresh ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span>${manualRefreshLoading ? 'Refreshing…' : 'Refresh'}</button>`;
+  const refreshButton = `<button class="refresh-btn ${manualRefreshLoading ? 'loading' : ''}" type="button" data-manual-refresh aria-label="Refresh squad" title="Refresh" ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span></button>`;
   const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View squad people" title="People">${icon('people')}</button>`;
   const empty = squadFeed === 'proofs'
     ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Photo check-ins will land here.</p></div>'
@@ -509,7 +510,7 @@ function leagueScreen() {
   const myConsent = stake ? (state.stakeConsents || []).find((item) => item.stakeId === stake.id && item.userId === me().id) : null;
   const canResolve = stake?.status === 'active' && stake.createdBy === me().id && today() > stake.endsOn;
   const stakeCard = stake ? `<section class="stake-card"><div><span>${stake.status === 'active' ? 'Stake is live' : 'Squad opt-in'}</span><strong>${esc(stake.reward || stake.consequence)}</strong><small>${esc(stake.rule.replaceAll('_', ' '))} · ${stake.status === 'active' ? `ends ${esc(stake.endsOn)}` : 'rules lock when everyone accepts'}</small></div>${stake.status === 'pending' && myConsent?.status !== 'accepted' ? `<div class="stake-actions"><button class="btn primary" data-stake-response="accepted" data-stake-id="${stake.id}">I’m in</button><button class="btn" data-stake-response="declined" data-stake-id="${stake.id}">Pass</button></div>` : canResolve ? `<button class="btn primary" data-resolve-stake="${stake.id}">Settle it</button>` : ''}</section>` : `<button class="btn full stake-create" type="button" data-stake>Add a friendly stake</button>`;
-  return `<div class="league-title-row">${pageHeading('League', 'THIS WEEK', 'Receipts decide the table.')}<button class="league-header-action" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('challenge')}</button></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row ${item.id === me().id ? 'mine' : ''}"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong>${esc(item.name)}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${activeChallengeCard()}<details class="league-more"><summary>Challenges & friendly stakes</summary><div>${challengeHistory()}${stakeCard}${stakeHistory()}</div></details>`;
+  return `<div class="league-title-row">${pageHeading('League', 'THIS WEEK', 'Receipts decide the table.')}<button class="league-header-action" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('challenge')}</button></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row ${item.id === me().id ? 'mine' : ''}"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong>${esc(item.name)}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${activeChallengeCard()}<div class="league-tools">${stake ? stakeCard : `<button type="button" data-stake>${icon('bolt')}<span><strong>Friendly stake</strong><small>Make it interesting</small></span></button>`}</div>${challengeHistory()}${stake ? stakeHistory() : ''}`;
 }
 
 function stakeHistory() {
@@ -888,6 +889,8 @@ function render() {
   app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => { commentCheckInId = element.dataset.commentOpen; render(); }; });
   app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
   app.querySelectorAll('[data-baton-open], [data-pass-baton]').forEach((element) => { element.onclick = () => { batonSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-baton-checkin]').forEach((element) => { element.onclick = () => { tab = 'checkin'; render(); }; });
+  app.querySelectorAll('[data-invite-from-baton]').forEach((element) => { element.onclick = () => { inviteSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-badge-cabinet]').forEach((element) => { element.onclick = () => { badgeCabinetOpen = true; render(); }; });
   app.querySelectorAll('[data-wrapped-open]').forEach((element) => { element.onclick = () => { wrappedOpen = true; wrappedIndex = 0; render(); }; });
   app.querySelectorAll('[data-wrapped-next]').forEach((element) => { element.onclick = () => { wrappedIndex += 1; render(); }; });
