@@ -51,6 +51,8 @@ let challengeSheetOpen = false;
 let stakeSheetOpen = false;
 let feedLimit = 12;
 let inviteSheetOpen = false;
+let peopleSheetOpen = false;
+let squadFeed = 'activity';
 let createdCircleInvite = null;
 let pendingInvite = parseInviteParam(window.location.href);
 let inviteMessage = pendingInvite.present && !pendingInvite.valid
@@ -141,6 +143,8 @@ function icon(name) {
     trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0Z"/><path d="M12 13v4"/><path d="M8 20h8"/><path d="M6 6H4v2a3 3 0 0 0 3 3"/><path d="M18 6h2v2a3 3 0 0 1-3 3"/>',
     user: '<circle cx="12" cy="8" r="3.5"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/>',
     userPlus: '<circle cx="9" cy="8" r="3"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M19 8v6"/><path d="M16 11h6"/>',
+    people: '<path d="M15.5 20v-1.2a3.8 3.8 0 0 0-3.8-3.8H7.3a3.8 3.8 0 0 0-3.8 3.8V20"/><circle cx="9.5" cy="8" r="3"/><path d="M16 12.5a3 3 0 0 1 4.5 2.6V20"/><path d="M16.5 5.3a3 3 0 0 1 0 5.4"/>',
+    challenge: '<path d="M7 4h10v5a5 5 0 0 1-10 0Z"/><path d="M12 14v3"/><path d="M8.5 20h7"/><path d="M5 6H3v1.5A3.5 3.5 0 0 0 6.5 11"/><path d="M19 6h2v1.5a3.5 3.5 0 0 1-3.5 3.5"/>',
     bolt: '<path d="m13 2-8 11h6l-1 9 9-12h-6z"/>',
     share: '<path d="M12 16V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v7h14v-7"/>',
   };
@@ -316,14 +320,10 @@ function todayScreen() {
   const habits = sortedTodayHabits(dueHabitsFor(state.currentUserId, today(), state));
   const progress = progressFor(state.currentUserId);
   const remaining = progress.total - progress.completed;
-  const ranked = rankMembersByWeeklyScore(state.members, state.habits, state.checkIns, today());
-  const mine = ranked.find((item) => item.id === state.currentUserId);
-  const next = habits.find((habit) => !done(habit.id));
   const firstName = me().name.split(/\s+/)[0];
   const list = habits.length ? habits.map((habit) => habitCard(habit)).join('') : '<div class="empty"><b>No habits yet.</b><p>Add your first habit from Me.</p><button class="btn primary" data-open-habit>Add habit</button></div>';
-  const misses = missedHabits();
-  const recovery = misses.length ? `<section class="recovery-callout"><div><span>Missed yesterday</span><strong>${esc(misses[0].emoji)} ${esc(misses[0].title)}</strong><small>The miss stays honest. The comeback starts now.</small></div><button class="btn" data-recover-habit="${misses[0].id}" data-missed-date="${misses[0].missedDate}">Bounce back</button></section>` : '';
-  return `${pageHeading(`${greeting()}, ${firstName}`, displayDate(), todayStatus(progress))}${activationCard()}<section class="metric-strip"><div><b>${remaining}</b><small>Left</small></div><div><b>${progress.percent}%</b><small>Today</small></div><div><b>🔥 ${me().currentStreak}</b><small>Streak</small></div><div><b>#${mine?.rank || '—'}</b><small>League</small></div></section>${next ? `<section class="next-up ${checkInFor(next.id)?.invalid ? 'rejected' : ''}"><div><span class="eyebrow">NEXT UP</span><strong>${esc(next.emoji)} ${esc(next.title)}</strong><small>${checkInFor(next.id)?.invalid ? 'Your proof got cooked. Run it back 😭' : `${esc(formatTime(next.targetTime))}${next.proofMode === 'photo' ? ' · Add proof' : ''}`}</small></div><button class="btn" ${next.proofMode === 'photo' && !checkInFor(next.id)?.invalid ? `data-quick-proof="${next.id}"` : `data-habit="${next.id}"`}>${checkInFor(next.id)?.invalid ? 'Redo' : next.proofMode === 'photo' ? 'Camera' : 'Done'}</button></section>` : ''}${recovery}<div class="section-head"><h2>Today</h2><span>${progress.completed}/${progress.total}</span></div><div class="habit-list">${list}</div>`;
+  const progressCopy = progress.total === 0 ? 'Add one thing worth showing up for.' : remaining === 0 ? 'Clean sweep. You are done for today.' : `${remaining} ${remaining === 1 ? 'thing' : 'things'} left.`;
+  return `${pageHeading(`${greeting()}, ${firstName}`, displayDate(), todayStatus(progress))}${activationCard()}<section class="today-progress"><div><strong>${progress.completed}/${progress.total}</strong><span>${esc(progressCopy)}</span></div><div class="bar" role="progressbar" aria-label="Today progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}"><i style="width:${progress.percent}%"></i></div></section><div class="section-head first"><h2>Today</h2><span>${progress.percent}%</span></div><div class="habit-list">${list}</div>`;
 }
 
 function checkInScreen() {
@@ -335,7 +335,7 @@ function checkInScreen() {
   return `${pageHeading('Check in', `${progress.completed}/${progress.total} DONE TODAY`, incomplete.length ? `${incomplete.length} left. Tap it and get the receipt.` : 'You are clear. Touch grass or something.')}<section class="checkin-progress"><div><b>${progress.percent}%</b><span>complete</span></div><div class="bar"><i style="width:${progress.percent}%"></i></div></section><div class="section-head"><h2>Remaining</h2><span>${incomplete.length}</span></div><div class="habit-list">${incomplete.length ? incomplete.map((habit) => habitCard(habit, true)).join('') : '<div class="empty compact-empty"><b>All done.</b><p>Your squad has no ammo today.</p></div>'}</div>${completed.length ? `<div class="section-head subdued"><h2>Completed</h2><span>${completed.length}</span></div><div class="habit-list completed-list">${completed.map((habit) => habitCard(habit, true)).join('')}</div>` : ''}`;
 }
 
-function activityCard(activity) {
+function activityCard(activity, { showProofActions = false } = {}) {
   const actor = member(activity.userId);
   const mine = activity.userId === me().id;
   if (activity.type === 'callout') {
@@ -350,26 +350,26 @@ function activityCard(activity) {
   }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(getState().members.length);
-  const proofActions = activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">View proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
+  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">View proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
   const positiveReactions = `<div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => `<button type="button" class="reaction-btn ${activity.userReactions?.includes(emoji) ? 'active' : ''}" data-reaction="${activity.checkInId}" data-emoji="${emoji}" aria-label="React ${emoji}">${emoji}${activity.reactionCounts?.[emoji] ? ` ${activity.reactionCounts[emoji]}` : ''}</button>`).join('')}</div>`;
   return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
 function squadScreen() {
   const state = getState();
-  const people = state.members;
-  const peopleRows = people.map((person) => {
-    const progress = progressFor(person.id);
-    const isMe = person.id === state.currentUserId;
-    return `<div class="friend-row"><button class="friend-profile-trigger" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${isMe ? `${esc(person.name)} · You` : esc(person.name)}</strong><small>${progress.completed}/${progress.total} today · 🔥 ${person.currentStreak}</small></span></button>${isMe ? '<span class="you-pill">you</span>' : `<button class="btn small-btn" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</div>`;
-  }).join('');
-  const visibleActivities = state.friendActivities.slice(0, feedLimit);
-  const activities = visibleActivities.map(activityCard).join('');
-  const loadMore = state.friendActivities.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
+  const feed = squadFeed === 'proofs'
+    ? state.friendActivities.filter((activity) => activity.proofPath)
+    : state.friendActivities;
+  const visibleActivities = feed.slice(0, feedLimit);
+  const activities = visibleActivities.map((activity) => activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
+  const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
   const refreshButton = `<button class="btn small-btn refresh-btn ${manualRefreshLoading ? 'loading' : ''}" data-manual-refresh ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span>${manualRefreshLoading ? 'Refreshing…' : 'Refresh'}</button>`;
-  const inviteButton = `<button class="invite-icon-btn" type="button" data-invite-open aria-label="Invite friends" title="Invite friends">${icon('userPlus')}</button>`;
-  return `${pageHeading('Squad', `${state.members.length} PEOPLE · ${state.circleName || 'YOUR SQUAD'}`, 'Receipts, comebacks, and friends who keep you honest.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${inviteButton}</div></div><div class="section-head first"><h2>People</h2><span>${people.length}</span></div><div class="friends-list">${peopleRows}</div><div class="section-head"><h2>Recent activity</h2><span>${state.friendActivities.length}</span></div><div class="activity-list">${activities || '<div class="empty compact-empty"><b>No receipts yet.</b><p>Somebody has to go first.</p></div>'}${loadMore}</div>`;
+  const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View squad people" title="People">${icon('people')}</button>`;
+  const empty = squadFeed === 'proofs'
+    ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Photo check-ins will land here.</p></div>'
+    : '<div class="empty compact-empty"><b>No activity yet.</b><p>Somebody has to go first.</p></div>';
+  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD', 'See what happened. Hype your people.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div><div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
 function challengeProgress(challenge) {
@@ -390,7 +390,7 @@ function challengeProgress(challenge) {
 
 function activeChallengeCard() {
   const challenge = (getState().challenges || []).find((item) => item.status === 'active' && item.endsOn >= today());
-  if (!challenge) return `<section class="challenge-card empty-challenge"><div><span>Weekly challenge</span><strong>Give the squad one goal.</strong><small>Shared progress. No complicated game layer.</small></div><button class="btn" type="button" data-challenge>Start one</button></section>`;
+  if (!challenge) return '';
   const progress = challengeProgress(challenge);
   return `<section class="challenge-card"><div class="challenge-copy"><span>Weekly challenge · ${esc(progress.status.replace('_', ' '))}</span><strong>${esc(challenge.title)}</strong><small>${progress.value}/${progress.total} · ends ${esc(challenge.endsOn)}</small></div><div class="challenge-meter" role="progressbar" aria-label="Challenge progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}"><i style="width:${progress.percent}%"></i></div><b>${progress.percent}%</b></section>`;
 }
@@ -479,7 +479,7 @@ function leagueScreen() {
   const myConsent = stake ? (state.stakeConsents || []).find((item) => item.stakeId === stake.id && item.userId === me().id) : null;
   const canResolve = stake?.status === 'active' && stake.createdBy === me().id && today() > stake.endsOn;
   const stakeCard = stake ? `<section class="stake-card"><div><span>${stake.status === 'active' ? 'Stake is live' : 'Squad opt-in'}</span><strong>${esc(stake.reward || stake.consequence)}</strong><small>${esc(stake.rule.replaceAll('_', ' '))} · ${stake.status === 'active' ? `ends ${esc(stake.endsOn)}` : 'rules lock when everyone accepts'}</small></div>${stake.status === 'pending' && myConsent?.status !== 'accepted' ? `<div class="stake-actions"><button class="btn primary" data-stake-response="accepted" data-stake-id="${stake.id}">I’m in</button><button class="btn" data-stake-response="declined" data-stake-id="${stake.id}">Pass</button></div>` : canResolve ? `<button class="btn primary" data-resolve-stake="${stake.id}">Settle it</button>` : ''}</section>` : `<button class="btn full stake-create" type="button" data-stake>Add a friendly stake</button>`;
-  return `${pageHeading('League', 'THIS WEEK', 'No fake XP. Just receipts.')}${activeChallengeCard()}${challengeHistory()}${stakeCard}${stakeHistory()}<section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments counted${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row ${item.id === me().id ? 'mine' : ''}"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong>${esc(item.name)}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${weeklyRecapCard()}`;
+  return `<div class="league-title-row">${pageHeading('League', 'THIS WEEK', 'Receipts decide the table.')}<button class="league-header-action" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('challenge')}</button></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${ranked.map((item) => `<div class="league-row ${item.id === me().id ? 'mine' : ''}"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong>${esc(item.name)}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small></span><strong>${item.weeklyScore}%</strong></div>`).join('')}</div>${activeChallengeCard()}<details class="league-more"><summary>Challenges & friendly stakes</summary><div>${challengeHistory()}${stakeCard}${stakeHistory()}</div></details>`;
 }
 
 function stakeHistory() {
@@ -572,6 +572,17 @@ function inviteSheet() {
   if (!inviteSheetOpen) return '';
   const code = getState()?.circleInviteCode || '';
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet invite-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Bring in the squad</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share the link. They’ll still have to confirm before joining.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><div class="raw-code-row"><div><small>Raw code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div></section></div>`;
+}
+
+function peopleSheet() {
+  if (!peopleSheetOpen) return '';
+  const state = getState();
+  const rows = state.members.map((person) => {
+    const progress = progressFor(person.id);
+    const isMe = person.id === state.currentUserId;
+    return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${progress.completed}/${progress.total} today · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
+  }).join('');
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet" role="dialog" aria-modal="true" aria-label="Squad people" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${esc(state.circleName || 'SQUAD')}</p><h2>${state.members.length} ${state.members.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite people</button></section></div>`;
 }
 
 function friendProfileSheet() {
@@ -761,13 +772,16 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${inviteSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => { tab = element.dataset.tab; closeSheets(); render(); }; });
   app.querySelector('[data-squad-switcher]')?.addEventListener('change', (event) => handleSquadSelect(event.target.value));
   app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { proofHabit = element.dataset.quickProof; chooseProofInput(proofInput); }; });
   app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.emoji); });
+  app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; feedLimit = 12; render(); }; });
+  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-friend-profile]').forEach((element) => { element.onclick = () => { friendProfileUserId = element.dataset.friendProfile; render(); }; });
   app.querySelectorAll('[data-recover-habit]').forEach((element) => { element.onclick = () => { recoveryHabitId = element.dataset.recoverHabit; render(); }; });
   app.querySelectorAll('[data-challenge]').forEach((element) => { element.onclick = () => { challengeSheetOpen = true; render(); }; });
@@ -809,7 +823,7 @@ function render() {
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { tab = 'today'; closeSheets(); render(); }; });
   app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; archiveConfirm = false; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; archiveConfirm = false; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
+  app.querySelectorAll('[data-close-habit], [data-close-settings], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
   app.querySelector('#habit-form')?.addEventListener('submit', handleHabitSubmit);
   app.querySelector('#pause-form')?.addEventListener('submit', handlePauseSubmit);
@@ -854,6 +868,7 @@ function closeSheets() {
   stakeSheetOpen = false;
   nudgeInboxOpen = false;
   inviteSheetOpen = false;
+  peopleSheetOpen = false;
   proofHabit = null;
   clearProofReview();
   proofViewer = null;

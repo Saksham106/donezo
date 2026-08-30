@@ -31,17 +31,19 @@ test('mobile shell locks zoom and contains itself inside the physical viewport',
 test('bottom nav caps oversized iOS safe-area insets and sits low', () => {
   assert.match(css, /--app-safe-bottom:\s*clamp\(\.25rem,\s*env\(safe-area-inset-bottom\),\s*1\.5rem\)/);
   assert.match(css, /\.nav\{[^}]*padding:[^;}]*var\(--app-safe-bottom\)/s);
-  assert.match(css, /\.nav-btn\{[^}]*min-height:\s*2\.65rem/s);
+  assert.match(css, /\.nav-btn\{[^}]*min-height:\s*3\.35rem/s);
   assert.match(css, /\.nav-btn\.checkin \.nav-icon\{[^}]*margin-top:\s*0/s);
   assert.match(css, /@media\(min-width:700px\)[\s\S]*#app\{position:fixed;inset:var\(--space-6\) 0 0;height:auto/);
   assert.match(css, /@media\(min-width:700px\)[\s\S]*\.app-shell\{[^}]*height:100%/);
   assert.doesNotMatch(css, /\.nav\{[^}]*padding:[^;}]*calc\([^;}]*env\(safe-area-inset-bottom\)/s);
 });
 
-test('Squad invite uses an add-person glyph instead of a share arrow', () => {
-  assert.match(app, /userPlus:/);
-  assert.match(app, /data-invite-open[^`]*\$\{icon\('userPlus'\)\}/s);
-  assert.doesNotMatch(app, /data-invite-open[^`]*\$\{icon\('share'\)\}/s);
+test('Squad uses a People entry point and keeps Invite inside the People sheet', () => {
+  assert.match(app, /people:/);
+  assert.match(app, /data-people-open[^`]*\$\{icon\('people'\)\}/s);
+  assert.match(app, /function peopleSheet/);
+  assert.match(app, /data-invite-from-people[^`]*\$\{icon\('userPlus'\)\}/s);
+  assert.doesNotMatch(app, /data-people-open[^`]*\$\{icon\('share'\)\}/s);
 });
 
 test('social UX exposes settings, nudge inbox/composer, proof votes and invite on Squad', () => {
