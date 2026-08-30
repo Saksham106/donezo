@@ -49,6 +49,7 @@ test('mutations expose status, haptics, retry and reversible Undo actions', () =
   assert.match(app, /handleUndoCommentDelete/);
   assert.match(app, /handleUndoArchive/);
   assert.match(store, /restoreHabit/);
+  assert.match(app, /mutationStatus === 'failed' && retryMutation && online/);
 });
 
 test('navigation state and scroll positions survive rerenders', () => {
@@ -73,6 +74,7 @@ test('activity grouping and visual signatures avoid grouping proofs or comments'
 
 test('contextual habit language handles completed and upcoming commitments', () => {
   assert.match(contextualHabitStatus({ completedAt: '2026-08-30T10:00:00Z' }, { now: '2026-08-30T10:03:00Z' }), /Done 3m ago/);
+  assert.equal(contextualHabitStatus({ completedAt: 'not-a-date' }), 'Done');
   assert.match(contextualHabitStatus({ targetTime: '12:00' }, { now: '2026-08-30T10:00:00', date: '2026-08-30' }), /Due in 2h/);
 });
 

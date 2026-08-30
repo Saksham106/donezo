@@ -199,7 +199,7 @@ function offlineIndicator() {
 function mutationIndicator() {
   if (mutationStatus === 'idle') return '';
   const copy = ({ saving: 'Saving…', saved: 'Synced', failed: online ? 'Couldn’t save' : 'Offline · not saved' })[mutationStatus] || '';
-  return `<div class="mutation-indicator ${mutationStatus}" role="status"><span>${copy}</span>${mutationStatus === 'failed' && retryMutation ? '<button type="button" data-retry-mutation>Retry</button>' : ''}</div>`;
+  return `<div class="mutation-indicator ${mutationStatus}" role="status"><span>${copy}</span>${mutationStatus === 'failed' && retryMutation && online ? '<button type="button" data-retry-mutation>Retry</button>' : ''}</div>`;
 }
 
 function pwaUpdateBanner() {

@@ -14,7 +14,10 @@ function relativeTime(value, nowValue = new Date()) {
 
 export function contextualHabitStatus(habit = {}, { now = new Date(), date = null } = {}) {
   const completedAt = habit.completedAt || habit.completed_at;
-  if (completedAt) return `Done ${relativeTime(completedAt, now)}`;
+  if (completedAt) {
+    const when = relativeTime(completedAt, now);
+    return when ? `Done ${when}` : 'Done';
+  }
   if (habit.invalid) return 'Proof needs another try';
 
   const targetTime = habit.targetTime || habit.target_time;
