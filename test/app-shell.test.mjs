@@ -29,7 +29,7 @@ test('mobile shell locks zoom and contains itself inside the physical viewport',
 });
 
 test('bottom nav caps oversized iOS safe-area insets and sits low', () => {
-  assert.match(css, /--app-safe-bottom:\s*clamp\(\.25rem,\s*env\(safe-area-inset-bottom\),\s*1\.5rem\)/);
+  assert.match(css, /--app-safe-bottom:\s*clamp\(\.45rem,\s*env\(safe-area-inset-bottom\),\s*1\.5rem\)/);
   assert.match(css, /\.nav\{[^}]*padding:[^;}]*var\(--app-safe-bottom\)/s);
   assert.match(css, /\.nav-btn\{[^}]*min-height:\s*3\.35rem/s);
   assert.match(css, /\.nav-btn\.checkin \.nav-icon\{[^}]*margin-top:\s*0/s);
@@ -96,7 +96,7 @@ test('social stylesheet and service worker additions ship in production', () => 
   assert.match(build, /social\.css/);
   assert.match(serviceWorker, /social\.css/);
   assert.match(serviceWorker, /addEventListener\('push'/);
-  assert.match(serviceWorker, /donezo-shell-v11/);
+  assert.match(serviceWorker, /donezo-shell-v12/);
 });
 
 test('shared circle freshness is wired without replacing the app architecture', () => {
