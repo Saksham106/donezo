@@ -1,4 +1,4 @@
-const CACHE = 'donezo-shell-v14';
+const CACHE = 'donezo-shell-v15';
 const ASSETS = [
   '/',
   '/index.html',
@@ -13,7 +13,9 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(
+    ASSETS.map((path) => new Request(path, { cache: 'reload' })),
+  )));
   // Keep the worker waiting until the page explicitly accepts the update.
 });
 
@@ -51,6 +53,17 @@ async function staleWhileRevalidate(request) {
   return cached || (await network) || Response.error();
 }
 
+async function networkFirstShellAsset(request) {
+  const cache = await caches.open(CACHE);
+  try {
+    const response = await fetch(new Request(request, { cache: 'no-store' }));
+    if (response.ok) await cache.put(request, response.clone());
+    return response;
+  } catch {
+    return (await cache.match(request)) || Response.error();
+  }
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const requestUrl = new URL(event.request.url);
@@ -61,7 +74,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (['style', 'script', 'image', 'font'].includes(event.request.destination)) {
+  // App code and styles must be fresh when online. Serving a cached bundle here
+  // can pair fresh HTML with stale behavior immediately after an accepted update.
+  if (['script', 'style'].includes(event.request.destination)) {
+    event.respondWith(networkFirstShellAsset(event.request));
+    return;
+  }
+
+  if (['image', 'font'].includes(event.request.destination)) {
     event.respondWith(staleWhileRevalidate(event.request));
     return;
   }
