@@ -26,6 +26,14 @@ const rows = {
     { id: 'r2', check_in_id: 'check-1', user_id: 'user-3', emoji: '👎', created_at: '2026-08-27T23:57:00Z' },
   ],
   nudges: [],
+  notificationPreferences: {
+    timezone: 'America/New_York',
+    quiet_hours_enabled: true,
+    quiet_hours_start: '22:30:00',
+    quiet_hours_end: '07:15:00',
+    categories: { due_soon: false, nudge: true },
+    habit_overrides: { 'habit-1': false },
+  },
 };
 
 test('mapDatabaseState maps timezones, reactions, invalid proof and all activity', () => {
@@ -44,6 +52,14 @@ test('mapDatabaseState maps timezones, reactions, invalid proof and all activity
   assert.equal(state.friendActivities.length, 2);
   assert.equal(state.friendActivities.some((activity) => activity.userId === 'user-1'), true);
   assert.equal(state.reactions.length, 2);
+  assert.deepEqual(state.notificationPreferences, {
+    timezone: 'America/New_York',
+    quietHoursEnabled: true,
+    quietHoursStart: '22:30',
+    quietHoursEnd: '07:15',
+    categories: { due_soon: false, nudge: true },
+    habitOverrides: { 'habit-1': false },
+  });
 });
 
 test('mapDatabaseState ignores check-ins outside the loaded circle habits', () => {
@@ -56,6 +72,36 @@ test('mapDatabaseState ignores check-ins outside the loaded circle habits', () =
   });
   assert.equal(state.checkIns.length, 2);
   assert.equal(state.friendActivities.length, 2);
+});
+
+test('shared recovery events add miss and comeback context without leaking reflections', () => {
+  const state = mapDatabaseState(user, {
+    ...rows,
+    recoveries: [{
+      id: 'recovery-1', habit_id: 'habit-2', user_id: 'user-2', missed_date: '2026-08-26',
+      recovered_at: '2026-08-27T09:00:00Z', action: 'recover_today', reflection: 'private detail',
+      visibility: 'squad', created_at: '2026-08-27T09:00:00Z',
+    }],
+  });
+  assert.equal(state.friendActivities.some((activity) => activity.type === 'missed' && activity.habitTitle === 'Read'), true);
+  assert.equal(state.friendActivities.some((activity) => activity.type === 'recovered' && activity.message === 'Bounced back today.'), true);
+  assert.equal(JSON.stringify(state.friendActivities).includes('private detail'), false);
+});
+
+test('database schedule versions are normalized onto their habit', () => {
+  const state = mapDatabaseState(user, {
+    ...rows,
+    scheduleVersions: [{
+      id: 'version-1', habit_id: 'habit-1', version: 1, effective_from: '2026-08-27', effective_until: null,
+      schedule_frequency: 'selected_weekdays', schedule_weekdays: [1, 3, 5], target_quantity: 2,
+      target_unit: 'miles', due_time: '08:30:00', grace_minutes: 15, timezone: 'America/New_York',
+    }],
+  });
+  assert.deepEqual(state.habits[0].scheduleVersions, [{
+    id: 'version-1', version: 1, effectiveFrom: '2026-08-27', effectiveUntil: null,
+    frequency: 'selected_weekdays', weekdays: [1, 3, 5], targetQuantity: 2,
+    targetUnit: 'miles', dueTime: '08:30', graceMinutes: 15, timezone: 'America/New_York',
+  }]);
 });
 
 test('proofObjectPath keeps uploads inside the authenticated user folder', () => {

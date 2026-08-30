@@ -14,6 +14,7 @@ test('toggleHabit creates then removes today check-in', () => {
   const repo = createMemoryRepository(seed);
   repo.toggleHabit('h1', '2026-08-27');
   assert.equal(repo.getState().checkIns.length, 1);
+  assert.equal(repo.getState().checkIns[0].completedQuantity, 1);
   assert.equal(repo.getState().members[0].xp, 110);
   repo.toggleHabit('h1', '2026-08-27');
   assert.equal(repo.getState().checkIns.length, 0);

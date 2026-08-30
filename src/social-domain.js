@@ -1,3 +1,5 @@
+import { getScheduleOccurrence } from './schedule.js';
+
 const DAY_MS = 86_400_000;
 const DEFAULT_SUPPORT_EMOJIS = new Set(['👏', '🔥', '💪', '❤️', '❤', '🙌', '👍', '🎉', '✨']);
 
@@ -110,10 +112,32 @@ function habitArchivedDate(habit) {
     || (habit.active === false && habit.updatedAt && localDateInTimeZone(habit.updatedAt, habit.ownerTimeZone || habit.timeZone || 'UTC'));
 }
 
+function habitOccurrence(habit, date) {
+  const created = habitCreatedDate(habit, date);
+  try {
+    return getScheduleOccurrence({
+      frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+      weekdays: habit.scheduleWeekdays || habit.schedule_weekdays || [],
+      targetQuantity: habit.targetQuantity ?? habit.target_quantity ?? 1,
+      targetUnit: habit.targetUnit || habit.target_unit || 'count',
+      dueTime: habit.targetTime || habit.target_time || null,
+      graceMinutes: habit.graceMinutes ?? habit.grace_minutes ?? 0,
+      timezone: habit.scheduleTimezone || habit.ownerTimeZone || habit.timeZone || 'UTC',
+      startDate: created,
+      pauseWindows: habit.pauseWindows || habit.pause_windows || [],
+      versions: habit.scheduleVersions || habit.versions || [],
+    }, date);
+  } catch {
+    return {
+      scheduled: (habit.frequency || 'daily') === 'daily',
+      targetQuantity: Number(habit.targetQuantity ?? habit.target_quantity ?? 1),
+    };
+  }
+}
+
 function habitIsEligible(habit, memberIds, date, challenge = {}) {
   const ownerId = ownerIdOf(habit);
   if (!memberIds.has(ownerId)) return false;
-  if ((habit.frequency || 'daily') !== 'daily') return false;
   const created = habitCreatedDate(habit, date);
   const archived = habitArchivedDate(habit);
   if (date < created || (archived && date > archived)) return false;
@@ -122,7 +146,7 @@ function habitIsEligible(habit, memberIds, date, challenge = {}) {
     const squadIds = habit.squadIds || habit.squad_ids || [habit.circleId || habit.circle_id];
     if (!squadIds.includes(challenge.squadId)) return false;
   }
-  return true;
+  return habitOccurrence(habit, date).scheduled;
 }
 
 function checkInDate(checkIn) {
@@ -142,12 +166,13 @@ function commitmentData({ members = [], habits = [], checkIns = [], challenge = 
   const participantIds = challenge.participantIds || challenge.participant_ids || members.map((member) => member.id);
   const participantSet = new Set(participantIds);
   const resolvedMembers = memberList(members, participantIds);
-  const completedKeys = new Set();
+  const completedQuantities = new Map();
   for (const checkIn of checkIns) {
     const date = checkInDate(checkIn);
     if (!validCheckIn(checkIn) || !date || date < period.start || date > period.end) continue;
     const key = `${checkIn.habitId ?? checkIn.habit_id}:${checkIn.userId ?? checkIn.user_id}:${date}`;
-    completedKeys.add(key);
+    const quantity = Number(checkIn.completedQuantity ?? checkIn.completed_quantity ?? 1);
+    completedQuantities.set(key, (completedQuantities.get(key) || 0) + (Number.isFinite(quantity) ? Math.max(0, quantity) : 0));
   }
   const slots = [];
   for (const date of period.days) {
@@ -155,7 +180,16 @@ function commitmentData({ members = [], habits = [], checkIns = [], challenge = 
       const ownerId = ownerIdOf(habit);
       if (!habitIsEligible(habit, participantSet, date, challenge)) continue;
       const key = `${habit.id}:${ownerId}:${date}`;
-      slots.push({ memberId: ownerId, habitId: habit.id, date, key, completed: completedKeys.has(key) });
+      const occurrence = habitOccurrence(habit, date);
+      const targetQuantity = Number(occurrence.targetQuantity || 1);
+      slots.push({
+        memberId: ownerId,
+        habitId: habit.id,
+        date,
+        key,
+        targetQuantity,
+        completed: (completedQuantities.get(key) || 0) >= targetQuantity,
+      });
     }
   }
   return { participantIds, participantSet, members: resolvedMembers, slots };
@@ -539,7 +573,7 @@ export function buildPrivacySafeExportPayload(recap, {
     period: { ...recap.period },
     previousPeriod: { ...recap.previousPeriod },
     summary: { ...recap.summary },
-    participants: (recap.memberStats || []).map((stat) => ({
+    participants: (recap.memberStats || []).filter((stat) => !optOuts.has(stat.id ?? stat.userId ?? stat.user_id)).map((stat) => ({
       name: stat.name, completionPercent: stat.completionPercent, bestStreak: stat.bestStreak,
     })),
     awards: Object.fromEntries(Object.entries(recap.awards || {}).map(([key, value]) => [key, exportAward(value, optOuts)])),

@@ -96,6 +96,18 @@ test('weeklyCompletionScore fixes the UTC midnight creation bug and ignores inva
   assert.deepEqual(weeklyCompletionScore('a', habits, [{ ...checkIns[0], invalid: true }], '2026-08-27'), { completed: 0, possible: 1, percent: 0 });
 });
 
+test('weeklyCompletionScore requires the full quantity target', () => {
+  const habits = [{
+    id: 'read', ownerId: 'a', active: true, frequency: 'daily', createdDate: '2026-08-24', targetQuantity: 3,
+  }];
+  assert.deepEqual(weeklyCompletionScore('a', habits, [
+    { habitId: 'read', userId: 'a', date: '2026-08-24', completedQuantity: 1 },
+  ], '2026-08-24'), { completed: 0, possible: 1, percent: 0 });
+  assert.deepEqual(weeklyCompletionScore('a', habits, [
+    { habitId: 'read', userId: 'a', date: '2026-08-24', completedQuantity: 3 },
+  ], '2026-08-24'), { completed: 1, possible: 1, percent: 100 });
+});
+
 test('weeklyCompletionScore gives the same perfect score regardless of habit count', () => {
   const habits = [
     { id: 'a1', ownerId: 'a', active: true, frequency: 'daily', createdAt: '2026-08-27T08:00:00Z', ownerTimeZone: 'UTC' },
@@ -148,6 +160,38 @@ test('weeklyCompletionScore excludes habits archived before the current week', (
     possible: 0,
     percent: 0,
   });
+});
+
+test('weeklyCompletionScore counts selected weekdays, weekly habits, and ignores pauses', () => {
+  const habits = [
+    { id: 'weekdays', ownerId: 'me', active: true, frequency: 'selected_weekdays', scheduleFrequency: 'selected_weekdays', scheduleWeekdays: [1, 3, 5], createdDate: '2026-08-24', scheduleTimezone: 'UTC', pauseWindows: [{ startDate: '2026-08-26', endDate: '2026-08-26' }] },
+    { id: 'weekly', ownerId: 'me', active: true, frequency: 'weekly', scheduleFrequency: 'weekly', scheduleWeekdays: [2], createdDate: '2026-08-24', scheduleTimezone: 'UTC' },
+  ];
+  const checkIns = [
+    { habitId: 'weekdays', userId: 'me', date: '2026-08-24' },
+    { habitId: 'weekly', userId: 'me', date: '2026-08-25' },
+  ];
+  assert.deepEqual(weeklyCompletionScore('me', habits, checkIns, '2026-08-28'), {
+    completed: 2,
+    possible: 3,
+    percent: 67,
+  });
+});
+
+test('weeklyCompletionScore uses the schedule version active on each historical date', () => {
+  const habits = [{
+    id: 'versioned', ownerId: 'u1', active: true, createdDate: '2026-08-24',
+    scheduleFrequency: 'selected_weekdays', scheduleWeekdays: [1], scheduleTimezone: 'UTC',
+    scheduleVersions: [
+      { version: 1, effectiveFrom: '2026-08-24', effectiveUntil: '2026-08-26', frequency: 'daily', weekdays: [], timezone: 'UTC' },
+      { version: 2, effectiveFrom: '2026-08-26', effectiveUntil: null, frequency: 'selected_weekdays', weekdays: [1], timezone: 'UTC' },
+    ],
+  }];
+  const checkIns = [
+    { habitId: 'versioned', userId: 'u1', date: '2026-08-24' },
+    { habitId: 'versioned', userId: 'u1', date: '2026-08-25' },
+  ];
+  assert.deepEqual(weeklyCompletionScore('u1', habits, checkIns, '2026-08-28'), { completed: 2, possible: 2, percent: 100 });
 });
 
 test('rankMembersByWeeklyScore breaks equal scores by streak then name', () => {

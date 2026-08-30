@@ -1,11 +1,11 @@
 # Donezo — Accountability with friends
 
-A mobile-first social accountability PWA for small friend groups. Create habits, submit optional photo proof, nudge friends, protect streaks, and compete on a shared XP scoreboard.
+A mobile-first social accountability PWA for small friend groups. Set realistic habits, post proof, recover after misses, and keep each other moving without turning life into a complicated game.
 
 ## Stack
 
 - Static mobile-first PWA bundled with esbuild
-- Supabase Auth, Postgres, Row Level Security, and private Storage
+- Supabase Auth, Postgres, Row Level Security, private Storage, and Edge Functions
 - Vercel hosting
 - Node's built-in test runner
 
@@ -28,20 +28,20 @@ Required build variables:
 
 Open `http://localhost:4173` after building.
 
-## Current product flow
+## Product flow
 
-1. Sign up or sign in with email/password.
-2. Create a circle or join one with its 12-character invite code.
-3. Add daily habits and choose whether photo proof is required.
-4. Check in, upload private proof, nudge friends, and view the shared feed/scoreboard.
+1. Create or join a squad and invite at least one friend.
+2. Add an editable starter habit or a custom daily, weekday, or weekly habit.
+3. Check in quickly with optional photo proof and react to friends in the Squad feed.
+4. Use weekly challenges, opt-in social stakes, missed-habit recovery, and privacy-safe recaps.
+5. Tune notification categories, quiet hours, timezone, and per-habit reminders in Settings.
 
-All application tables have RLS enabled. Proof files are private and are exposed to circle peers only through short-lived signed URLs.
+All application tables use RLS. Proof files are private and exposed to squad peers only through short-lived signed URLs. Contextual notification events are deduplicated and filtered against user preferences server-side before delivery.
 
 ## iPhone PWA test
 
 1. Open the deployed HTTPS URL in Safari.
 2. Share → **Add to Home Screen**.
 3. Launch Donezo from the Home Screen.
-4. Open **Me** → **Enable** notifications.
-
-Remote scheduled push delivery is not implemented yet. The current notification control proves the installed-PWA browser permission and local notification path.
+4. Open **Settings** → **Enable** notifications.
+5. Test camera proof, keyboard-safe sheets, deep links, and safe-area behavior on a real device before release.

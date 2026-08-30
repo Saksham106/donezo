@@ -152,6 +152,24 @@ export function getNotificationDeepLink(category, context = {}) {
   return `/?tab=league&circle=${encoded(context.circleId)}`;
 }
 
+export function parseNotificationDeepLink(value, base = 'https://donezo.app') {
+  let url;
+  try {
+    url = new URL(value || '/', base);
+  } catch {
+    url = new URL('/', base);
+  }
+  const allowedTabs = new Set(['today', 'squad', 'checkin', 'league', 'me']);
+  const requestedTab = url.searchParams.get('tab');
+  return {
+    tab: allowedTabs.has(requestedTab) ? requestedTab : 'today',
+    checkInId: url.searchParams.get('checkIn'),
+    habitId: url.searchParams.get('habit'),
+    circleId: url.searchParams.get('circle'),
+    nudgesOpen: url.searchParams.get('nudges') === '1',
+  };
+}
+
 function eventSubject(input = {}) {
   return input.subjectId || input.checkInId || input.nudgeId || input.habitId || input.circleId || 'general';
 }

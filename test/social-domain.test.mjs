@@ -54,6 +54,25 @@ test('weekly challenge completion percentage counts valid unique commitments thr
   ]);
 });
 
+test('weekly challenge only counts a quantity target after the full amount is confirmed', () => {
+  const input = {
+    members: [{ id: 'a', name: 'A' }],
+    habits: [{ ...habit('read', 'a'), targetQuantity: 3, targetUnit: 'chapters' }],
+    asOfDate: '2026-08-24',
+  };
+  const partial = weeklyChallengeProgress(
+    { type: 'completion_percentage', target: 100, ...week },
+    { ...input, checkIns: [checkIn('read', 'a', '2026-08-24', { completedQuantity: 1 })] },
+  );
+  const complete = weeklyChallengeProgress(
+    { type: 'completion_percentage', target: 100, ...week },
+    { ...input, checkIns: [checkIn('read', 'a', '2026-08-24', { completedQuantity: 3 })] },
+  );
+
+  assert.equal(partial.progress.percent, 0);
+  assert.equal(complete.progress.percent, 100);
+});
+
 test('weekly total-completions challenge deduplicates check-ins and exposes participant winners', () => {
   const result = weeklyChallengeProgress(
     { id: 'challenge-2', metric: 'total_completions', target: 4, ...week },
@@ -103,7 +122,7 @@ test('no-consecutive-miss challenge reports each violating habit and treats one-
   ]);
 });
 
-test('weekly challenge derives a Monday UTC period and does not count archived or non-daily habits', () => {
+test('weekly challenge derives a Monday UTC period and counts only scheduled commitments', () => {
   const result = weeklyChallengeProgress(
     { type: 'total_completions', target: 2 },
     {
@@ -111,15 +130,17 @@ test('weekly challenge derives a Monday UTC period and does not count archived o
       habits: [
         habit('daily', 'a', '2026-08-24'),
         { ...habit('archived', 'a'), active: false, archivedDate: '2026-08-23' },
-        { ...habit('weekly', 'a'), frequency: 'weekly' },
+        { ...habit('weekly', 'a'), frequency: 'weekly', scheduleFrequency: 'weekly', scheduleWeekdays: [1], scheduleTimezone: 'UTC' },
       ],
-      checkIns: [checkIn('daily', 'a', '2026-08-24'), checkIn('archived', 'a', '2026-08-25')],
+      checkIns: [checkIn('daily', 'a', '2026-08-24'), checkIn('weekly', 'a', '2026-08-24'), checkIn('archived', 'a', '2026-08-25')],
       asOfDate: '2026-08-26',
     },
   );
 
   assert.deepEqual(result.period, { start: '2026-08-24', end: '2026-08-26' });
-  assert.equal(result.progress.completed, 1);
+  assert.equal(result.progress.completed, 2);
+  assert.equal(result.progress.total, 2);
+  assert.equal(result.participants[0].total, 4);
 });
 
 test('missed habit state keeps a miss distinct from a later recovery', () => {
@@ -278,6 +299,8 @@ test('privacy-safe export excludes private text, proof images, and opted-out awa
   assert.equal(payload.privateTexts, undefined);
   assert.equal(payload.proofImages, undefined);
   assert.equal(payload.awards.biggestImprovement.memberIds.includes('b'), false);
+  assert.equal(payload.participants.some((participant) => participant.name === 'Bob'), false);
+  assert.equal(JSON.stringify(payload).includes('Bob'), false);
   assert.equal(JSON.stringify(payload).includes('private note'), false);
   assert.equal(JSON.stringify(payload).includes('proof.jpg'), false);
 });

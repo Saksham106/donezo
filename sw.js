@@ -1,4 +1,4 @@
-const CACHE = 'donezo-shell-v8';
+const CACHE = 'donezo-shell-v9';
 const ASSETS = ['/', '/index.html', '/tokens.css', '/styles.css', '/components.css', '/social.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (event) => {

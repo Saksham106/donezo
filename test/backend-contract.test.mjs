@@ -6,6 +6,9 @@ const migration = await readFile(new URL('../supabase/migrations/0009_harden_pro
 const serviceRoleMigration = await readFile(new URL('../supabase/migrations/0010_grant_send_nudge_service_role.sql', import.meta.url), 'utf8');
 const readReceiptMigration = await readFile(new URL('../supabase/migrations/0011_allow_safe_nudge_read_receipts.sql', import.meta.url), 'utf8');
 const notificationMigration = await readFile(new URL('../supabase/migrations/0014_notification_preferences_and_events.sql', import.meta.url), 'utf8');
+const recapPreferenceMigration = await readFile(new URL('../supabase/migrations/0016_recap_award_preferences.sql', import.meta.url), 'utf8');
+const quantityMigration = await readFile(new URL('../supabase/migrations/0017_check_in_quantities.sql', import.meta.url), 'utf8');
+const socialHardeningMigration = await readFile(new URL('../supabase/migrations/0018_harden_social_resolution.sql', import.meta.url), 'utf8');
 const pushFunction = await readFile(new URL('../supabase/functions/send-nudge/index.ts', import.meta.url), 'utf8');
 
 test('proof vote migration prevents self downvotes and scopes votes to circle members', () => {
@@ -64,6 +67,23 @@ test('notification migration enforces server-side policy, safe links, and least-
   assert.match(notificationMigration, /grant select, insert, update on table public\.notification_events to service_role/i);
   assert.match(notificationMigration, /enqueue_notification_event/i);
   assert.match(notificationMigration, /on conflict \(recipient_user_id, dedupe_key\) do nothing/i);
+});
+
+test('recap awards default on and provide an explicit opt-out field', () => {
+  assert.match(recapPreferenceMigration, /recap_awards_enabled boolean not null default true/i);
+  assert.match(recapPreferenceMigration, /excluded from named weekly recap awards and exports/i);
+});
+
+test('check-ins persist a bounded completed quantity', () => {
+  assert.match(quantityMigration, /completed_quantity numeric not null default 1/i);
+  assert.match(quantityMigration, /completed_quantity > 0 and completed_quantity <= 1000000/i);
+});
+
+test('social resolution exposes only safe update columns and validates terminal settlement', () => {
+  assert.match(socialHardeningMigration, /grant update \(status, resolved_at\).*weekly_challenges/is);
+  assert.match(socialHardeningMigration, /grant update \(status, resolution, resolved_at\).*group_stakes/is);
+  assert.match(socialHardeningMigration, /current_date <= old\.ends_on/i);
+  assert.match(socialHardeningMigration, /Stake resolution contains a non-participant/i);
 });
 
 test('push sender turns a nudge into a policy-checked event and preserves its context', () => {

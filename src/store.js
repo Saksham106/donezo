@@ -4,7 +4,7 @@ import {
   localDateInTimeZone,
   rejectedCheckInIds,
 } from './domain.js';
-import { normalizeSchedule } from './schedule.js';
+import { getScheduleOccurrence, normalizeSchedule } from './schedule.js';
 import { validateStake } from './stakes.js';
 
 const clone = (value) => structuredClone(value);
@@ -58,6 +58,18 @@ export function mapDatabaseState(user, rows) {
     avatar_url: null,
     timezone: 'UTC',
   };
+  const rawNotificationPreferences = rows.notificationPreferences || {};
+  const notificationPreferences = {
+    timezone: rawNotificationPreferences.timezone || profile.timezone || 'UTC',
+    quietHoursEnabled: Boolean(rawNotificationPreferences.quiet_hours_enabled),
+    quietHoursStart: String(rawNotificationPreferences.quiet_hours_start || '22:00').slice(0, 5),
+    quietHoursEnd: String(rawNotificationPreferences.quiet_hours_end || '08:00').slice(0, 5),
+    categories: rawNotificationPreferences.categories || {
+      due_soon: true, streak_risk: true, friend_activity: true, nudge: true,
+      reaction: true, comment: true, challenge_progress: true,
+    },
+    habitOverrides: rawNotificationPreferences.habit_overrides || {},
+  };
   const memberRows = rows.members?.length
     ? rows.members
     : [{ user_id: user.id, profiles: profile }];
@@ -90,6 +102,24 @@ export function mapDatabaseState(user, rows) {
     });
     pausesByHabit.set(pause.habit_id, pauses);
   }
+  const versionsByHabit = new Map();
+  for (const version of rows.scheduleVersions || []) {
+    const versions = versionsByHabit.get(version.habit_id) || [];
+    versions.push({
+      id: version.id,
+      version: Number(version.version),
+      effectiveFrom: version.effective_from,
+      effectiveUntil: version.effective_until,
+      frequency: version.schedule_frequency,
+      weekdays: version.schedule_weekdays || [],
+      targetQuantity: Number(version.target_quantity ?? 1),
+      targetUnit: version.target_unit || 'count',
+      dueTime: version.due_time?.slice(0, 5) || null,
+      graceMinutes: Number(version.grace_minutes || 0),
+      timezone: version.timezone || 'UTC',
+    });
+    versionsByHabit.set(version.habit_id, versions);
+  }
 
   const habits = (rows.habits || []).map((habit) => {
     const ownerProfile = memberProfileById.get(habit.owner_id) || {};
@@ -110,6 +140,7 @@ export function mapDatabaseState(user, rows) {
       graceMinutes: Number(habit.grace_minutes || 0),
       scheduleTimezone: habit.schedule_timezone || ownerTimeZone,
       pauseWindows: pausesByHabit.get(habit.id) || [],
+      scheduleVersions: versionsByHabit.get(habit.id) || [],
       proofMode: habit.proof_mode,
       xp: habit.xp,
       active: habit.active,
@@ -131,6 +162,7 @@ export function mapDatabaseState(user, rows) {
       userId: checkIn.user_id,
       date: checkIn.check_date,
       completedAt: checkIn.completed_at,
+      completedQuantity: Number(checkIn.completed_quantity ?? 1),
       proofPath: checkIn.proof_path,
       note: checkIn.note,
     }));
@@ -172,6 +204,7 @@ export function mapDatabaseState(user, rows) {
       xp,
       currentStreak: calculateStreak(dates, today),
       bestStreak: calculateBestStreak(dates),
+      awardOptOut: memberProfile.recap_awards_enabled === false,
     };
   });
   const memberById = new Map(members.map((member) => [member.id, member]));
@@ -223,10 +256,6 @@ export function mapDatabaseState(user, rows) {
       when: nudge.createdAt,
       message: nudge.message,
     }));
-  const friendActivities = [...checkInActivities, ...calloutActivities]
-    .sort((a, b) => new Date(b.when) - new Date(a.when))
-    .slice(0, 40);
-
   const challenges = (rows.challenges || []).map((challenge) => ({
     id: challenge.id,
     circleId: challenge.circle_id,
@@ -245,11 +274,43 @@ export function mapDatabaseState(user, rows) {
     userId: recovery.user_id,
     missedDate: recovery.missed_date,
     recoveredAt: recovery.recovered_at,
+    recoveredDate: recovery.recovered_at ? localDateInTimeZone(recovery.recovered_at, memberProfileById.get(recovery.user_id)?.timezone || 'UTC') : null,
     action: recovery.action,
     reflection: recovery.reflection,
     visibility: recovery.visibility,
     createdAt: recovery.created_at,
   }));
+  const recoveryActivities = recoveries.flatMap((recovery) => {
+    const habit = habitById.get(recovery.habitId);
+    const miss = {
+      id: `miss-${recovery.id}`,
+      userId: recovery.userId,
+      type: 'missed',
+      habitTitle: habit?.title || 'Habit',
+      emoji: habit?.emoji || '↩',
+      when: `${recovery.missedDate}T12:00:00Z`,
+      message: 'Missed it. Kept the receipt and made a next move.',
+    };
+    const actionMessages = {
+      recover_today: 'Bounced back today.',
+      adjust_habit: 'Adjusted the plan instead of forcing a bad one.',
+      pause_habit: 'Set up a pause and protected the long game.',
+      ask_support: 'Asked the squad for a hand.',
+    };
+    const recoveryActivity = {
+      id: `recovery-${recovery.id}`,
+      userId: recovery.userId,
+      type: recovery.recoveredAt ? 'recovered' : 'recovery',
+      habitTitle: habit?.title || 'Habit',
+      emoji: habit?.emoji || '↩',
+      when: recovery.recoveredAt || recovery.createdAt,
+      message: actionMessages[recovery.action] || 'Made a comeback plan.',
+    };
+    return [recoveryActivity, miss];
+  });
+  const friendActivities = [...checkInActivities, ...calloutActivities, ...recoveryActivities]
+    .sort((a, b) => new Date(b.when) - new Date(a.when))
+    .slice(0, 40);
   const stakes = (rows.stakes || []).map((stake) => ({
     id: stake.id,
     circleId: stake.circle_id,
@@ -288,6 +349,7 @@ export function mapDatabaseState(user, rows) {
     recoveries,
     stakes,
     stakeConsents,
+    notificationPreferences,
   };
 }
 
@@ -312,6 +374,12 @@ export function createSupabaseRepository(client, user) {
 
   async function load(requestedCircleId = state.circleId) {
     const profile = await ensureProfile();
+    const { data: notificationPreferences, error: notificationPreferencesError } = await client
+      .from('notification_preferences')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (notificationPreferencesError) throw appError(notificationPreferencesError, 'Could not load notification settings');
     const { data: memberships, error: membershipError } = await client
       .from('circle_members')
       .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
@@ -325,13 +393,13 @@ export function createSupabaseRepository(client, user) {
     })).filter((circle) => circle.id);
     const circle = circles.find((item) => item.id === requestedCircleId) || circles[0] || null;
     if (!circle) {
-      state = mapDatabaseState(user, { profile, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [] });
+      state = mapDatabaseState(user, { profile, notificationPreferences, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [] });
       return getState();
     }
 
     const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult] = await Promise.all([
       client.from('circle_members')
-        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone)')
+        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone,recap_awards_enabled)')
         .eq('circle_id', circle.id)
         .order('joined_at', { ascending: true }),
       client.from('habit_circles')
@@ -347,7 +415,7 @@ export function createSupabaseRepository(client, user) {
     const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
     const habitIds = habits.map((habit) => habit.id);
     const stakeIds = (stakesResult.data || []).map((stake) => stake.id);
-    const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult, schedulePausesResult] = await Promise.all([
+    const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult, schedulePausesResult, scheduleVersionsResult] = await Promise.all([
       habitIds.length
         ? client.from('habit_circles').select('habit_id,circle_id').in('habit_id', habitIds)
         : Promise.resolve({ data: [], error: null }),
@@ -363,8 +431,11 @@ export function createSupabaseRepository(client, user) {
       habitIds.length
         ? client.from('habit_schedule_pauses').select('*').in('habit_id', habitIds).order('start_date', { ascending: false })
         : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('habit_schedule_versions').select('*').in('habit_id', habitIds).order('effective_from', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
     ]);
-    const loadError = habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error || schedulePausesResult.error;
+    const loadError = habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error || schedulePausesResult.error || scheduleVersionsResult.error;
     if (loadError) {
       throw appError(loadError, 'Could not load Donezo data');
     }
@@ -388,6 +459,8 @@ export function createSupabaseRepository(client, user) {
       stakes: stakesResult.data,
       stakeConsents: stakeConsentsResult.data,
       schedulePauses: schedulePausesResult.data,
+      scheduleVersions: scheduleVersionsResult.data,
+      notificationPreferences,
     });
     return getState();
   }
@@ -423,6 +496,37 @@ export function createSupabaseRepository(client, user) {
     const { error } = await client.from('profiles').update({ display_name: cleanName }).eq('id', user.id);
     if (error) throw appError(error, 'Could not update your name');
     return load();
+  }
+
+  async function saveNotificationPreferences(input = {}) {
+    const normalizeTime = (value, fallback) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || '')) ? String(value) : fallback;
+    const timezone = String(input.timezone || state.notificationPreferences?.timezone || 'UTC');
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+    } catch {
+      throw new Error('Choose a valid timezone');
+    }
+    const categoryNames = ['due_soon', 'streak_risk', 'friend_activity', 'nudge', 'reaction', 'comment', 'challenge_progress'];
+    const categories = Object.fromEntries(categoryNames.map((category) => [category, input.categories?.[category] !== false]));
+    const habitOverrides = Object.fromEntries(Object.entries(input.habitOverrides || {}).map(([habitId, enabled]) => [habitId, Boolean(enabled)]));
+    const { error } = await client.from('notification_preferences').upsert({
+      user_id: user.id,
+      timezone,
+      quiet_hours_enabled: Boolean(input.quietHoursEnabled),
+      quiet_hours_start: normalizeTime(input.quietHoursStart, '22:00'),
+      quiet_hours_end: normalizeTime(input.quietHoursEnd, '08:00'),
+      categories,
+      habit_overrides: habitOverrides,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (error) throw appError(error, 'Could not save notification settings');
+    return load(state.circleId);
+  }
+
+  async function setRecapAwardsEnabled(enabled) {
+    const { error } = await client.from('profiles').update({ recap_awards_enabled: Boolean(enabled) }).eq('id', user.id);
+    if (error) throw appError(error, 'Could not save recap preference');
+    return load(state.circleId);
   }
 
   async function saveHabitSchedule(habitId, input) {
@@ -479,6 +583,25 @@ export function createSupabaseRepository(client, user) {
       throw new Error('You can only manage your own habit');
     }
     return habit;
+  }
+
+  function fullTargetFor(habit, date) {
+    try {
+      return getScheduleOccurrence({
+        frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+        weekdays: habit.scheduleWeekdays || [],
+        targetQuantity: habit.targetQuantity ?? 1,
+        targetUnit: habit.targetUnit || 'count',
+        dueTime: habit.targetTime || null,
+        graceMinutes: habit.graceMinutes || 0,
+        timezone: habit.scheduleTimezone || habit.ownerTimeZone || 'UTC',
+        startDate: habit.createdDate || null,
+        pauseWindows: habit.pauseWindows || [],
+        versions: habit.scheduleVersions || [],
+      }, date).targetQuantity;
+    } catch {
+      return Number(habit.targetQuantity ?? 1);
+    }
   }
 
   async function updateHabit(habitId, input) {
@@ -542,6 +665,7 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function toggleHabit(habitId, date) {
+    const habit = ownedHabit(habitId);
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
     if (existing && !existing.invalid) {
       const { error } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
@@ -558,13 +682,19 @@ export function createSupabaseRepository(client, user) {
         const { error: deleteError } = await client.from('check_ins').delete().eq('id', existing.id).eq('user_id', user.id);
         if (deleteError) throw appError(deleteError, 'Could not clear rejected check-in');
       }
-      const { error } = await client.from('check_ins').insert({ habit_id: habitId, user_id: user.id, check_date: date });
+      const { error } = await client.from('check_ins').insert({
+        habit_id: habitId,
+        user_id: user.id,
+        check_date: date,
+        completed_quantity: fullTargetFor(habit, date),
+      });
       if (error) throw appError(error, 'Could not complete habit');
     }
     return load();
   }
 
   async function completeWithProof(habitId, date, file) {
+    const habit = ownedHabit(habitId);
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
     if (existing && !existing.invalid) throw new Error('Already checked in today');
     const oldProofPath = existing?.proofPath || null;
@@ -586,6 +716,7 @@ export function createSupabaseRepository(client, user) {
       habit_id: habitId,
       user_id: user.id,
       check_date: date,
+      completed_quantity: fullTargetFor(habit, date),
       proof_path: path,
     });
     if (checkInError) {
@@ -628,8 +759,8 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function recoverHabit(habitId, missedDate, input = {}) {
-    ownedHabit(habitId);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(missedDate) || missedDate >= dateInTimezone('UTC')) throw new Error('Choose a past missed date');
+    const habit = ownedHabit(habitId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(missedDate) || missedDate >= dateInTimezone(habit.scheduleTimezone || habit.ownerTimeZone || 'UTC')) throw new Error('Choose a past missed date');
     const action = String(input.action || 'recover_today');
     if (!['recover_today', 'adjust_habit', 'pause_habit', 'ask_support'].includes(action)) throw new Error('Choose a recovery action');
     const reflection = String(input.reflection || '').trim();
@@ -691,6 +822,26 @@ export function createSupabaseRepository(client, user) {
     if (!['accepted', 'declined'].includes(response)) throw new Error('Choose accept or decline');
     const { error } = await client.rpc('respond_to_stake', { target_stake: stakeId, response });
     if (error) throw appError(error, 'Could not respond to stake');
+    return load();
+  }
+
+  async function resolveGroupStake(stakeId, resolution) {
+    const stake = state.stakes.find((item) => item.id === stakeId);
+    if (!stake || stake.createdBy !== user.id || stake.status !== 'active') throw new Error('Only the creator can settle an active stake');
+    const timeZone = state.members.find((item) => item.id === user.id)?.timeZone || 'UTC';
+    if (dateInTimezone(timeZone) <= stake.endsOn) throw new Error('Settle the stake after it ends');
+    const cleanResolution = {
+      winners: Array.isArray(resolution?.winners) ? resolution.winners.map(String) : [],
+      losers: Array.isArray(resolution?.losers) ? resolution.losers.map(String) : [],
+      allSucceeded: Boolean(resolution?.allSucceeded),
+    };
+    const { data, error } = await client.from('group_stakes').update({
+      status: 'resolved',
+      resolution: cleanResolution,
+      resolved_at: new Date().toISOString(),
+    }).eq('id', stakeId).eq('created_by', user.id).eq('status', 'active').select('id').maybeSingle();
+    if (error) throw appError(error, 'Could not settle stake');
+    if (!data) throw new Error('Stake is no longer active');
     return load();
   }
 
@@ -759,6 +910,8 @@ export function createSupabaseRepository(client, user) {
     createCircle,
     joinCircle,
     updateDisplayName,
+    saveNotificationPreferences,
+    setRecapAwardsEnabled,
     addHabit,
     updateHabit,
     archiveHabit,
@@ -771,6 +924,7 @@ export function createSupabaseRepository(client, user) {
     createChallenge,
     createStake,
     respondToStake,
+    resolveStake: resolveGroupStake,
     sendNudge,
     markNudgeRead,
     getVapidPublicKey,
@@ -795,7 +949,15 @@ export function createMemoryRepository(seed, onChange = () => {}) {
       state.checkIns.splice(existingIndex, 1);
       member.xp = Math.max(0, member.xp - habit.xp);
     } else {
-      state.checkIns.unshift({ id: uid('checkin'), habitId, userId: state.currentUserId, date, completedAt: new Date().toISOString(), proofUrl: proofUrl || null });
+      state.checkIns.unshift({
+        id: uid('checkin'),
+        habitId,
+        userId: state.currentUserId,
+        date,
+        completedAt: new Date().toISOString(),
+        completedQuantity: Number(habit.targetQuantity ?? 1),
+        proofUrl: proofUrl || null,
+      });
       member.xp += habit.xp;
     }
     emit();
