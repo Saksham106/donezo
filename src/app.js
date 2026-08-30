@@ -1587,7 +1587,7 @@ async function handleSocialPreferences(event) {
   const batonEnabled = form.has('batonEnabled');
   await runMutation(async () => {
     await repo.setRecapAwardsEnabled(recapEnabled);
-    await repo.setBatonOptOut(batonEnabled);
+    await repo.setBatonEnabled(batonEnabled);
     return true;
   }, 'Social settings saved');
 }

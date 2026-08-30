@@ -98,3 +98,11 @@ test('sheet close handlers do not reference removed archive-confirm state', () =
   assert.doesNotMatch(app, /archiveConfirm/);
   assert.match(app, /function closeSheets\(\)[\s\S]*settingsSheetOpen = false/);
 });
+
+test('baton preference uses one enabled-state contract in the app and both repositories', () => {
+  assert.match(app, /repo\.setBatonEnabled\(batonEnabled\)/);
+  assert.doesNotMatch(app, /setBatonOptOut/);
+  assert.equal((store.match(/function setBatonEnabled\(enabled\)/g) || []).length, 2);
+  assert.match(store, /set_baton_opt_out', \{ enabled: Boolean\(enabled\) \}/);
+  assert.match(store, /state\.batonOptedOut = !Boolean\(enabled\)/);
+});

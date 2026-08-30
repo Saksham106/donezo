@@ -706,7 +706,7 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function restoreHabit(habitId) {
-    const habit = ownedHabit(habitId);
+    ownedHabit(habitId);
     const { data: restored, error } = await client.from('habits').update({
       active: true,
       updated_at: new Date().toISOString(),
@@ -973,7 +973,7 @@ export function createSupabaseRepository(client, user) {
     return data;
   }
 
-  async function setBatonOptOut(enabled) {
+  async function setBatonEnabled(enabled) {
     const { data, error } = await client.rpc('set_baton_opt_out', { enabled: Boolean(enabled) });
     if (error) throw appError(error, 'Could not save baton preference');
     await load(state.circleId);
@@ -1059,7 +1059,7 @@ export function createSupabaseRepository(client, user) {
     markNudgeRead,
     startBaton,
     passBaton,
-    setBatonOptOut,
+    setBatonEnabled,
     addComment,
     deleteComment,
     getEarnedBadges,
@@ -1235,7 +1235,7 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return clone(baton);
   }
 
-  function setBatonOptOut(enabled) {
+  function setBatonEnabled(enabled) {
     state.batonOptedOut = !Boolean(enabled);
     const member = state.members.find((item) => item.id === state.currentUserId);
     if (member) member.batonOptedOut = state.batonOptedOut;
@@ -1269,5 +1269,5 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     return buildMonthlyWrapped({ month, circleId: state.circleId, members: state.members, habits: state.habits, checkIns: state.checkIns, reactions: state.reactions || [], comments: state.comments || [], batonHandoffs: state.batonHandoffs || [], nudges: state.nudges || [], asOfDate: options.asOfDate, timeZone: options.timeZone || 'UTC', recapEnabled: options.recapEnabled !== false, recapOptOut: Boolean(options.recapOptOut) });
   }
 
-  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit, sendNudge, startBaton, passBaton, setBatonOptOut, addComment, deleteComment, getEarnedBadges, getMonthlyWrapped };
+  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit, sendNudge, startBaton, passBaton, setBatonEnabled, addComment, deleteComment, getEarnedBadges, getMonthlyWrapped };
 }
