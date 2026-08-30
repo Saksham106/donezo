@@ -6,6 +6,9 @@ import {
 } from './domain.js';
 import { getScheduleOccurrence, normalizeSchedule } from './schedule.js';
 import { validateStake } from './stakes.js';
+import { validateCommentBody } from './social-domain.js';
+import { computeEarnedBadges } from './badges-domain.js';
+import { buildMonthlyWrapped } from './wrapped-domain.js';
 
 const clone = (value) => structuredClone(value);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -166,7 +169,8 @@ export function mapDatabaseState(user, rows) {
       proofPath: checkIn.proof_path,
       note: checkIn.note,
     }));
-  const reactions = (rows.reactions || []).map((reaction) => ({
+  const checkInIds = new Set(rawCheckIns.map((checkIn) => checkIn.id));
+  const reactions = (rows.reactions || []).filter((reaction) => checkInIds.has(reaction.check_in_id)).map((reaction) => ({
     id: reaction.id,
     checkInId: reaction.check_in_id,
     userId: reaction.user_id,
@@ -201,6 +205,7 @@ export function mapDatabaseState(user, rows) {
       avatar: initials(name),
       avatarUrl: memberProfile.avatar_url,
       timeZone: memberProfile.timezone || 'UTC',
+      joinedDate: memberProfile.created_at || membership.joined_at || null,
       xp,
       currentStreak: calculateStreak(dates, today),
       bestStreak: calculateBestStreak(dates),
@@ -332,6 +337,41 @@ export function mapDatabaseState(user, rows) {
     status: consent.status,
     respondedAt: consent.responded_at,
   }));
+  const currentCircleId = rows.circle?.id || null;
+  const comments = (rows.comments || [])
+    .filter((comment) => checkInIds.has(comment.check_in_id) && memberProfileById.has(comment.author_id) && (!currentCircleId || comment.circle_id === currentCircleId))
+    .map((comment) => ({
+      id: comment.id,
+      checkInId: comment.check_in_id,
+      circleId: comment.circle_id,
+      authorId: comment.author_id,
+      body: comment.body,
+      createdAt: comment.created_at,
+    }));
+  const batonRows = (rows.batons || []).filter((baton) => (!currentCircleId || baton.circle_id === currentCircleId));
+  const activeBaton = batonRows.find((baton) => baton.active && new Date(baton.expires_at).getTime() > Date.now()) || null;
+  const baton = activeBaton ? {
+    id: activeBaton.id,
+    circleId: activeBaton.circle_id,
+    holderUserId: activeBaton.holder_user_id,
+    sourceCheckInId: activeBaton.source_check_in_id,
+    startedAt: activeBaton.started_at,
+    handedAt: activeBaton.handed_at,
+    expiresAt: activeBaton.expires_at,
+    active: true,
+  } : null;
+  const batonHandoffs = (rows.batonHandoffs || [])
+    .filter((handoff) => (!currentCircleId || handoff.circle_id === currentCircleId) && batonRows.some((item) => item.id === handoff.baton_id))
+    .map((handoff) => ({
+      id: handoff.id,
+      batonId: handoff.baton_id,
+      circleId: handoff.circle_id,
+      fromUserId: handoff.from_user_id,
+      toUserId: handoff.to_user_id,
+      sourceCheckInId: handoff.source_check_in_id,
+      handedAt: handoff.handed_at,
+      expiresAt: handoff.expires_at,
+    }));
 
   return {
     currentUserId: user.id,
@@ -349,6 +389,10 @@ export function mapDatabaseState(user, rows) {
     recoveries,
     stakes,
     stakeConsents,
+    comments,
+    baton,
+    batonHandoffs,
+    batonOptedOut: Boolean(rows.batonPreference?.opted_out),
     notificationPreferences,
   };
 }
@@ -393,13 +437,13 @@ export function createSupabaseRepository(client, user) {
     })).filter((circle) => circle.id);
     const circle = circles.find((item) => item.id === requestedCircleId) || circles[0] || null;
     if (!circle) {
-      state = mapDatabaseState(user, { profile, notificationPreferences, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [] });
+      state = mapDatabaseState(user, { profile, notificationPreferences, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [], comments: [], batons: [], batonHandoffs: [], batonPreference: null });
       return getState();
     }
 
-    const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult] = await Promise.all([
+    const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult, batonPreferenceResult] = await Promise.all([
       client.from('circle_members')
-        .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone,recap_awards_enabled)')
+        .select('user_id, role, joined_at, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone,created_at,recap_awards_enabled)')
         .eq('circle_id', circle.id)
         .order('joined_at', { ascending: true }),
       client.from('habit_circles')
@@ -409,8 +453,9 @@ export function createSupabaseRepository(client, user) {
       client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100),
       client.from('weekly_challenges').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
       client.from('group_stakes').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
+      client.from('baton_preferences').select('opted_out').eq('user_id', user.id).maybeSingle(),
     ]);
-    const failed = [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult].find((result) => result.error);
+    const failed = [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult, batonPreferenceResult].find((result) => result.error);
     if (failed) throw appError(failed.error, 'Could not load Donezo data');
     const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
     const habitIds = habits.map((habit) => habit.id);
@@ -440,10 +485,18 @@ export function createSupabaseRepository(client, user) {
       throw appError(loadError, 'Could not load Donezo data');
     }
     const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
-    const reactionsResult = checkInIds.length
-      ? await client.from('reactions').select('*').in('check_in_id', checkInIds).order('created_at')
-      : { data: [], error: null };
-    if (reactionsResult.error) throw appError(reactionsResult.error, 'Could not load proof votes');
+    const [reactionsResult, commentsResult, batonsResult, batonHandoffsResult] = await Promise.all([
+      checkInIds.length
+        ? client.from('reactions').select('*').in('check_in_id', checkInIds).order('created_at')
+        : Promise.resolve({ data: [], error: null }),
+      checkInIds.length
+        ? client.from('check_in_comments').select('*').in('check_in_id', checkInIds).order('created_at', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+      client.from('batons').select('*').eq('circle_id', circle.id).eq('active', true),
+      client.from('baton_handoffs').select('*').eq('circle_id', circle.id).order('handed_at', { ascending: true }).limit(1000),
+    ]);
+    const socialLoadError = reactionsResult.error || commentsResult.error || batonsResult.error || batonHandoffsResult.error;
+    if (socialLoadError) throw appError(socialLoadError, 'Could not load social activity');
     state = mapDatabaseState(user, {
       profile,
       circles,
@@ -460,6 +513,10 @@ export function createSupabaseRepository(client, user) {
       stakeConsents: stakeConsentsResult.data,
       schedulePauses: schedulePausesResult.data,
       scheduleVersions: scheduleVersionsResult.data,
+      comments: commentsResult.data,
+      batons: batonsResult.data,
+      batonHandoffs: batonHandoffsResult.data,
+      batonPreference: batonPreferenceResult.data,
       notificationPreferences,
     });
     return getState();
@@ -880,6 +937,63 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
+  async function startBaton(recipientUserId, sourceCheckInId) {
+    if (!state.circleId) throw new Error('Create or join a squad first');
+    const checkIn = state.checkIns.find((item) => item.id === sourceCheckInId && item.userId === user.id && !item.invalid);
+    if (!checkIn) throw new Error('Choose one of your valid check-ins');
+    if (!state.members.some((member) => member.id === recipientUserId && member.id !== user.id)) throw new Error('Recipient must be another active circle member');
+    const { data, error } = await client.rpc('start_baton', { source_check_in_id: sourceCheckInId, recipient_user_id: recipientUserId });
+    if (error) throw appError(error, 'Could not start baton');
+    await load(state.circleId);
+    return data;
+  }
+
+  async function passBaton(recipientUserId, sourceCheckInId) {
+    const baton = state.baton;
+    if (!baton || !baton.active) throw new Error('No active baton');
+    if (baton.holderUserId !== user.id) throw new Error('Only the current baton holder can pass it');
+    const checkIn = state.checkIns.find((item) => item.id === sourceCheckInId && item.userId === user.id && !item.invalid);
+    if (!checkIn) throw new Error('Choose one of your valid check-ins');
+    if (!state.members.some((member) => member.id === recipientUserId && member.id !== user.id)) throw new Error('Recipient must be another active circle member');
+    const { data, error } = await client.rpc('pass_baton', { target_baton_id: baton.id, recipient_user_id: recipientUserId, source_check_in_id: sourceCheckInId });
+    if (error) throw appError(error, 'Could not pass baton');
+    await load(state.circleId);
+    return data;
+  }
+
+  async function setBatonOptOut(enabled) {
+    const { data, error } = await client.rpc('set_baton_opt_out', { enabled: Boolean(enabled) });
+    if (error) throw appError(error, 'Could not save baton preference');
+    await load(state.circleId);
+    return data;
+  }
+
+  async function addComment(checkInId, body) {
+    if (!state.checkIns.some((item) => item.id === checkInId)) throw new Error('That check-in is no longer available');
+    const { data, error } = await client.rpc('add_check_in_comment', { target_check_in_id: checkInId, comment_body: validateCommentBody(body) });
+    if (error) throw appError(error, 'Could not add comment');
+    await load(state.circleId);
+    return state.comments.find((comment) => comment.id === data?.id) || data;
+  }
+
+  async function deleteComment(commentId) {
+    const comment = state.comments.find((item) => item.id === commentId);
+    if (!comment || comment.authorId !== user.id) throw new Error('You can only delete your own comment');
+    const { error } = await client.rpc('delete_check_in_comment', { target_comment_id: commentId });
+    if (error) throw appError(error, 'Could not delete comment');
+    return load(state.circleId);
+  }
+
+  function getEarnedBadges(options = {}) {
+    const profile = state.members.find((member) => member.id === user.id);
+    return computeEarnedBadges({ userId: user.id, members: state.members, habits: state.habits, checkIns: state.checkIns, batonHandoffs: state.batonHandoffs, asOfDate: options.asOfDate || dateInTimezone(profile?.timeZone || 'UTC'), joinedDate: options.joinedDate || profile?.joinedDate, timeZone: options.timeZone || profile?.timeZone || 'UTC' });
+  }
+
+  function getMonthlyWrapped(month, options = {}) {
+    if (!/^\d{4}-\d{2}$/.test(String(month))) throw new Error('Month must use YYYY-MM');
+    return buildMonthlyWrapped({ month, circleId: state.circleId, members: state.members, habits: state.habits, checkIns: state.checkIns, reactions: state.reactions, comments: state.comments, batonHandoffs: state.batonHandoffs, nudges: state.nudges, asOfDate: options.asOfDate || dateInTimezone(options.timeZone || 'UTC'), timeZone: options.timeZone || 'UTC', recapEnabled: options.recapEnabled !== false, recapOptOut: Boolean(options.recapOptOut) });
+  }
+
   async function getVapidPublicKey() {
     const { data, error } = await client.functions.invoke('send-nudge', { body: { action: 'vapid-public-key' } });
     if (error || !data?.publicKey) throw appError(error, 'Push setup is not ready yet');
@@ -930,6 +1044,13 @@ export function createSupabaseRepository(client, user) {
     resolveStake: resolveGroupStake,
     sendNudge,
     markNudgeRead,
+    startBaton,
+    passBaton,
+    setBatonOptOut,
+    addComment,
+    deleteComment,
+    getEarnedBadges,
+    getMonthlyWrapped,
     getVapidPublicKey,
     savePushSubscription,
     getProofUrl,
@@ -1037,9 +1158,96 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   function sendNudge(toUserId, message) {
+    state.nudges ||= [];
     state.nudges.unshift({ id: uid('nudge'), fromUserId: state.currentUserId, toUserId, message, createdAt: new Date().toISOString() });
     emit();
   }
 
-  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, sendNudge };
+  function memberInCircle(userId, circleId = state.circleId) {
+    return (state.members || []).some((member) => member.id === userId && member.active !== false && (!circleId || !member.circleId || member.circleId === circleId));
+  }
+
+  function sourceCompletion(sourceCheckInId) {
+    const checkIn = (state.checkIns || []).find((item) => item.id === sourceCheckInId);
+    const habit = (state.habits || []).find((item) => item.id === checkIn?.habitId);
+    if (!checkIn || !habit || checkIn.userId !== state.currentUserId || checkIn.invalid === true || checkIn.valid === false) throw new Error('Choose one of your valid check-ins');
+    if (state.circleId && habit.circleId && habit.circleId !== state.circleId) throw new Error('Check-in is outside the active squad');
+    return checkIn;
+  }
+
+  function batonRecipient(recipientUserId, circleId = state.circleId) {
+    const recipient = (state.members || []).find((member) => member.id === recipientUserId && member.id !== state.currentUserId);
+    if (!recipient || !memberInCircle(recipientUserId, circleId)) throw new Error('Recipient must be another active circle member');
+    if (recipient.batonOptedOut || recipient.baton_opted_out) throw new Error('Recipient opted out of baton passes');
+    return recipient;
+  }
+
+  function startBaton(recipientUserId, sourceCheckInId, handedAt = new Date().toISOString()) {
+    const source = sourceCompletion(sourceCheckInId);
+    batonRecipient(recipientUserId);
+    const expiry = new Date(new Date(handedAt).getTime() + 24 * 60 * 60 * 1000).toISOString();
+    if (state.baton?.active && new Date(state.baton.expiresAt).getTime() > new Date(handedAt).getTime()) throw new Error('That squad already has an active baton');
+    state.baton = { id: uid('baton'), circleId: state.circleId, holderUserId: recipientUserId, sourceCheckInId: source.id, startedAt: handedAt, handedAt, expiresAt: expiry, active: true };
+    state.batonHandoffs ||= [];
+    state.batonHandoffs.push({ id: uid('handoff'), batonId: state.baton.id, circleId: state.circleId, fromUserId: state.currentUserId, toUserId: recipientUserId, sourceCheckInId: source.id, handedAt, expiresAt: expiry });
+    emit();
+    return clone(state.baton);
+  }
+
+  function passBaton(recipientUserId, sourceCheckInId, handedAt = new Date().toISOString()) {
+    const baton = state.baton;
+    const now = new Date(handedAt).getTime();
+    if (!baton?.active || new Date(baton.expiresAt).getTime() <= now) {
+      if (baton) baton.active = false;
+      throw new Error('No active baton');
+    }
+    if (baton.holderUserId !== state.currentUserId) throw new Error('Only the current baton holder can pass it');
+    const source = sourceCompletion(sourceCheckInId);
+    batonRecipient(recipientUserId, baton.circleId);
+    const expiry = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    baton.holderUserId = recipientUserId;
+    baton.sourceCheckInId = source.id;
+    baton.handedAt = handedAt;
+    baton.expiresAt = expiry;
+    state.batonHandoffs ||= [];
+    state.batonHandoffs.push({ id: uid('handoff'), batonId: baton.id, circleId: baton.circleId, fromUserId: state.currentUserId, toUserId: recipientUserId, sourceCheckInId: source.id, handedAt, expiresAt: expiry });
+    emit();
+    return clone(baton);
+  }
+
+  function setBatonOptOut(enabled) {
+    state.batonOptedOut = !Boolean(enabled);
+    const member = state.members.find((item) => item.id === state.currentUserId);
+    if (member) member.batonOptedOut = state.batonOptedOut;
+    emit();
+    return { userId: state.currentUserId, optedOut: state.batonOptedOut };
+  }
+
+  function addComment(checkInId, body) {
+    sourceCompletion(checkInId);
+    const comment = { id: uid('comment'), checkInId, circleId: state.circleId, authorId: state.currentUserId, body: validateCommentBody(body), createdAt: new Date().toISOString() };
+    state.comments ||= [];
+    state.comments.push(comment);
+    emit();
+    return clone(comment);
+  }
+
+  function deleteComment(commentId) {
+    const index = (state.comments || []).findIndex((comment) => comment.id === commentId && comment.authorId === state.currentUserId);
+    if (index < 0) throw new Error('You can only delete your own comment');
+    const [deleted] = state.comments.splice(index, 1);
+    emit();
+    return clone(deleted);
+  }
+
+  function getEarnedBadges(options = {}) {
+    const member = state.members.find((item) => item.id === state.currentUserId) || {};
+    return computeEarnedBadges({ userId: state.currentUserId, members: state.members, habits: state.habits, checkIns: state.checkIns, batonHandoffs: state.batonHandoffs, asOfDate: options.asOfDate || new Date().toISOString().slice(0, 10), joinedDate: options.joinedDate || member.joinedDate, timeZone: options.timeZone || member.timeZone || 'UTC' });
+  }
+
+  function getMonthlyWrapped(month, options = {}) {
+    return buildMonthlyWrapped({ month, circleId: state.circleId, members: state.members, habits: state.habits, checkIns: state.checkIns, reactions: state.reactions || [], comments: state.comments || [], batonHandoffs: state.batonHandoffs || [], nudges: state.nudges || [], asOfDate: options.asOfDate, timeZone: options.timeZone || 'UTC', recapEnabled: options.recapEnabled !== false, recapOptOut: Boolean(options.recapOptOut) });
+  }
+
+  return { getState, toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, sendNudge, startBaton, passBaton, setBatonOptOut, addComment, deleteComment, getEarnedBadges, getMonthlyWrapped };
 }

@@ -3,6 +3,13 @@ import { getScheduleOccurrence } from './schedule.js';
 const DAY_MS = 86_400_000;
 const DEFAULT_SUPPORT_EMOJIS = new Set(['👏', '🔥', '💪', '❤️', '❤', '🙌', '👍', '🎉', '✨']);
 
+export function validateCommentBody(value) {
+  if (typeof value !== 'string') throw new Error('Comment must be 1–180 characters');
+  const body = value.trim();
+  if (!body || body.length > 180) throw new Error('Comment must be 1–180 characters');
+  return body;
+}
+
 function dateKey(value) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   const text = String(value ?? '');

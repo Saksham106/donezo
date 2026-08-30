@@ -176,3 +176,5 @@ export {
   buildWeeklySquadRecap,
   buildPrivacySafeExportPayload,
 } from './social-domain.js';
+export { BADGE_CATALOG, getBadgeCatalog, computeEarnedBadges, computeBadges, deriveBadges } from './badges-domain.js';
+export { buildMonthlyWrapped, buildWrapped, monthlyWrapped } from './wrapped-domain.js';
