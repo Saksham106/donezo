@@ -96,7 +96,7 @@ test('social stylesheet and service worker additions ship in production', () => 
   assert.match(build, /social\.css/);
   assert.match(serviceWorker, /social\.css/);
   assert.match(serviceWorker, /addEventListener\('push'/);
-  assert.match(serviceWorker, /donezo-shell-v12/);
+  assert.match(serviceWorker, /donezo-shell-v13/);
 });
 
 test('shared circle freshness is wired without replacing the app architecture', () => {
