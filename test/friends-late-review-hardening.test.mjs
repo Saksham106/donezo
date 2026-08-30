@@ -37,6 +37,7 @@ test('new Friends spaces share a direct friend invite rather than a legacy circl
   assert.match(appSource, /createdFriendInvite = await repo\.createFriendInvite\(\)/);
   assert.match(appSource, /redeemInvite\(repo, validation\.code\)/);
   assert.match(appSource, /function creatorInviteScreen\(\) \{\s*const code = activeInviteCode\(\)/);
+  assert.match(appSource, /if \(\(createdFriendInvite \|\| createdCircleInvite\) && state\?\.circleId\) \{/);
 });
 
 test('memory repository emits hardened friend codes', () => {

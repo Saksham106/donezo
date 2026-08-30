@@ -1085,7 +1085,7 @@ function render() {
     return;
   }
   const state = getState();
-  if (createdCircleInvite && state?.circleId) {
+  if ((createdFriendInvite || createdCircleInvite) && state?.circleId) {
     app.innerHTML = creatorInviteScreen();
     bindInviteActions();
     return;
