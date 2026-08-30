@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../social.css', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const tokens = readFileSync(new URL('../tokens.css', import.meta.url), 'utf8');
 const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
 
@@ -29,6 +30,7 @@ test('theme choice supports system, light, and dark without startup flash', () =
   assert.match(app, /data-theme-choice="dark"/);
   assert.match(app, /localStorage\.setItem\(THEME_KEY/);
   assert.match(tokens, /\[data-theme="light"\]\s*\{\s*color-scheme:\s*light/);
+  assert.doesNotMatch(styles, /html,body\{[^}]*color-scheme:\s*light dark/);
 });
 
 test('center Check In is a direct action, not a duplicate primary screen', () => {
