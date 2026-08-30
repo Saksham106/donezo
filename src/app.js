@@ -860,10 +860,11 @@ async function handleProofSubmit() {
   proofReview = transitionProofReview(review, { type: 'uploading' });
   render();
   try {
-    await repo.completeWithProof(review.habitId, today(), review.file);
+    const checkInDate = today();
+    await repo.completeWithProof(review.habitId, checkInDate, review.file);
     if (proofReview?.previewUrl === review.previewUrl) clearProofReview();
     proofHabit = null;
-    notify(`Proof saved · ${habit.title} 🧾`, 5000, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(review.habitId) } });
+    notify(`Proof saved · ${habit.title} 🧾`, 5000, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(review.habitId, checkInDate) } });
     haptic(35);
   } catch (error) {
     if (proofReview?.previewUrl === review.previewUrl) {
@@ -1188,7 +1189,7 @@ async function runMutation(action, successMessage) {
     return result;
   } catch (error) {
     mutationStatus = 'failed';
-    retryMutation = () => runMutation(action, successMessage);
+    retryMutation = null;
     notify(readableError(error), 3600);
     return undefined;
   } finally {
@@ -1292,9 +1293,10 @@ async function handleUndoCheckIn(habitId, date = today()) {
 async function handleHabit(id) {
   const habit = getState().habits.find((item) => item.id === id);
   if (!habit) return;
-  const current = checkInFor(id);
+  const checkInDate = today();
+  const current = checkInFor(id, me()?.id, checkInDate);
   if (current && !current.invalid) {
-    await runMutation(() => repo.toggleHabit(id, today()), `${habit.title} unchecked`);
+    await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);
     return;
   }
   if (habit.proofMode === 'photo') {
@@ -1302,10 +1304,10 @@ async function handleHabit(id) {
     render();
     return;
   }
-  const result = await runMutation(() => repo.toggleHabit(id, today()));
+  const result = await runMutation(() => repo.toggleHabit(id, checkInDate));
   if (!result) return;
   haptic(28);
-  notify(`Checked in · ${habit.title}`, 4200, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(id) } });
+  notify(`Checked in · ${habit.title}`, 4200, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(id, checkInDate) } });
 }
 
 function closeHabitEditor() {
@@ -1350,6 +1352,7 @@ async function handleHabitSubmit(event) {
       || input.targetUnit.trim() !== (existing.targetUnit || 'count')
       || input.targetTime !== (existing.targetTime || '')
       || input.graceMinutes !== Number(existing.graceMinutes || 0)
+      || input.scheduleTimezone !== (existing.scheduleTimezone || existing.ownerTimeZone || me()?.timeZone || 'UTC')
     );
     if (scheduleChanged) {
       notify("Today's check-in already uses the current schedule. Change it tomorrow or undo today's check-in first.", 4200);
