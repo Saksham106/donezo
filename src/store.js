@@ -4,6 +4,7 @@ import {
   localDateInTimeZone,
   rejectedCheckInIds,
 } from './domain.js';
+import { validateStake } from './stakes.js';
 
 const clone = (value) => structuredClone(value);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -158,6 +159,11 @@ export function mapDatabaseState(user, rows) {
     .map((checkIn) => {
       const habit = habitById.get(checkIn.habitId);
       const actor = memberById.get(checkIn.userId);
+      const activityReactions = reactions.filter((reaction) => reaction.checkInId === checkIn.id && reaction.emoji !== '👎');
+      const reactionCounts = activityReactions.reduce((counts, reaction) => {
+        counts[reaction.emoji] = (counts[reaction.emoji] || 0) + 1;
+        return counts;
+      }, {});
       return {
         id: checkIn.id,
         checkInId: checkIn.id,
@@ -172,6 +178,8 @@ export function mapDatabaseState(user, rows) {
         invalid: checkIn.invalid,
         downvotes: checkIn.downvotes,
         userDownvoted: checkIn.userDownvoted,
+        reactionCounts,
+        userReactions: activityReactions.filter((reaction) => reaction.userId === user.id).map((reaction) => reaction.emoji),
       };
     });
   const nudges = (rows.nudges || []).map((nudge) => ({
@@ -199,6 +207,51 @@ export function mapDatabaseState(user, rows) {
     .sort((a, b) => new Date(b.when) - new Date(a.when))
     .slice(0, 40);
 
+  const challenges = (rows.challenges || []).map((challenge) => ({
+    id: challenge.id,
+    circleId: challenge.circle_id,
+    createdBy: challenge.created_by,
+    kind: challenge.kind,
+    title: challenge.title,
+    target: challenge.target,
+    startsOn: challenge.starts_on,
+    endsOn: challenge.ends_on,
+    status: challenge.status,
+    resolvedAt: challenge.resolved_at,
+  }));
+  const recoveries = (rows.recoveries || []).map((recovery) => ({
+    id: recovery.id,
+    habitId: recovery.habit_id,
+    userId: recovery.user_id,
+    missedDate: recovery.missed_date,
+    recoveredAt: recovery.recovered_at,
+    action: recovery.action,
+    reflection: recovery.reflection,
+    visibility: recovery.visibility,
+    createdAt: recovery.created_at,
+  }));
+  const stakes = (rows.stakes || []).map((stake) => ({
+    id: stake.id,
+    circleId: stake.circle_id,
+    challengeId: stake.challenge_id,
+    createdBy: stake.created_by,
+    rule: stake.rule,
+    reward: stake.reward || '',
+    consequence: stake.consequence || '',
+    startsOn: stake.starts_on,
+    endsOn: stake.ends_on,
+    status: stake.status,
+    resolution: stake.resolution,
+    activatedAt: stake.activated_at,
+    resolvedAt: stake.resolved_at,
+  }));
+  const stakeConsents = (rows.stakeConsents || []).map((consent) => ({
+    stakeId: consent.stake_id,
+    userId: consent.user_id,
+    status: consent.status,
+    respondedAt: consent.responded_at,
+  }));
+
   return {
     currentUserId: user.id,
     circles,
@@ -211,6 +264,10 @@ export function mapDatabaseState(user, rows) {
     reactions,
     friendActivities,
     nudges,
+    challenges,
+    recoveries,
+    stakes,
+    stakeConsents,
   };
 }
 
@@ -248,11 +305,11 @@ export function createSupabaseRepository(client, user) {
     })).filter((circle) => circle.id);
     const circle = circles.find((item) => item.id === requestedCircleId) || circles[0] || null;
     if (!circle) {
-      state = mapDatabaseState(user, { profile, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [] });
+      state = mapDatabaseState(user, { profile, circles: [], circle: null, members: [], habits: [], habitShares: [], checkIns: [], reactions: [], nudges: [], challenges: [], recoveries: [], stakes: [], stakeConsents: [] });
       return getState();
     }
 
-    const [membersResult, sharedHabitsResult, nudgesResult] = await Promise.all([
+    const [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult] = await Promise.all([
       client.from('circle_members')
         .select('user_id, role, profiles!circle_members_user_id_fkey(id,username,display_name,avatar_url,timezone)')
         .eq('circle_id', circle.id)
@@ -262,21 +319,30 @@ export function createSupabaseRepository(client, user) {
         .eq('circle_id', circle.id)
         .order('shared_at'),
       client.from('nudges').select('*').eq('circle_id', circle.id).order('created_at', { ascending: false }).limit(100),
+      client.from('weekly_challenges').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
+      client.from('group_stakes').select('*').eq('circle_id', circle.id).order('starts_on', { ascending: false }).limit(20),
     ]);
-    const failed = [membersResult, sharedHabitsResult, nudgesResult].find((result) => result.error);
+    const failed = [membersResult, sharedHabitsResult, nudgesResult, challengesResult, stakesResult].find((result) => result.error);
     if (failed) throw appError(failed.error, 'Could not load Donezo data');
     const habits = (sharedHabitsResult.data || []).map((share) => share.habits).filter(Boolean);
     const habitIds = habits.map((habit) => habit.id);
-    const [habitSharesResult, checkInsResult] = await Promise.all([
+    const stakeIds = (stakesResult.data || []).map((stake) => stake.id);
+    const [habitSharesResult, checkInsResult, recoveriesResult, stakeConsentsResult] = await Promise.all([
       habitIds.length
         ? client.from('habit_circles').select('habit_id,circle_id').in('habit_id', habitIds)
         : Promise.resolve({ data: [], error: null }),
       habitIds.length
         ? client.from('check_ins').select('*').in('habit_id', habitIds).order('completed_at', { ascending: false }).limit(1000)
         : Promise.resolve({ data: [], error: null }),
+      habitIds.length
+        ? client.from('habit_recoveries').select('*').in('habit_id', habitIds).order('created_at', { ascending: false }).limit(200)
+        : Promise.resolve({ data: [], error: null }),
+      stakeIds.length
+        ? client.from('stake_consents').select('*').in('stake_id', stakeIds)
+        : Promise.resolve({ data: [], error: null }),
     ]);
-    if (habitSharesResult.error || checkInsResult.error) {
-      throw appError(habitSharesResult.error || checkInsResult.error, 'Could not load Donezo data');
+    if (habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error) {
+      throw appError(habitSharesResult.error || checkInsResult.error || recoveriesResult.error || stakeConsentsResult.error, 'Could not load Donezo data');
     }
     const checkInIds = checkInsResult.data.map((checkIn) => checkIn.id);
     const reactionsResult = checkInIds.length
@@ -293,6 +359,10 @@ export function createSupabaseRepository(client, user) {
       checkIns: checkInsResult.data,
       reactions: reactionsResult.data,
       nudges: nudgesResult.data,
+      challenges: challengesResult.data,
+      recoveries: recoveriesResult.data,
+      stakes: stakesResult.data,
+      stakeConsents: stakeConsentsResult.data,
     });
     return getState();
   }
@@ -462,6 +532,88 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
+  async function toggleReaction(checkInId, emoji) {
+    if (!['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
+    const checkIn = state.checkIns.find((item) => item.id === checkInId);
+    if (!checkIn) throw new Error('That update is no longer available');
+    const existing = state.reactions.find((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji === emoji);
+    if (existing) {
+      const { error } = await client.from('reactions').delete().eq('id', existing.id).eq('user_id', user.id);
+      if (error) throw appError(error, 'Could not remove reaction');
+    } else {
+      const { error } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji });
+      if (error) throw appError(error, 'Could not react');
+    }
+    return load();
+  }
+
+  async function recoverHabit(habitId, missedDate, input = {}) {
+    ownedHabit(habitId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(missedDate) || missedDate >= dateInTimezone('UTC')) throw new Error('Choose a past missed date');
+    const action = String(input.action || 'recover_today');
+    if (!['recover_today', 'adjust_habit', 'pause_habit', 'ask_support'].includes(action)) throw new Error('Choose a recovery action');
+    const reflection = String(input.reflection || '').trim();
+    if (reflection.length > 280) throw new Error('Keep the reflection under 280 characters');
+    const visibility = input.visibility === 'squad' ? 'squad' : 'private';
+    const { error } = await client.from('habit_recoveries').upsert({
+      habit_id: habitId,
+      user_id: user.id,
+      missed_date: missedDate,
+      recovered_at: action === 'recover_today' ? new Date().toISOString() : null,
+      action,
+      reflection: reflection || null,
+      visibility,
+    }, { onConflict: 'habit_id,user_id,missed_date' });
+    if (error) throw appError(error, 'Could not save recovery');
+    return load();
+  }
+
+  async function createChallenge(input = {}) {
+    if (!state.circleId) throw new Error('Create or join a squad first');
+    const kind = String(input.kind || 'completion_percent');
+    if (!['completion_percent', 'total_completions', 'no_consecutive_miss'].includes(kind)) throw new Error('Choose a valid challenge');
+    const target = Number(input.target || (kind === 'completion_percent' ? 80 : kind === 'no_consecutive_miss' ? 1 : 20));
+    const title = String(input.title || '').trim();
+    if (!title || title.length > 80) throw new Error('Challenge title must be 1–80 characters');
+    const { error } = await client.from('weekly_challenges').insert({
+      circle_id: state.circleId,
+      created_by: user.id,
+      kind,
+      title,
+      target,
+      starts_on: input.startsOn,
+      ends_on: input.endsOn,
+    });
+    if (error) throw appError(error, 'Could not start challenge');
+    return load();
+  }
+
+  async function createStake(input = {}) {
+    if (!state.circleId) throw new Error('Create or join a squad first');
+    const clean = validateStake(input);
+    const { data, error } = await client.from('group_stakes').insert({
+      circle_id: state.circleId,
+      challenge_id: input.challengeId || null,
+      created_by: user.id,
+      rule: clean.rule,
+      reward: clean.reward || null,
+      consequence: clean.consequence || null,
+      starts_on: input.startsOn,
+      ends_on: input.endsOn,
+    }).select('id').single();
+    if (error) throw appError(error, 'Could not propose stake');
+    const result = await client.rpc('respond_to_stake', { target_stake: data.id, response: 'accepted' });
+    if (result.error) throw appError(result.error, 'Stake created, but your opt-in failed');
+    return load();
+  }
+
+  async function respondToStake(stakeId, response) {
+    if (!['accepted', 'declined'].includes(response)) throw new Error('Choose accept or decline');
+    const { error } = await client.rpc('respond_to_stake', { target_stake: stakeId, response });
+    if (error) throw appError(error, 'Could not respond to stake');
+    return load();
+  }
+
   async function sendNudge(toUserId, message, visibility = 'squad') {
     if (!state.circleId) throw new Error('Create or join a squad first');
     if (!['private', 'squad'].includes(visibility)) throw new Error('Choose public or private');
@@ -533,6 +685,11 @@ export function createSupabaseRepository(client, user) {
     toggleHabit,
     completeWithProof,
     toggleDownvote,
+    toggleReaction,
+    recoverHabit,
+    createChallenge,
+    createStake,
+    respondToStake,
     sendNudge,
     markNudgeRead,
     getVapidPublicKey,
