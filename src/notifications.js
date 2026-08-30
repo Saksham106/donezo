@@ -146,7 +146,7 @@ export function getNotificationDeepLink(category, context = {}) {
   }
   if (category === 'friend_activity' || category === 'reaction' || category === 'comment') {
     if (!context.checkInId) throw new Error('checkInId is required for check-in notifications');
-    return `/?tab=squad&checkIn=${encoded(context.checkInId)}`;
+    return `/?tab=friends&checkIn=${encoded(context.checkInId)}`;
   }
   if (!context.circleId) throw new Error('circleId is required for challenge notifications');
   return `/?tab=league&circle=${encoded(context.circleId)}`;
@@ -159,10 +159,11 @@ export function parseNotificationDeepLink(value, base = 'https://donezo.app') {
   } catch {
     url = new URL('/', base);
   }
-  const allowedTabs = new Set(['today', 'squad', 'checkin', 'league', 'me']);
+  const allowedTabs = new Set(['today', 'friends', 'checkin', 'league', 'me']);
   const requestedTab = url.searchParams.get('tab');
+  const normalizedTab = requestedTab === 'squad' ? 'friends' : requestedTab;
   return {
-    tab: allowedTabs.has(requestedTab) ? requestedTab : 'today',
+    tab: allowedTabs.has(normalizedTab) ? normalizedTab : 'today',
     checkInId: url.searchParams.get('checkIn'),
     habitId: url.searchParams.get('habit'),
     circleId: url.searchParams.get('circle'),

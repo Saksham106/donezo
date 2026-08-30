@@ -62,6 +62,52 @@ test('mapDatabaseState maps timezones, reactions, invalid proof and all activity
   });
 });
 
+test('mapDatabaseState uses immutable audience cardinalities instead of circle member counts', () => {
+  const state = mapDatabaseState(user, {
+    ...rows,
+    checkInAudienceMembers: [{ check_in_id: 'check-1', viewer_id: 'user-1' }],
+    checkInAudienceSizes: [{ check_in_id: 'check-1', audience_size: 5 }],
+  });
+  assert.equal(state.checkIns[0].invalid, false);
+});
+test('mapDatabaseState exposes unified friends, activities, and personalized league members', () => {
+  const state = mapDatabaseState(user, {
+    ...rows,
+    circles: [],
+    circle: null,
+    members: [],
+    friendships: [{ user_a: 'user-1', user_b: 'user-2' }],
+    friendProfiles: [rows.members[1].profiles],
+    habits: [{ ...rows.habits[0], circle_id: null }],
+    checkIns: [{ ...rows.checkIns[0], habit_id: 'habit-1' }],
+    reactions: [],
+  });
+  assert.deepEqual(state.friends.map((friend) => friend.id), ['user-2']);
+  assert.equal(state.activities, state.friendActivities);
+  assert.deepEqual(state.personalizedLeague.map((member) => member.id), ['user-1', 'user-2']);
+});
+
+test('authorized historical comments remain visible after their author is no longer a current friend', () => {
+  const state = mapDatabaseState(user, {
+    ...rows,
+    circles: [],
+    circle: null,
+    members: [],
+    friendships: [],
+    friendProfiles: [],
+    habits: [{ ...rows.habits[0], circle_id: null }],
+    checkIns: [{ ...rows.checkIns[0], habit_id: 'habit-1' }],
+    comments: [{
+      id: 'comment-old-friend',
+      check_in_id: 'check-1',
+      circle_id: null,
+      author_id: 'former-friend',
+      body: 'Still proud of this one',
+      created_at: '2026-08-27T23:58:00Z',
+    }],
+  });
+  assert.deepEqual(state.comments.map((comment) => comment.id), ['comment-old-friend']);
+});
 test('mapDatabaseState ignores check-ins outside the loaded circle habits', () => {
   const state = mapDatabaseState(user, {
     ...rows,

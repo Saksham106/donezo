@@ -62,19 +62,21 @@ export function proofRejectionThreshold(circleMemberCount) {
   return otherMembers === 0 ? Infinity : Math.floor(otherMembers / 2) + 1;
 }
 
-export function rejectedCheckInIds(checkIns, reactions, circleMemberCount) {
-  const threshold = proofRejectionThreshold(circleMemberCount);
-  if (!Number.isFinite(threshold)) return new Set();
+export function rejectedCheckInIds(checkIns, reactions, circleMemberCount, audienceSizeByCheckIn = null) {
   const checkInById = new Map(checkIns.map((checkIn) => [checkIn.id, checkIn]));
   const votersByCheckIn = new Map();
   for (const reaction of reactions || []) {
     if (reaction.emoji !== '👎') continue;
     const checkIn = checkInById.get(reaction.checkInId);
-    if (!checkIn?.proofPath || reaction.userId === checkIn.userId) continue;
+    if (!checkIn?.proofPath && !checkIn?.proofUrl) continue;
+    if (reaction.userId === checkIn.userId) continue;
     if (!votersByCheckIn.has(reaction.checkInId)) votersByCheckIn.set(reaction.checkInId, new Set());
     votersByCheckIn.get(reaction.checkInId).add(reaction.userId);
   }
-  return new Set([...votersByCheckIn.entries()].filter(([, voters]) => voters.size >= threshold).map(([checkInId]) => checkInId));
+  return new Set([...votersByCheckIn.entries()].filter(([checkInId, voters]) => {
+    const snapshotSize = audienceSizeByCheckIn?.get?.(checkInId) ?? circleMemberCount;
+    return voters.size >= proofRejectionThreshold(snapshotSize);
+  }).map(([checkInId]) => checkInId));
 }
 
 function mondayOf(dateString) {

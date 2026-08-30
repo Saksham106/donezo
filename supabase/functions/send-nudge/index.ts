@@ -73,16 +73,18 @@ export default {
     if (!nudge) return json({ error: 'Nudge not found' }, 404);
     if (nudge.from_user_id !== user.id) return json({ error: 'Forbidden' }, 403);
 
-    const { data: memberships, error: membershipError } = await admin
-      .from('circle_members')
-      .select('user_id')
-      .eq('circle_id', nudge.circle_id)
-      .in('user_id', [nudge.from_user_id, nudge.to_user_id]);
-    if (membershipError) {
-      console.error('membership lookup failed', membershipError.message);
-      return json({ error: 'Could not verify circle membership' }, 500);
+    const [userA, userB] = [nudge.from_user_id, nudge.to_user_id].sort();
+    const { data: directFriends, error: friendshipError } = await admin
+      .from('friendships')
+      .select('user_a,user_b')
+      .eq('user_a', userA)
+      .eq('user_b', userB)
+      .maybeSingle();
+    if (friendshipError) {
+      console.error('friendship authorization lookup failed', friendshipError.message);
+      return json({ error: 'Could not verify friendship' }, 500);
     }
-    if (memberships?.length !== 2) return json({ error: 'Circle membership changed' }, 403);
+    if (!directFriends) return json({ error: 'Friendship changed' }, 403);
 
     const [{ data: sender }, { data: subscriptions, error: subscriptionError }] = await Promise.all([
       admin.from('profiles').select('display_name').eq('id', nudge.from_user_id).maybeSingle(),
