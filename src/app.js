@@ -32,7 +32,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 const initialNavigation = parseNotificationDeepLink(window.location.href);
-const PRIMARY_TABS = ['today', 'squad', 'checkin', 'league', 'me'];
+const PRIMARY_TABS = ['today', 'squad', 'league', 'me'];
+const THEME_KEY = 'donezo.theme';
 const requestedTab = initialNavigation.tab || localStorage.getItem('donezo.activeTab') || 'today';
 
 let repo = null;
@@ -47,6 +48,7 @@ let proofHabit = null;
 let proofReview = null;
 let proofViewer = null;
 let proofViewerRequestId = 0;
+let proofRejectCheckInId = null;
 let selectedEmoji = '⚡';
 let habitSheetOpen = false;
 let editingHabitId = null;
@@ -87,7 +89,23 @@ let pwaUpdateAvailable = Boolean(window.DonezoPWA?.updateAvailable);
 let pwaApplying = false;
 let mutationStatus = 'idle';
 let retryMutation = null;
-const screenScroll = { today: 0, squad: 0, checkin: 0, league: 0, me: 0 };
+const screenScroll = { today: 0, squad: 0, league: 0, me: 0 };
+
+function currentThemeChoice() {
+  const saved = localStorage.getItem(THEME_KEY);
+  return ['light', 'dark'].includes(saved) ? saved : 'system';
+}
+
+function applyTheme(choice) {
+  const next = ['light', 'dark'].includes(choice) ? choice : 'system';
+  if (next === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = next;
+  localStorage.setItem(THEME_KEY, next);
+  const dark = next === 'dark' || (next === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1d2433' : '#f7f2e8');
+}
+
+applyTheme(currentThemeChoice());
 
 const starterTemplates = [
   { title: 'Move for 20 minutes', emoji: '🏃', targetTime: '18:00' },
@@ -229,14 +247,20 @@ function pwaUpdateBanner() {
 }
 
 function nav() {
-  const items = [
-    ['today', 'home', 'Today'],
-    ['squad', 'squad', 'Squad'],
-    ['checkin', 'check', 'Check In'],
-    ['league', 'trophy', 'League'],
-    ['me', 'user', 'Me'],
-  ];
-  return `<nav class="nav" aria-label="Primary">${items.map(([id, iconName, label]) => `<button data-tab="${id}" class="nav-btn ${tab === id ? 'active' : ''} ${id === 'checkin' ? 'checkin' : ''}" aria-label="${label}"><span class="nav-icon">${icon(iconName)}</span><small>${label}</small></button>`).join('')}</nav>`;
+  const item = (id, iconName, label) => `<button data-tab="${id}" class="nav-btn ${tab === id ? 'active' : ''}" aria-label="${label}"><span class="nav-icon">${icon(iconName)}</span><small>${label}</small></button>`;
+  return `<nav class="nav" aria-label="Primary">${item('today', 'home', 'Today')}${item('squad', 'squad', 'Squad')}<button data-checkin-action class="nav-btn checkin" aria-label="Check in now"><span class="nav-icon">${icon('check')}</span><small>Check In</small></button>${item('league', 'trophy', 'League')}${item('me', 'user', 'Me')}</nav>`;
+}
+
+function openCheckInAction() {
+  const state = getState();
+  const next = sortedTodayHabits(dueHabitsFor(state.currentUserId, today(), state)).find((habit) => !done(habit.id));
+  if (!next) {
+    setActiveTab('today');
+    notify('You are all done today. Clean sweep.');
+    render();
+    return;
+  }
+  handleHabit(next.id);
 }
 
 function pageHeading(title, meta, detail = '') {
@@ -412,7 +436,7 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(getState().members.length);
   const proofPreview = showProofActions && activity.proofPath ? `<button class="proof-thumbnail" type="button" data-proof="${esc(activity.proofPath)}" data-proof-thumbnail="${esc(activity.proofPath)}" aria-label="Open ${esc(activity.habitTitle)} proof"><span aria-hidden="true">📷</span><small>Loading proof…</small></button>` : '';
-  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-downvote="${activity.checkInId}" aria-label="Downvote proof">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
+  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
   const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
   const mineReactions = activity.userReactions || [];
   const visibleReactionCounts = { ...(activity.reactionCounts || {}) };
@@ -459,7 +483,7 @@ function squadScreen() {
   const empty = squadFeed === 'proofs'
     ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give the squad something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>'
     : '<div class="empty compact-empty"><b>No activity yet.</b><p>Somebody has to go first.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Be first</button></div>';
-  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD', 'See what happened. Hype your people.')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div>${batonCard()}<div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
+  return `${pageHeading('Squad', state.circleName || 'YOUR SQUAD')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div><div class="squad-feed-tabs" role="tablist" aria-label="Squad updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
 function challengeProgress(challenge) {
@@ -574,7 +598,7 @@ function leagueScreen() {
 
 function challengeInfoSheet() {
   if (!challengeInfoOpen) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet challenge-info-sheet" role="dialog" aria-modal="true" aria-label="How squad challenges work" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">SQUAD CHALLENGES</p><h2>One goal. One week.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="challenge-explainer"><span>${icon('target')}</span><p>Pick a simple target for the whole squad. Everyone’s real check-ins move the same progress bar. No money, no punishment, no extra scoreboard.</p></div><button class="btn primary full" type="button" data-challenge>Start a challenge</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet challenge-info-sheet" role="dialog" aria-modal="true" aria-label="League actions" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">LEAGUE ACTIONS</p><h2>Move together.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><section class="league-action-section"><div class="challenge-explainer"><span>${icon('target')}</span><p><strong>Weekly challenge</strong><br>Pick one squad target. Real check-ins move the same progress bar.</p></div><button class="btn primary full" type="button" data-challenge>Start a challenge</button></section><section class="league-action-section"><p class="eyebrow">PASS THE MOMENTUM</p>${batonCard()}</section></section></div>`;
 }
 
 function stakeHistory() {
@@ -634,7 +658,7 @@ function meScreen() {
   const weekly = weeklyCompletionScore(me().id, state.habits, state.checkIns, today());
   const habits = myHabits(state);
   const ringStyle = `--progress:${Math.max(0, Math.min(100, weekly.percent)) * 3.6}deg`;
-  return `${pageHeading(me().name, me().handle || session.user.email, 'Your week, your receipts.')}<section class="me-progress-hero"><div class="progress-ring" style="${ringStyle}" role="progressbar" aria-label="Weekly completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${weekly.percent}"><span><b>${weekly.percent}%</b><small>this week</small></span></div><div class="me-progress-copy"><span>PERSONAL PACE</span><h2>${weekly.percent >= 100 ? 'Clean week.' : weekly.percent >= 70 ? 'You are cooking.' : weekly.percent ? 'Keep stacking reps.' : 'Start with one.'}</h2><p>${weekly.completed}/${weekly.possible} commitments landed.</p></div></section><section class="me-stat-chips"><span><b>🔥 ${me().currentStreak}</b><small>day streak</small></span><span><b>${total}</b><small>check-ins</small></span><span><b>${state.members.length}</b><small>people</small></span></section>${wrappedEntry()}${badgePreview()}<section class="settings-group clean-group"><div class="settings-title"><div><strong>Your habits</strong><p>${habits.length} active</p></div><button class="btn primary small-btn" data-open-habit>Add habit</button></div><div class="habit-settings-list">${habits.length ? habits.map(habitSettingsRow).join('') : '<div class="empty compact-empty"><b>No habits yet.</b><p>Add one commitment you can actually keep.</p><button class="btn primary empty-action" data-open-habit>Add first habit</button></div>'}</div></section>`;
+  return `${pageHeading(me().name, me().handle || session.user.email, 'Your week, your receipts.')}<section class="me-progress-hero"><div class="progress-ring" style="${ringStyle}" role="progressbar" aria-label="Weekly completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${weekly.percent}"><span><b>${weekly.percent}%</b><small>this week</small></span></div><div class="me-progress-copy"><span>PERSONAL PACE</span><h2>${weekly.percent >= 100 ? 'Clean week.' : weekly.percent >= 70 ? 'You are cooking.' : weekly.percent ? 'Keep stacking reps.' : 'Start with one.'}</h2><p>${weekly.completed}/${weekly.possible} commitments landed.</p></div></section><section class="me-stat-chips"><span><b>🔥 ${me().currentStreak}</b><small>day streak</small></span><span><b>${total}</b><small>check-ins</small></span><span><b>${state.members.length}</b><small>friends</small></span></section>${wrappedEntry()}${badgePreview()}<section class="settings-group clean-group"><div class="settings-title"><div><strong>Your habits</strong><p>${habits.length} active</p></div><button class="btn primary small-btn" data-open-habit>Add habit</button></div><div class="habit-settings-list">${habits.length ? habits.map(habitSettingsRow).join('') : '<div class="empty compact-empty"><b>No habits yet.</b><p>Add one commitment you can actually keep.</p><button class="btn primary empty-action" data-open-habit>Add first habit</button></div>'}</div></section>`;
 }
 
 function habitSheet() {
@@ -684,13 +708,14 @@ function settingsSheet() {
   const habitChoices = myHabits(state).map((habit) => `<label class="notification-option compact"><span class="notification-option-icon" aria-hidden="true">${esc(habit.emoji)}</span><span><strong>${esc(habit.title)}</strong><small>Personal reminder</small></span><span class="switch-control notification-option-toggle"><input type="checkbox" name="habitEnabled" value="${habit.id}" ${preferences.habitOverrides[habit.id] !== false ? 'checked' : ''}><span aria-hidden="true"></span></span></label>`).join('');
   const squadList = state.circles.map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
   const views = {
-    menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="squads"><span class="settings-menu-icon">◎</span><span><strong>Squads</strong><small>Switch, create, or join</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
+    menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="squads"><span class="settings-menu-icon">◎</span><span><strong>Squads</strong><small>Switch, create, or join</small></span><b>›</b></button><button type="button" data-settings-view="appearance"><span class="settings-menu-icon">◐</span><span><strong>Appearance</strong><small>System, light, or dark</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
+    appearance: `<section class="appearance-settings"><p class="sheet-copy">Pick what feels right. System follows your phone automatically.</p><div class="theme-choice" role="radiogroup" aria-label="App theme"><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'system'}" class="${currentThemeChoice() === 'system' ? 'active' : ''}" data-theme-choice="system"><span>◐</span><strong>System</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'light'}" class="${currentThemeChoice() === 'light' ? 'active' : ''}" data-theme-choice="light"><span>☀</span><strong>Light</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'dark'}" class="${currentThemeChoice() === 'dark' ? 'active' : ''}" data-theme-choice="dark"><span>☾</span><strong>Dark</strong></button></div></section>`,
     profile: `<form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button>`,
     squads: `<section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep groups separate. Switching does not lose your place.</p></div><span>${state.circles.length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section>`,
     notifications: `<section class="notification-settings"><div class="notification-hero"><span class="notification-hero-icon" aria-hidden="true">🔔</span><div><strong>Stay in the loop, not glued to it.</strong><small>${capability.supported ? `Push is ${capability.permission}. You control what earns a buzz.` : 'Push is not supported here. Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test' : 'Enable'}</button></div><form id="notification-preferences-form" class="form notification-form"><section class="notification-panel"><div class="notification-panel-head"><div><strong>Quiet hours</strong><small>Donezo shuts up while you sleep.</small></div><label class="switch-control"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}><span aria-hidden="true"></span></label></div><div class="quiet-hours-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label class="timezone-field">Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required><small>Uses your habit timezone so reminders land correctly.</small></label></section><section class="notification-panel"><div class="notification-panel-head"><div><strong>What can buzz you</strong><small>Keep only the stuff you would actually open.</small></div></div><div class="notification-options">${categoryChoices}</div></section>${habitChoices ? `<section class="notification-panel"><div class="notification-panel-head"><div><strong>Habit reminders</strong><small>Mute individual habits without muting Donezo.</small></div></div><div class="notification-options">${habitChoices}</div></section>` : ''}<button class="btn primary full" ${busy ? 'disabled' : ''}>Save notifications</button></form></section>`,
     social: `<form id="social-preferences-form" class="form settings-social-form"><label class="preference-check"><input type="checkbox" name="recapAwardsEnabled" ${me().awardOptOut ? '' : 'checked'}><span><strong>Named recap awards</strong><small>Let the squad include your name in weekly and monthly awards.</small></span></label><label class="preference-check"><input type="checkbox" name="batonEnabled" ${state.batonOptedOut ? '' : 'checked'}><span><strong>Squad Baton</strong><small>Friends can pass you the next turn. No penalty if it expires.</small></span></label><button class="btn full" ${busy ? 'disabled' : ''}>Save social settings</button></form>`,
   };
-  const title = ({ menu: 'Settings', profile: 'Profile & app', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
+  const title = ({ menu: 'Settings', profile: 'Profile & app', appearance: 'Appearance', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div>${settingsView === 'menu' ? '<p class="eyebrow">SETTINGS</p>' : '<button class="settings-back" type="button" data-settings-back>‹ Settings</button>'}<h2>${title}</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div>${views[settingsView] || views.menu}</section></div>`;
 }
 
@@ -698,7 +723,7 @@ function nudgeComposerSheet() {
   if (!nudgeComposerUserId) return '';
   const friend = member(nudgeComposerUserId);
   const quick = ['Lock in bro 😭', "Don't sell 💀", "Clock's ticking lil bro", 'You got this 🤝'];
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Nudge friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">NUDGE ${esc(friend?.name || 'FRIEND').toUpperCase()}</p><h2>Apply pressure ⚡</h2></div><button class="icon-btn" type="button" data-close-nudge aria-label="Close">×</button></div><div class="quick-nudges">${quick.map((message) => `<button type="button" data-nudge-copy="${esc(message)}">${esc(message)}</button>`).join('')}</div><form id="nudge-form" class="form sheet-form"><label>Message<textarea name="message" maxlength="140" rows="3" required>Lock in bro 😭</textarea></label><fieldset class="visibility-choice"><legend>Who sees it?</legend><label><input type="radio" name="visibility" value="squad" checked><span><strong>Public callout</strong><small>The whole squad sees it in activity.</small></span></label><label><input type="radio" name="visibility" value="private"><span><strong>Private nudge</strong><small>Only ${esc(friend?.name || 'your friend')} sees it.</small></span></label></fieldset><div class="char-hint">140 chars max. Be annoying responsibly.</div><button class="btn primary full" ${busy ? 'disabled' : ''}>Send nudge</button></form></section></div>`;
+  return `<div class="sheet-backdrop nudge-composer-layer" data-close-sheet><section class="sheet compact-sheet" role="dialog" aria-modal="true" aria-label="Nudge friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">NUDGE ${esc(friend?.name || 'FRIEND').toUpperCase()}</p><h2>Apply pressure ⚡</h2></div><button class="icon-btn" type="button" data-close-nudge aria-label="Close">×</button></div><div class="quick-nudges">${quick.map((message) => `<button type="button" data-nudge-copy="${esc(message)}">${esc(message)}</button>`).join('')}</div><form id="nudge-form" class="form sheet-form"><label>Message<textarea name="message" maxlength="140" rows="3" required>Lock in bro 😭</textarea></label><fieldset class="visibility-choice"><legend>Who sees it?</legend><label><input type="radio" name="visibility" value="squad" checked><span><strong>Public callout</strong><small>The whole squad sees it in activity.</small></span></label><label><input type="radio" name="visibility" value="private"><span><strong>Private nudge</strong><small>Only ${esc(friend?.name || 'your friend')} sees it.</small></span></label></fieldset><div class="char-hint">140 chars max. Be annoying responsibly.</div><button class="btn primary full" ${busy ? 'disabled' : ''}>Send nudge</button></form></section></div>`;
 }
 
 function nudgeInboxSheet() {
@@ -724,6 +749,12 @@ function peopleSheet() {
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Squad people" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${esc(state.circleName || 'SQUAD')}</p><h2>${state.members.length} ${state.members.length === 1 ? 'person' : 'people'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite people</button></section></div>`;
+}
+
+function proofRejectSheet() {
+  if (!proofRejectCheckInId) return '';
+  const activity = getState().friendActivities.find((item) => item.checkInId === proofRejectCheckInId);
+  return `<div class="sheet-backdrop proof-reject-layer"><section class="sheet compact-sheet proof-reject-sheet" role="alertdialog" aria-modal="true" aria-label="Confirm proof rejection" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">PROOF CHECK</p><h2>Reject this proof?</h2></div><button class="icon-btn" type="button" data-cancel-reject aria-label="Cancel">×</button></div><p class="sheet-copy">Only reject it if the photo genuinely does not prove ${esc(activity?.habitTitle || 'the habit')}. Enough rejections can remove the check-in from streaks and League.</p><div class="confirm-actions"><button class="btn" type="button" data-cancel-reject>Keep proof</button><button class="btn danger-soft" type="button" data-confirm-reject="${proofRejectCheckInId}">Reject proof</button></div></section></div>`;
 }
 
 function commentSheet() {
@@ -754,8 +785,8 @@ function badgeCabinet() {
 
 function wrappedSlide(screen, wrapped) {
   if (screen.kind === 'cover') return `<div class="wrapped-slide cover"><small>${esc(monthLabel(wrapped.period.month).toUpperCase())}</small><h2>Your squad showed up.</h2><p>Here is the month in five quick taps.</p></div>`;
-  if (screen.kind === 'summary') return `<div class="wrapped-slide"><small>THE NUMBERS</small><h2>${screen.completionCount}</h2><p>valid check-ins from ${screen.activeParticipantCount} active ${screen.activeParticipantCount === 1 ? 'person' : 'people'}.</p><div class="wrapped-mini-stats"><span><b>${screen.proofCount}</b><small>proofs</small></span><span><b>${screen.participantCount}</b><small>people</small></span></div></div>`;
-  if (screen.kind === 'participants') return `<div class="wrapped-slide"><small>THE CREW</small><h2>${screen.activeParticipantIds.length} people checked in.</h2><div class="wrapped-people">${screen.activeParticipantIds.map((id) => `<span><b>${esc(member(id)?.avatar || '?')}</b>${esc(member(id)?.name || 'Friend')}</span>`).join('')}</div></div>`;
+  if (screen.kind === 'summary') return `<div class="wrapped-slide"><small>THE NUMBERS</small><h2>${screen.completionCount}</h2><p>valid check-ins from ${screen.activeParticipantCount} active ${screen.activeParticipantCount === 1 ? 'friend' : 'friends'}.</p><div class="wrapped-mini-stats"><span><b>${screen.proofCount}</b><small>proofs</small></span><span><b>${screen.participantCount}</b><small>friends</small></span></div></div>`;
+  if (screen.kind === 'participants') return `<div class="wrapped-slide"><small>THE CREW</small><h2>${screen.activeParticipantIds.length} ${screen.activeParticipantIds.length === 1 ? 'friend checked' : 'friends checked'} in.</h2><div class="wrapped-people">${screen.activeParticipantIds.map((id) => `<span><b>${esc(member(id)?.avatar || '?')}</b>${esc(member(id)?.name || 'Friend')}</span>`).join('')}</div></div>`;
   if (screen.kind === 'awards') return `<div class="wrapped-slide"><small>MONTHLY AWARDS</small><h2>Okay, receipts are in.</h2><div class="wrapped-awards">${screen.awards.map((award) => `<article><b>${award.type === 'most_supportive' ? '🤝' : award.type === 'baton_carrier' ? '↗' : award.type === 'longest_streak' ? '🔥' : '🏆'}</b><span><strong>${esc(award.title)}</strong><small>${award.memberIds.map((id) => esc(member(id)?.name || 'Friend')).join(' + ')}</small></span></article>`).join('')}</div></div>`;
   return `<div class="wrapped-slide close"><small>${wrapped.period.partial ? 'MONTH IN PROGRESS' : 'THAT’S A WRAP'}</small><h2>${wrapped.period.partial ? 'Still cooking.' : 'Run it back.'}</h2><p>Badges stay forever. Awards start fresh next month.</p></div>`;
 }
@@ -999,13 +1030,14 @@ function render() {
     bindInviteActions();
     return;
   }
-  const screens = { today: todayScreen, squad: squadScreen, checkin: checkInScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  const screens = { today: todayScreen, squad: squadScreen, league: leagueScreen, me: meScreen };
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;
     contentScroller.onscroll = () => { screenScroll[tab] = contentScroller.scrollTop; };
   }
+  app.querySelector('[data-checkin-action]')?.addEventListener('click', openCheckInAction);
   app.querySelectorAll('[data-tab]').forEach((element) => { element.onclick = () => {
     if (contentScroller) screenScroll[tab] = contentScroller.scrollTop;
     setActiveTab(element.dataset.tab);
@@ -1020,8 +1052,8 @@ function render() {
   app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.reactionEmoji); });
   app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => { commentCheckInId = element.dataset.commentOpen; render(); }; });
   app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
-  app.querySelectorAll('[data-baton-open], [data-pass-baton]').forEach((element) => { element.onclick = () => { batonSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-baton-checkin], [data-empty-checkin]').forEach((element) => { element.onclick = () => { setActiveTab('checkin'); render(); }; });
+  app.querySelectorAll('[data-baton-open], [data-pass-baton]').forEach((element) => { element.onclick = () => { challengeInfoOpen = false; batonSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-baton-checkin], [data-empty-checkin]').forEach((element) => { element.onclick = openCheckInAction; });
   app.querySelectorAll('[data-invite-from-baton]').forEach((element) => { element.onclick = () => { inviteSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-badge-cabinet]').forEach((element) => { element.onclick = () => { badgeCabinetOpen = true; render(); }; });
   app.querySelectorAll('[data-wrapped-open]').forEach((element) => { element.onclick = () => { wrappedOpen = true; wrappedIndex = 0; render(); }; });
@@ -1044,7 +1076,13 @@ function render() {
   app.querySelectorAll('[data-activation-next]').forEach((element) => { element.onclick = () => handleActivationNext(Number(element.dataset.activationNext)); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
   app.querySelectorAll('[data-proof]').forEach((element) => { element.onclick = () => handleProofView(element.dataset.proof); });
-  app.querySelectorAll('[data-downvote]').forEach((element) => { element.onclick = () => handleDownvote(element.dataset.downvote); });
+  app.querySelectorAll('[data-request-reject]').forEach((element) => { element.onclick = () => {
+    const activity = getState().friendActivities.find((item) => item.checkInId === element.dataset.requestReject);
+    if (activity?.userDownvoted) handleDownvote(element.dataset.requestReject);
+    else { proofRejectCheckInId = element.dataset.requestReject; render(); }
+  }; });
+  app.querySelector('[data-confirm-reject]')?.addEventListener('click', () => { const id = proofRejectCheckInId; proofRejectCheckInId = null; handleDownvote(id); });
+  app.querySelectorAll('[data-cancel-reject]').forEach((element) => { element.onclick = () => { proofRejectCheckInId = null; render(); }; });
   app.querySelectorAll('[data-redo-checkin]').forEach((element) => { element.onclick = () => handleRedoProof(element.dataset.redoCheckin); });
   app.querySelectorAll('[data-read-nudge]').forEach((element) => { element.onclick = () => handleReadNudge(element.dataset.readNudge); });
   app.querySelectorAll('[data-emoji]').forEach((element) => { element.onclick = () => {
@@ -1071,6 +1109,7 @@ function render() {
   app.querySelectorAll('[data-nudge-copy]').forEach((element) => { element.onclick = () => { const textarea = app.querySelector('#nudge-form textarea'); if (textarea) textarea.value = element.dataset.nudgeCopy; }; });
   app.querySelectorAll('[data-settings]').forEach((element) => { element.onclick = () => { settingsView = 'menu'; settingsSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-settings-view]').forEach((element) => { element.onclick = () => { settingsView = element.dataset.settingsView; render(); }; });
+  app.querySelectorAll('[data-theme-choice]').forEach((element) => { element.onclick = () => { applyTheme(element.dataset.themeChoice); render(); }; });
   app.querySelectorAll('[data-settings-back]').forEach((element) => { element.onclick = () => { settingsView = 'menu'; render(); }; });
   app.querySelectorAll('[data-nudge-inbox]').forEach((element) => { element.onclick = () => { nudgeInboxOpen = true; render(); }; });
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { setActiveTab('today'); closeSheets(); render(); }; });
@@ -1154,6 +1193,7 @@ function closeSheets() {
   proofHabit = null;
   clearProofReview();
   proofViewer = null;
+  proofRejectCheckInId = null;
   if (window.location.search.includes('nudges=')) history.replaceState({}, '', window.location.pathname);
 }
 
@@ -1436,7 +1476,7 @@ async function handleHabitSubmit(event) {
     : await runMutation(() => repo.addHabit(input), `${selectedEmoji} ${input.title.trim()} added. Now actually do it.`);
   if (!result) return;
   closeHabitEditor();
-  if (!habitId) setActiveTab('checkin');
+  if (!habitId) setActiveTab('today');
   render();
 }
 
@@ -1534,7 +1574,7 @@ function handleActivationNext(step) {
     selectedEmoji = '⚡';
     habitSheetOpen = true;
   } else if (step === 2) inviteSheetOpen = true;
-  else if (step === 3) setActiveTab('checkin');
+  else if (step === 3) openCheckInAction();
   else if (step === 4) setActiveTab('squad');
   render();
 }
