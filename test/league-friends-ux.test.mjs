@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { weeklyLeaguePoints, rankMembersByWeeklyScore } from '../src/domain.js';
+import { leagueTimeLeft, weeklyLeaguePoints, rankMembersByWeeklyScore } from '../src/domain.js';
 
 const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
 
@@ -68,10 +68,19 @@ test('League ranking uses anti-gaming points, then adherence and streak', () => 
   assert.deepEqual(ranked.map((member) => [member.id, member.weeklyPoints]), [['b', 25], ['a', 15]]);
 });
 
+test('League countdown is concise across the Monday-Sunday period', () => {
+  assert.equal(leagueTimeLeft('2026-09-06', '2026-08-31'), '6 days left');
+  assert.equal(leagueTimeLeft('2026-09-06', '2026-09-05'), '1 day left');
+  assert.equal(leagueTimeLeft('2026-09-06', '2026-09-06'), 'Ends today');
+});
+
 test('League clearly displays its Monday through Sunday date range and point rules', () => {
   const league = app.slice(app.indexOf('function leagueScreen()'), app.indexOf('function challengeInfoSheet()'));
   const info = app.slice(app.indexOf('function challengeInfoSheet()'), app.indexOf('function stakeHistory()'));
   assert.match(league, /formatLeagueWeekRange/);
+  assert.match(league, /leagueTimeLeft/);
+  assert.doesNotMatch(league, /Monday through Sunday · resets every Monday/);
+  assert.doesNotMatch(league, /Your rank · \$\{esc\(weekRange\)\}/);
   assert.match(league, /weeklyPoints/);
   assert.match(league, /pts/);
   assert.match(info, /First 3 each day/);

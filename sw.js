@@ -1,4 +1,4 @@
-const CACHE = 'donezo-shell-v22';
+const CACHE = 'donezo-shell-v23';
 const ASSETS = [
   '/',
   '/index.html',

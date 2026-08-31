@@ -9,6 +9,7 @@ import {
   accountabilityDateForMember,
   dailyAccountabilitySummary,
   dailyProgress,
+  leagueTimeLeft,
   localDateInTimeZone,
   proofRejectionThreshold,
   rankMembersByWeeklyScore,
@@ -673,6 +674,7 @@ function leagueScreen() {
   const state = getState();
   const period = weekBounds();
   const weekRange = formatLeagueWeekRange(period);
+  const timeLeft = leagueTimeLeft(period.end, today());
   const ranked = rankMembersByWeeklyScore(leagueMembers(state), state.habits, state.checkIns, today());
   const mine = ranked.find((item) => item.id === me().id);
   const leader = ranked[0];
@@ -696,7 +698,7 @@ function leagueScreen() {
         : 'Yesterday · clean';
     return `<button type="button" class="league-row" data-friend-profile="${item.id}" aria-label="Open ${esc(item.name)} profile"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong class="league-name ${item.id === me().id ? 'mine' : ''}">${esc(item.name)}${item.id === me().id ? ' · you' : ''}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} · ${item.weeklyScore}% complete · 🔥 ${item.currentStreak}</small><span class="league-daily-status"><small>${esc(todayLabel)}</small><small class="league-yesterday ${missed.length ? 'missed' : ''}">${esc(yesterdayLabel)}</small></span></span><strong>${item.weeklyPoints} pts</strong></button>`;
   }).join('');
-  return `<div class="league-title-row">${pageHeading('Your League', weekRange.toUpperCase(), 'Monday through Sunday · resets every Monday.')}<div class="league-header-actions"><button class="league-header-action info" type="button" data-challenge-info aria-label="How do League points work?" title="League points">${icon('eye')}</button><button class="league-header-action start" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('target')}</button></div></div><section class="league-summary"><span>Your rank · ${esc(weekRange)}</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyPoints || 0} pts</strong></div><small>${mine?.weeklyScore || 0}% complete · ${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${standings}</div>${activeChallengeCard()}${stakeCard}${challengeHistory()}${stake ? stakeHistory() : ''}`;
+  return `<div class="league-title-row">${pageHeading('Your League', weekRange.toUpperCase(), timeLeft)}<div class="league-header-actions"><button class="league-header-action info" type="button" data-challenge-info aria-label="How do League points work?" title="League points">${icon('eye')}</button><button class="league-header-action start" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('target')}</button></div></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyPoints || 0} pts</strong></div><small>${mine?.weeklyScore || 0}% complete · ${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${standings}</div>${activeChallengeCard()}${stakeCard}${challengeHistory()}${stake ? stakeHistory() : ''}`;
 }
 
 function challengeInfoSheet() {

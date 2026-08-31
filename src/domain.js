@@ -274,6 +274,14 @@ export function weeklyLeaguePoints(memberId, habits, checkIns, todayString) {
   };
 }
 
+export function leagueTimeLeft(endDate, currentDate) {
+  const end = new Date(`${endDate}T12:00:00Z`);
+  const current = new Date(`${currentDate}T12:00:00Z`);
+  const days = Math.max(0, Math.round((end - current) / 86_400_000));
+  if (days === 0) return 'Ends today';
+  return `${days} day${days === 1 ? '' : 's'} left`;
+}
+
 export function rankMembersByWeeklyScore(members, habits, checkIns, todayString) {
   return members
     .map((member) => {
