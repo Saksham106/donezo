@@ -38,6 +38,17 @@ fluidTest = fluidTest.replace(
 );
 await writeFile(fluidTestPath, fluidTest);
 
+// The old reaction regression pinned local variable names from the
+// network-first implementation. Keep the same semantic/database contract,
+// but assert the new explicit persistence + optimistic UI boundaries.
+const reactionTestPath = 'test/mobile-social-proof-polish.test.mjs';
+let reactionTest = await readFile(reactionTestPath, 'utf8');
+const oldReactionBlock = `test('positive reaction toggles replace the previous positive reaction only', () => {\n  assert.match(store, /positiveReactions/);\n  assert.match(store, /emoji !== '👎'/);\n  assert.match(store, /\\.delete\\(\\)\\.eq\\('check_in_id', checkInId\\)\\.eq\\('user_id', user\\.id\\)\\.neq\\('emoji', '👎'\\)/);\n  assert.match(store, /if \\(!selected\\)/);\n  assert.match(migration, /row_number\\(\\) over/i);\n  assert.match(migration, /where emoji <> '👎'/i);\n  assert.match(migration, /create unique index if not exists reactions_one_positive_per_user_checkin/i);\n  assert.match(migration, /where emoji <> '👎'/i);\n});`;
+const newReactionBlock = `test('positive reaction toggles replace the previous positive reaction only', () => {\n  assert.match(store, /async function setPositiveReaction\\(checkInId, emoji\\)/);\n  assert.match(store, /\\.delete\\(\\)\\.eq\\('check_in_id', checkInId\\)\\.eq\\('user_id', user\\.id\\)\\.neq\\('emoji', '👎'\\)/);\n  assert.match(store, /if \\(emoji\\)/);\n  assert.match(app, /createLatestIntentCoordinator/);\n  assert.match(app, /repo\\.applyPositiveReaction\\(checkInId, desired\\)/);\n  assert.match(migration, /row_number\\(\\) over/i);\n  assert.match(migration, /where emoji <> '👎'/i);\n  assert.match(migration, /create unique index if not exists reactions_one_positive_per_user_checkin/i);\n  assert.match(migration, /where emoji <> '👎'/i);\n});`;
+if (!reactionTest.includes(oldReactionBlock)) throw new Error('Reaction regression block changed unexpectedly');
+reactionTest = reactionTest.replace(oldReactionBlock, newReactionBlock);
+await writeFile(reactionTestPath, reactionTest);
+
 let patched = await readFile(storePath, 'utf8');
 const patchedCompleteStart = patched.indexOf('  async function completeWithProof(habitId, date, file) {');
 const patchedDownvoteStart = patched.indexOf('  async function setProofDownvote(checkInId, downvoted) {', patchedCompleteStart);
