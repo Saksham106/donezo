@@ -34,7 +34,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/app.js src/store.js styles.css social.css sw.js test/league-friends-ux.test.mjs supabase/migrations/0025_one_positive_reaction_per_proof.sql
+          git add -A
           git diff --cached --check
           git commit -m "feat: polish mobile friends and proof interactions"
           git push origin HEAD:feat/mobile-social-proof-polish-2026-08-31
