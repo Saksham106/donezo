@@ -1,0 +1,40 @@
+name: Apply mobile social proof polish
+
+on:
+  push:
+    branches:
+      - feat/mobile-social-proof-polish-2026-08-31
+    paths:
+      - scripts/apply-mobile-social-proof-polish.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/mobile-social-proof-polish-2026-08-31
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: node scripts/apply-mobile-social-proof-polish.mjs
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_only
+      - name: Commit verified implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/app.js src/store.js styles.css social.css sw.js test/league-friends-ux.test.mjs supabase/migrations/0025_one_positive_reaction_per_proof.sql
+          git diff --cached --check
+          git commit -m "feat: polish mobile friends and proof interactions"
+          git push origin HEAD:feat/mobile-social-proof-polish-2026-08-31
