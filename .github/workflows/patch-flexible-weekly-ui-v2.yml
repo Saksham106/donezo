@@ -1,0 +1,367 @@
+name: Patch flexible weekly UI v2
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-flexible-weekly-ui-v2.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/flexible-weekly-habits-dark-mode-2026-08-31
+      - name: Patch app and styles
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          app_path = Path('src/app.js')
+          s = app_path.read_text()
+
+          def replace_once(old, new, label):
+              global s
+              if old not in s:
+                  raise SystemExit(f'missing app anchor: {label}')
+              s = s.replace(old, new, 1)
+
+          replace_once(
+              "    weekdays: habit.scheduleWeekdays || [],\n    targetQuantity: habit.targetQuantity ?? 1,",
+              "    weekdays: habit.scheduleWeekdays || [],\n    weeklyTargetDays: habit.weeklyTargetDays ?? 1,\n    targetQuantity: habit.targetQuantity ?? 1,",
+              'habitSchedule weekly target',
+          )
+
+          old_due = '''function habitIsDue(habit, date = today()) {
+            try {
+              return getScheduleOccurrence(habitSchedule(habit), date).scheduled;
+            } catch {
+              return true;
+            }
+          }
+
+          function dueHabitsFor(memberId, date = today(), state = getState()) {
+            return state.habits.filter((habit) => habit.ownerId === memberId && habit.active && habitIsDue(habit, date));
+          }'''.replace('          ', '')
+          new_due = '''function habitIsDue(habit, date = today()) {
+            try {
+              return getScheduleOccurrence(habitSchedule(habit), date).scheduled;
+            } catch {
+              return true;
+            }
+          }
+
+          function scheduleVersionForDate(habit, date = today()) {
+            return [...(habit.scheduleVersions || [])]
+              .filter((version) => version.effectiveFrom <= date && (!version.effectiveUntil || date < version.effectiveUntil))
+              .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom) || Number(a.version || 0) - Number(b.version || 0))
+              .at(-1) || null;
+          }
+
+          function currentFlexibleHabit(habit, date = today()) {
+            const version = scheduleVersionForDate(habit, date);
+            const frequency = version?.frequency || habit.scheduleFrequency || habit.frequency || 'daily';
+            if (frequency !== 'times_per_week') return null;
+            const effectiveFrom = version?.effectiveFrom || habit.createdDate || date;
+            const weeklyTargetDays = Number(version?.weeklyTargetDays ?? habit.weeklyTargetDays ?? 1);
+            const targetQuantity = Number(version?.targetQuantity ?? habit.targetQuantity ?? 1);
+            const targetUnit = version?.targetUnit || habit.targetUnit || 'count';
+            const targetTime = version?.dueTime ?? habit.targetTime ?? '';
+            const graceMinutes = Number(version?.graceMinutes ?? habit.graceMinutes ?? 0);
+            const scheduleTimezone = version?.timezone || habit.scheduleTimezone || habit.ownerTimeZone || 'UTC';
+            const scopedVersion = {
+              version: Number(version?.version || 1),
+              effectiveFrom,
+              effectiveUntil: version?.effectiveUntil || null,
+              frequency: 'times_per_week',
+              weekdays: [],
+              weeklyTargetDays,
+              targetQuantity,
+              targetUnit,
+              dueTime: targetTime || null,
+              graceMinutes,
+              timezone: scheduleTimezone,
+            };
+            return {
+              ...habit,
+              frequency: 'times_per_week',
+              scheduleFrequency: 'times_per_week',
+              scheduleWeekdays: [],
+              weeklyTargetDays,
+              targetQuantity,
+              targetUnit,
+              targetTime,
+              graceMinutes,
+              scheduleTimezone,
+              createdDate: effectiveFrom,
+              scheduleVersions: [scopedVersion],
+            };
+          }
+
+          function flexibleWeekProgress(habit, date = today(), state = getState()) {
+            const scopedHabit = currentFlexibleHabit(habit, date);
+            if (!scopedHabit) return null;
+            const weekly = weeklyCompletionScore(habit.ownerId, [scopedHabit], state.checkIns, date);
+            let paused = false;
+            try { paused = getScheduleOccurrence(habitSchedule(scopedHabit), date).paused; } catch { paused = false; }
+            const completedToday = state.checkIns.some((item) => (
+              item.habitId === habit.id && item.userId === habit.ownerId && item.date === date && !item.invalid
+            ));
+            return {
+              ...weekly,
+              target: Number(scopedHabit.weeklyTargetDays ?? 1),
+              paused,
+              completedToday,
+              complete: weekly.possible > 0 && weekly.completed >= weekly.possible,
+              startsNextMonday: weekly.possible === 0 && !paused,
+            };
+          }
+
+          function dueHabitsFor(memberId, date = today(), state = getState()) {
+            return state.habits.filter((habit) => habit.ownerId === memberId && habit.active && habitIsDue(habit, date));
+          }
+
+          function flexibleHabitsFor(memberId, date = today(), state = getState(), includeComplete = true) {
+            return state.habits.filter((habit) => {
+              if (habit.ownerId !== memberId || !habit.active) return false;
+              const weekly = flexibleWeekProgress(habit, date, state);
+              return Boolean(weekly && !weekly.paused && (includeComplete || !weekly.complete));
+            });
+          }
+
+          function visibleHabitsFor(memberId, date = today(), state = getState()) {
+            return [...dueHabitsFor(memberId, date, state), ...flexibleHabitsFor(memberId, date, state, true)];
+          }
+
+          function actionableHabitsFor(memberId, date = today(), state = getState()) {
+            const fixed = dueHabitsFor(memberId, date, state).filter((habit) => !state.checkIns.some((item) => (
+              item.habitId === habit.id && item.userId === memberId && item.date === date && !item.invalid
+            )));
+            const flexible = flexibleHabitsFor(memberId, date, state, false).filter((habit) => !flexibleWeekProgress(habit, date, state)?.completedToday);
+            return [...fixed, ...flexible];
+          }'''.replace('          ', '')
+          replace_once(old_due, new_due, 'flexible progress helpers')
+
+          replace_once(
+              "  const next = sortedTodayHabits(dueHabitsFor(state.currentUserId, today(), state)).find((habit) => !done(habit.id));",
+              "  const next = sortedTodayHabits(actionableHabitsFor(state.currentUserId, today(), state))[0];",
+              'direct checkin action',
+          )
+
+          card_pattern = re.compile(r"function habitCard\(habit, actionMode = false\) \{.*?\n\}\n\nfunction todayScreen\(\)", re.S)
+          card_replacement = '''function habitCard(habit, actionMode = false) {
+            const checkIn = checkInFor(habit.id);
+            const checkedToday = Boolean(checkIn && !checkIn.invalid);
+            const rejected = Boolean(checkIn?.invalid);
+            const weekly = flexibleWeekProgress(habit);
+            const isDone = weekly ? (weekly.complete || checkedToday) : checkedToday;
+            const action = rejected
+              ? 'Run it back'
+              : weekly?.complete
+                ? 'Week done'
+                : checkedToday
+                  ? 'Done today'
+                  : habit.proofMode === 'photo' ? 'Add proof' : 'Check in';
+            const target = Number(habit.targetQuantity ?? 1) !== 1 || (habit.targetUnit && habit.targetUnit !== 'count')
+              ? `${habit.targetQuantity ?? 1} ${habit.targetUnit || 'count'} · `
+              : '';
+            const timing = weekly ? '' : contextualHabitStatus({ ...habit, completedAt: isDone ? checkIn?.completedAt : null, invalid: rejected }, { date: today() });
+            const weeklyDetail = weekly
+              ? weekly.startsNextMonday
+                ? 'Goal starts next Monday'
+                : `${weekly.completed} of ${weekly.possible} this week${weekly.complete ? ' · Week complete' : checkedToday ? ' · Done today' : ''}`
+              : '';
+            const detail = rejected
+              ? 'Proof needs another try'
+              : weekly
+                ? `${target}${weeklyDetail}${habit.proofMode === 'photo' ? ' · Proof required' : ' · Truuust mode'}`
+                : `${target}${timing}${habit.proofMode === 'photo' ? ' · Proof required' : ' · Truuust mode'}`;
+            return `<button class="habit ${isDone ? 'done' : ''} ${rejected ? 'rejected' : ''}" data-habit="${habit.id}" ${busy ? 'disabled' : ''}><span class="habit-icon">${esc(habit.emoji)}</span><span class="habit-copy"><strong>${esc(habit.title)}</strong><small>${esc(detail)}</small></span>${actionMode ? `<span class="habit-action ${isDone ? 'complete' : ''} ${rejected ? 'rejected' : ''}">${action}</span>` : `<span class="check">${isDone ? '✓' : rejected ? '↻' : ''}</span>`}</button>`;
+          }
+
+          function todayScreen()'''.replace('          ', '')
+          s, count = card_pattern.subn(lambda _match: card_replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f'habitCard patch count {count}')
+
+          today_pattern = re.compile(r"function todayScreen\(\) \{.*?\n\}\n\nfunction checkInScreen\(\)", re.S)
+          today_replacement = '''function todayScreen() {
+            const state = getState();
+            const habits = sortedTodayHabits(visibleHabitsFor(state.currentUserId, today(), state));
+            const flexible = flexibleHabitsFor(state.currentUserId, today(), state, true);
+            const progress = progressFor(state.currentUserId);
+            const remaining = progress.total - progress.completed;
+            const firstName = me().name.split(/\\s+/)[0];
+            const list = habits.length ? habits.map((habit) => habitCard(habit)).join('') : '<div class="empty"><b>Nothing due today.</b><p>Your active habits are either paused or waiting for their next scheduled day.</p><button class="btn primary" data-open-habit>Add habit</button></div>';
+            const progressCopy = progress.total === 0
+              ? flexible.length ? 'Flexible weekly goals are in progress.' : 'Add one thing worth showing up for.'
+              : remaining === 0 ? 'Clean sweep. You are done with fixed commitments today.' : `${remaining} ${remaining === 1 ? 'thing' : 'things'} left.`;
+            const headingStatus = progress.total === 0 && flexible.length
+              ? 'Your flexible goals move when your week does.'
+              : todayStatus(progress);
+            return `${pageHeading(`${greeting()}, ${firstName}`, displayDate(), headingStatus)}${activationCard()}<section class="today-progress"><div><strong>${progress.completed}/${progress.total}</strong><span>${esc(progressCopy)}</span></div><div class="bar" role="progressbar" aria-label="Today fixed-schedule progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}"><i style="width:${progress.percent}%"></i></div></section><div class="section-head first"><h2>Today</h2><span>${progress.percent}%</span></div><div class="habit-list">${list}</div>`;
+          }
+
+          function checkInScreen()'''.replace('          ', '')
+          s, count = today_pattern.subn(lambda _match: today_replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f'todayScreen patch count {count}')
+
+          checkin_pattern = re.compile(r"function checkInScreen\(\) \{.*?\n\}\n\nfunction activityProfileButton", re.S)
+          checkin_replacement = '''function checkInScreen() {
+            const state = getState();
+            const habits = visibleHabitsFor(state.currentUserId, today(), state);
+            const incompleteIds = new Set(actionableHabitsFor(state.currentUserId, today(), state).map((habit) => habit.id));
+            const incomplete = habits.filter((habit) => incompleteIds.has(habit.id)).sort((a, b) => (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99'));
+            const completed = habits.filter((habit) => !incompleteIds.has(habit.id));
+            const progress = progressFor(state.currentUserId);
+            return `${pageHeading('Check in', `${progress.completed}/${progress.total} FIXED DONE TODAY`, incomplete.length ? `${incomplete.length} available. Tap one and get the receipt.` : 'You are clear. Touch grass or something.')}<section class="checkin-progress"><div><b>${progress.percent}%</b><span>fixed schedule</span></div><div class="bar"><i style="width:${progress.percent}%"></i></div></section><div class="section-head"><h2>Available</h2><span>${incomplete.length}</span></div><div class="habit-list">${incomplete.length ? incomplete.map((habit) => habitCard(habit, true)).join('') : '<div class="empty compact-empty"><b>All done.</b><p>No check-in is waiting on you right now.</p></div>'}</div>${completed.length ? `<div class="section-head subdued"><h2>Completed</h2><span>${completed.length}</span></div><div class="habit-list completed-list">${completed.map((habit) => habitCard(habit, true)).join('')}</div>` : ''}`;
+          }
+
+          function activityProfileButton'''.replace('          ', '')
+          s, count = checkin_pattern.subn(lambda _match: checkin_replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f'checkInScreen patch count {count}')
+
+          replace_once(
+              "  const scheduleWeekdays = new Set(editing?.scheduleWeekdays || []);\n  const targetQuantity = editing?.targetQuantity ?? 1;",
+              "  const scheduleWeekdays = new Set(editing?.scheduleWeekdays || []);\n  const weeklyTargetDays = Number(editing?.weeklyTargetDays ?? 4);\n  const targetQuantity = editing?.targetQuantity ?? 1;",
+              'habit sheet weeklyTargetDays',
+          )
+
+          old_pause = '''  const pauseForm = editMode ? `<details class="schedule-pause"><summary>Pause for travel or a break</summary>${pauseList}<form id="pause-form" class="form"><div class="form-grid"><label>From<input name="startDate" type="date" required></label><label>Through<input name="endDate" type="date" required></label></div><label>Note (optional)<input name="reason" maxlength="280" placeholder="Vacation, sick, deload…"></label><button class="btn full" ${busy ? 'disabled' : ''}>Add pause</button></form></details>` : '';'''
+          new_pause = '''  const pauseForm = editMode ? `<section class="schedule-pause"><button class="pause-disclosure" type="button" data-toggle-habit-pause aria-expanded="false" aria-controls="habit-pause-panel"><span>Pause for travel or a break</span><svg class="pause-chevron" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>${pauseList}<div id="habit-pause-panel" data-habit-pause-panel hidden><form id="pause-form" class="form"><div class="pause-date-grid"><label>From<input name="startDate" type="date" required></label><label>Through<input name="endDate" type="date" required></label></div><label>Note (optional)<input name="reason" maxlength="280" placeholder="Vacation, sick, deload…"></label><button class="btn full" ${busy ? 'disabled' : ''}>Add pause</button></form></div></section>` : '';'''
+          replace_once(old_pause, new_pause, 'pause form')
+
+          schedule_pattern = re.compile(r'<fieldset class="schedule-fields"><legend>When does this count\?</legend>.*?</fieldset><input type="hidden" name="scheduleTimezone"', re.S)
+          schedule_markup = '''<fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="times_per_week" ${scheduleFrequency === 'times_per_week' ? 'selected' : ''}>X times per week</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div data-weekly-target ${scheduleFrequency === 'times_per_week' ? '' : 'hidden'}><label>Days per week<select name="weeklyTargetDays" ${scheduleFrequency === 'times_per_week' ? '' : 'disabled'}>${[1, 2, 3, 4, 5, 6, 7].map((day) => `<option value="${day}" ${weeklyTargetDays === day ? 'selected' : ''}>${day} ${day === 1 ? 'day' : 'days'}</option>`).join('')}</select></label><small>Any distinct days count Monday–Sunday. Your first official week starts next Monday.</small></div><div data-schedule-weekdays ${['selected_weekdays', 'weekly'].includes(scheduleFrequency) ? '' : 'hidden'}><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Pick the exact days. For once-a-week habits, the first picked day is the due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone"'''
+          s, count = schedule_pattern.subn(lambda _match: schedule_markup, s, count=1)
+          if count != 1:
+              raise SystemExit(f'schedule markup patch count {count}')
+
+          replace_once(
+              "    scheduleWeekdays: String(form.get('scheduleFrequency') || 'daily') === 'daily' ? [] : form.getAll('scheduleWeekdays').map(Number).sort((a, b) => a - b),\n    targetQuantity: Number(form.get('targetQuantity') || 1),",
+              "    scheduleWeekdays: ['selected_weekdays', 'weekly'].includes(String(form.get('scheduleFrequency') || 'daily')) ? form.getAll('scheduleWeekdays').map(Number).sort((a, b) => a - b) : [],\n    weeklyTargetDays: Number(form.get('weeklyTargetDays') || 1),\n    targetQuantity: Number(form.get('targetQuantity') || 1),",
+              'habit submit weekly target',
+          )
+
+          replace_once(
+              "  if (input.scheduleFrequency === 'selected_weekdays' && !input.scheduleWeekdays.length) {\n    notify('Pick at least one day for this schedule', 3200);\n    return;\n  }",
+              "  if (input.scheduleFrequency === 'selected_weekdays' && !input.scheduleWeekdays.length) {\n    notify('Pick at least one day for this schedule', 3200);\n    return;\n  }\n  if (input.scheduleFrequency === 'times_per_week' && (!Number.isInteger(input.weeklyTargetDays) || input.weeklyTargetDays < 1 || input.weeklyTargetDays > 7)) {\n    notify('Choose between 1 and 7 days per week', 3200);\n    return;\n  }",
+              'habit submit weekly validation',
+          )
+
+          replace_once(
+              "      || input.scheduleWeekdays.join(',') !== (existing.scheduleWeekdays || []).join(',')\n      || input.targetQuantity !== Number(existing.targetQuantity ?? 1)",
+              "      || input.scheduleWeekdays.join(',') !== (existing.scheduleWeekdays || []).join(',')\n      || input.weeklyTargetDays !== Number(existing.weeklyTargetDays ?? 1)\n      || input.targetQuantity !== Number(existing.targetQuantity ?? 1)",
+              'schedule changed weekly target',
+          )
+
+          current_guard = '''  if (current && !current.invalid) {
+            if (habit.proofMode === 'photo' || current.proofPath) {
+              await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);
+              return;
+            }
+            await handleSimpleCheckIn(habit, checkInDate, false, `${habit.title} unchecked`);
+            return;
+          }
+          if (habit.proofMode === 'photo') {'''.replace('          ', '')
+          guarded = '''  if (current && !current.invalid) {
+            if (habit.proofMode === 'photo' || current.proofPath) {
+              await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);
+              return;
+            }
+            await handleSimpleCheckIn(habit, checkInDate, false, `${habit.title} unchecked`);
+            return;
+          }
+          const weekly = flexibleWeekProgress(habit, checkInDate);
+          if (weekly?.complete) {
+            notify(`${habit.title} is complete for the week.`);
+            return;
+          }
+          if (weekly?.paused) {
+            notify(`${habit.title} is paused today.`);
+            return;
+          }
+          if (habit.proofMode === 'photo') {'''.replace('          ', '')
+          replace_once(current_guard, guarded, 'handleHabit weekly guard')
+
+          bind_anchor = 'function bindEvents() {'
+          sync_helper = '''function syncHabitScheduleFields(habitForm = app.querySelector('#habit-form')) {
+            if (!habitForm) return;
+            const frequency = habitForm.elements.scheduleFrequency?.value || 'daily';
+            const weeklyTarget = habitForm.querySelector('[data-weekly-target]');
+            const weekdays = habitForm.querySelector('[data-schedule-weekdays]');
+            if (weeklyTarget) weeklyTarget.hidden = frequency !== 'times_per_week';
+            if (weekdays) weekdays.hidden = !['selected_weekdays', 'weekly'].includes(frequency);
+            const weeklyTargetSelect = habitForm.elements.weeklyTargetDays;
+            if (weeklyTargetSelect) weeklyTargetSelect.disabled = frequency !== 'times_per_week';
+          }
+
+          function bindEvents() {'''.replace('          ', '')
+          replace_once(bind_anchor, sync_helper, 'syncHabitScheduleFields helper')
+
+          old_listener = '''  syncAudienceControls();
+            const scheduleSelect = habitForm?.elements.scheduleFrequency;
+            let previousScheduleValue = scheduleSelect?.value;
+            scheduleSelect?.addEventListener('change', () => {
+              if (scheduleSelect.value === 'daily') {
+                habitForm.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.checked = true; });
+              } else if (previousScheduleValue === 'daily') {
+                habitForm.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.checked = false; });
+              }
+              previousScheduleValue = scheduleSelect.value;
+            });
+            habitForm?.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.addEventListener('change', () => {
+              if (checkbox.checked && scheduleSelect) scheduleSelect.value = 'selected_weekdays';
+            }); });
+            app.querySelector('#pause-form')?.addEventListener('submit', handlePauseSubmit);'''.replace('          ', '')
+          new_listener = '''  syncAudienceControls();
+            const scheduleSelect = habitForm?.elements.scheduleFrequency;
+            let previousScheduleValue = scheduleSelect?.value;
+            syncHabitScheduleFields(habitForm);
+            scheduleSelect?.addEventListener('change', () => {
+              if (scheduleSelect.value === 'daily') {
+                habitForm.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.checked = true; });
+              } else if (previousScheduleValue === 'daily') {
+                habitForm.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.checked = false; });
+              }
+              previousScheduleValue = scheduleSelect.value;
+              syncHabitScheduleFields(habitForm);
+            });
+            habitForm?.querySelectorAll('[name="scheduleWeekdays"]').forEach((checkbox) => { checkbox.addEventListener('change', () => {
+              if (checkbox.checked && scheduleSelect) scheduleSelect.value = 'selected_weekdays';
+              syncHabitScheduleFields(habitForm);
+            }); });
+            app.querySelector('[data-toggle-habit-pause]')?.addEventListener('click', (event) => {
+              const button = event.currentTarget;
+              const panel = app.querySelector('[data-habit-pause-panel]');
+              if (!panel) return;
+              const expanded = button.getAttribute('aria-expanded') === 'true';
+              button.setAttribute('aria-expanded', String(!expanded));
+              panel.hidden = expanded;
+            });
+            app.querySelector('#pause-form')?.addEventListener('submit', handlePauseSubmit);'''.replace('          ', '')
+          replace_once(old_listener, new_listener, 'schedule and pause listeners')
+
+          app_path.write_text(s)
+
+          css_path = Path('social.css')
+          c = css_path.read_text()
+          pause_pattern = re.compile(r"\.schedule-pause\{.*?@media\(max-width:374px\)\{\.form-grid\{grid-template-columns:1fr\}\}", re.S)
+          pause_css = '''.schedule-pause{margin-top:var(--space-4);padding:var(--space-3);overflow:hidden;border:var(--rule-hairline) solid var(--color-rule);border-radius:var(--radius-md);background:var(--color-surface)}.pause-disclosure{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);width:100%;min-height:var(--size-target-min);border:0;padding:.2rem .15rem;background:transparent;color:var(--color-ink);text-align:left}.pause-disclosure span{font-weight:750}.pause-chevron{width:1.15rem;height:1.15rem;flex:0 0 auto;color:var(--color-muted);transition:transform var(--dur-base) var(--ease-out)}.pause-disclosure[aria-expanded="true"] .pause-chevron{transform:rotate(180deg)}.schedule-pause .form{max-width:100%;margin-top:var(--space-3);overflow:hidden}.pause-date-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-2);min-width:0}.pause-date-grid>label{min-width:0}.pause-date-grid input{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box}.pause-list{display:grid;gap:var(--space-1);margin:var(--space-2) 0}.pause-list small{color:var(--color-muted)}@media(max-width:340px){.pause-date-grid{grid-template-columns:1fr}}@media(max-width:374px){.form-grid{grid-template-columns:1fr}}'''
+          c, count = pause_pattern.subn(lambda _match: pause_css, c, count=1)
+          if count != 1:
+              raise SystemExit(f'pause CSS patch count {count}')
+          css_path.write_text(c)
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/app.js social.css
+          git diff --cached --check
+          git commit -m 'feat: add flexible weekly habit and native pause UX'
+          git push origin HEAD:feat/flexible-weekly-habits-dark-mode-2026-08-31
