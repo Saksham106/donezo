@@ -108,11 +108,13 @@ test('profile shows a collapsed friend count and expands the list on demand', ()
   assert.doesNotMatch(profile, /<section class="profile-connections"/);
 });
 
-test('Friends page owns Invite and Add by link while Settings no longer duplicates friend management', () => {
+test('Friends list sheet owns Invite and Add by link while parent and Settings stay uncluttered', () => {
   const friends = app.slice(app.indexOf('function friendsScreen()'), app.indexOf('function challengeProgress('));
+  const people = app.slice(app.indexOf('function peopleSheet()'), app.indexOf('function proofRejectSheet()'));
   const settings = app.slice(app.indexOf('function settingsSheet()'), app.indexOf('function nudgeComposerSheet()'));
-  assert.match(friends, /data-invite-open/);
-  assert.match(friends, /data-add-friend-open/);
+  assert.doesNotMatch(friends, /data-invite-open|data-add-friend-open/);
+  assert.match(people, /data-invite-from-people/);
+  assert.match(people, /data-add-friend-from-people/);
   assert.match(app, /function addFriendSheet\(\)/);
   assert.doesNotMatch(settings, /data-settings-view="friends"/);
   assert.doesNotMatch(settings, /join-friend-form/);

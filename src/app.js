@@ -474,6 +474,25 @@ function activityProfileButton(userId, primary, secondary) {
   return `<button class="activity-profile" type="button" data-friend-profile="${userId}" aria-label="Open ${esc(person?.name || 'friend')} profile"><div class="avatar">${esc(person?.avatar || '?')}</div><span><strong>${primary}</strong><small>${secondary}</small></span></button>`;
 }
 
+function proofReplyPreview(checkInId) {
+  const comments = (getState()?.comments || [])
+    .filter((comment) => comment.checkInId === checkInId)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  if (!comments.length) return '';
+  const visible = comments.slice(-2);
+  const rows = visible.map((comment) => {
+    const author = member(comment.authorId);
+    const label = comment.authorId === getState()?.currentUserId
+      ? 'You'
+      : (author?.handle || author?.name || 'Friend');
+    return `<div class="proof-reply-row"><button class="proof-reply-author" type="button" data-friend-profile="${comment.authorId}" aria-label="Open ${esc(author?.name || 'friend')} profile">${esc(label)}</button><span>${esc(comment.body)}</span></div>`;
+  }).join('');
+  const more = comments.length > 2
+    ? `<button class="proof-reply-all" type="button" data-comment-open="${checkInId}">View all ${comments.length} replies</button>`
+    : '';
+  return `<div class="proof-reply-preview">${rows}${more}</div>`;
+}
+
 function activityCard(activity, { showProofActions = false } = {}) {
   const actor = member(activity.userId);
   const mine = activity.userId === me().id;
@@ -492,17 +511,23 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const proofPreview = showProofActions && activity.proofPath ? `<button class="proof-thumbnail" type="button" data-proof="${esc(activity.proofPath)}" data-proof-thumbnail="${esc(activity.proofPath)}" aria-label="Open ${esc(activity.habitTitle)} proof"><span aria-hidden="true">📷</span><small>Loading proof…</small></button>` : '';
   const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
   const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
-  const mineReactions = activity.userReactions || [];
+  const mineReactions = (activity.userReactions || []).slice(-1);
   const visibleReactionCounts = { ...(activity.reactionCounts || {}) };
   mineReactions.forEach((emoji) => {
     visibleReactionCounts[emoji] = Math.max(1, Number(visibleReactionCounts[emoji] || 0));
   });
   const reactionTotal = Object.values(visibleReactionCounts).reduce((sum, count) => sum + Number(count || 0), 0);
   const reactionSummary = mineReactions.length
-    ? `You reacted ${mineReactions.join(' ')} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
+    ? `You reacted ${mineReactions[0]} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
     : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
   const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('')}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
   const activityMessage = activity.message === 'Done. Proof beats promises.' ? '' : activity.message;
+  if (activity.proofPath) {
+    const actorLabel = mine ? 'You' : esc(actor?.name || 'Friend');
+    const actorHandle = !mine && actor?.handle ? ` ${esc(actor.handle)}` : '';
+    const invalidLabel = activity.invalid ? ' · cooked 💀' : '';
+    return `<article class="activity proof-activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="proof-card-header"><div class="proof-card-title"><span aria-hidden="true">${esc(activity.emoji)}</span><strong>${esc(activity.habitTitle)}</strong></div><div class="proof-card-byline"><button class="proof-card-author" type="button" data-friend-profile="${activity.userId}" aria-label="Open ${esc(actor?.name || 'friend')} profile">${actorLabel}${actorHandle}${invalidLabel}</button><span>· ${esc(formatWhen(activity.when))}</span><span>· 🔥 ${activity.streak}</span></div></div>${proofPreview}${activityMessage ? `<p class="proof-card-note">${esc(activityMessage)}</p>` : ''}${proofActions}${positiveReactions}${proofReplyPreview(activity.checkInId)}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+  }
   return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}`, `${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}`)}</div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
@@ -570,7 +595,7 @@ function friendsScreen() {
   const empty = squadFeed === 'proofs'
     ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>'
     : '<div class="empty compact-empty"><b>No activity yet.</b><p>Check-ins, callouts, and public friend updates show up here.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Be first</button></div>';
-  return `<div class="friends-heading-row"><div class="friends-heading-copy"><p class="eyebrow">${friendList(state).length} CONNECTED</p><h1>Friends</h1></div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><div class="friends-action-row"><button class="btn primary" type="button" data-invite-open>${icon('userPlus')} Invite</button><button class="btn" type="button" data-add-friend-open>Add by link</button></div><div class="squad-feed-tabs" role="tablist" aria-label="Friends updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><section class="proof-feed" aria-label="Friends ${feedName}"><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
+  return `<div class="friends-heading-row"><div class="friends-heading-copy"><p class="eyebrow">${friendList(state).length} CONNECTED</p><h1>Friends</h1></div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><div class="squad-feed-tabs" role="tablist" aria-label="Friends updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><section class="proof-feed" aria-label="Friends ${feedName}"><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
 }
 
 function challengeProgress(challenge) {
@@ -883,7 +908,7 @@ function peopleSheet() {
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
   const requests = incoming.length ? `<section class="friend-requests"><div class="section-head first"><h2>Friend requests</h2><span>${incoming.length}</span></div>${requestRows}</section>` : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite friends</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite friends</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
 }
 
 function proofRejectSheet() {
@@ -1313,6 +1338,7 @@ function render() {
   app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; localStorage.setItem('donezo.squadFeed', squadFeed); feedLimit = 12; render(); }; });
   app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; inviteSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-add-friend-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-add-friend-open]').forEach((element) => { element.onclick = () => { inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-friend-profile]').forEach((element) => { element.onclick = () => openFriendProfile(element.dataset.friendProfile); });
   app.querySelectorAll('[data-add-friend]').forEach((element) => { element.onclick = async () => {
@@ -1405,6 +1431,7 @@ function render() {
     render();
   }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
+  bindSheetSwipeDismiss();
   const habitForm = app.querySelector('#habit-form');
   habitForm?.addEventListener('submit', handleHabitSubmit);
   habitForm?.addEventListener('input', markHabitDirty);
@@ -1471,6 +1498,82 @@ function renderPreservingScroll() {
   const nextSheet = app.querySelector('[data-sheet]');
   if (nextContent) nextContent.scrollTop = contentScroll;
   if (nextSheet) nextSheet.scrollTop = sheetScroll;
+}
+
+function bindSheetSwipeDismiss() {
+  app.querySelectorAll('[data-sheet]').forEach((sheet) => {
+    if (sheet.classList.contains('wrapped-sheet') || sheet.dataset.swipeDismissBound === 'true') return;
+    const backdrop = sheet.closest('.sheet-backdrop');
+    if (!backdrop) return;
+    sheet.dataset.swipeDismissBound = 'true';
+    let tracking = false;
+    let startY = 0;
+    let startAt = 0;
+    let dragY = 0;
+    let startedFromHandle = false;
+
+    const resetVisuals = () => {
+      sheet.classList.remove('is-dragging');
+      backdrop.classList.remove('is-dragging');
+      sheet.style.removeProperty('transform');
+      backdrop.style.removeProperty('--sheet-backdrop-alpha');
+    };
+
+    sheet.addEventListener('touchstart', (event) => {
+      if (event.touches.length !== 1) return;
+      const target = event.target;
+      const fromHandle = Boolean(target.closest('.sheet-handle, .sheet-head'));
+      if (target.closest('input, textarea, select, button, a, label, [contenteditable="true"]')) return;
+      if (!fromHandle && sheet.scrollTop > 0) return;
+      tracking = true;
+      startedFromHandle = fromHandle;
+      startY = event.touches[0].clientY;
+      startAt = performance.now();
+      dragY = 0;
+    }, { passive: true });
+
+    sheet.addEventListener('touchmove', (event) => {
+      if (!tracking || event.touches.length !== 1) return;
+      if (!startedFromHandle && sheet.scrollTop > 0) {
+        tracking = false;
+        resetVisuals();
+        return;
+      }
+      const deltaY = event.touches[0].clientY - startY;
+      if (deltaY <= 0) {
+        dragY = 0;
+        resetVisuals();
+        return;
+      }
+      dragY = deltaY;
+      sheet.classList.add('is-dragging');
+      backdrop.classList.add('is-dragging');
+      sheet.style.transform = `translate3d(0, ${dragY}px, 0)`;
+      backdrop.style.setProperty('--sheet-backdrop-alpha', String(Math.max(0.18, 0.42 - Math.min(0.24, dragY / 650))));
+      event.preventDefault();
+    }, { passive: false });
+
+    const finish = () => {
+      if (!tracking) return;
+      const elapsed = Math.max(1, performance.now() - startAt);
+      const velocity = dragY / elapsed;
+      const shouldClose = dragY >= 96 || (dragY >= 36 && velocity >= 0.55);
+      tracking = false;
+      if (shouldClose) {
+        resetVisuals();
+        closeSheets();
+        render();
+        return;
+      }
+      resetVisuals();
+    };
+
+    sheet.addEventListener('touchend', finish, { passive: true });
+    sheet.addEventListener('touchcancel', () => {
+      tracking = false;
+      resetVisuals();
+    }, { passive: true });
+  });
 }
 
 function closeSheets() {
