@@ -49,6 +49,17 @@ if (!reactionTest.includes(oldReactionBlock)) throw new Error('Reaction regressi
 reactionTest = reactionTest.replace(oldReactionBlock, newReactionBlock);
 await writeFile(reactionTestPath, reactionTest);
 
+// The optimistic no-proof helper still captures the date when the action is
+// created; only the helper's variable names changed. Keep that exact rule.
+const polishTestPath = 'test/polish-batch.test.mjs';
+let polishTest = await readFile(polishTestPath, 'utf8');
+if (!polishTest.includes("assert.match(app, /handleUndoCheckIn\\(id, checkInDate\\)/);")) throw new Error('Undo regression assertion changed unexpectedly');
+polishTest = polishTest.replace(
+  "assert.match(app, /handleUndoCheckIn\\(id, checkInDate\\)/);",
+  "assert.match(app, /handleUndoCheckIn\\(habit\\.id, date\\)/);",
+);
+await writeFile(polishTestPath, polishTest);
+
 let patched = await readFile(storePath, 'utf8');
 const patchedCompleteStart = patched.indexOf('  async function completeWithProof(habitId, date, file) {');
 const patchedDownvoteStart = patched.indexOf('  async function setProofDownvote(checkInId, downvoted) {', patchedCompleteStart);
