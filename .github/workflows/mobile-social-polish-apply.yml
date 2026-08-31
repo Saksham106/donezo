@@ -6,6 +6,8 @@ on:
       - feat/mobile-social-proof-polish-2026-08-31
     paths:
       - scripts/apply-mobile-social-proof-polish.mjs
+      - test/app-shell.test.mjs
+      - test/pwa.test.mjs
 
 permissions:
   contents: write
