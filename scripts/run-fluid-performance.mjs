@@ -16,6 +16,17 @@ runner = runner.replace(
 await writeFile(runnerPath, runner);
 await import('./apply-fluid-performance.mjs');
 
+// The patch runner advances old v24-positive assertions to v25. The new
+// performance test intentionally contains a negative v24 assertion too,
+// so restore that one rather than letting replaceAll invert its meaning.
+const fluidTestPath = 'test/fluid-performance.test.mjs';
+let fluidTest = await readFile(fluidTestPath, 'utf8');
+fluidTest = fluidTest.replace(
+  'assert.doesNotMatch(sw, /donezo-shell-v25/);',
+  'assert.doesNotMatch(sw, /donezo-shell-v24/);',
+);
+await writeFile(fluidTestPath, fluidTest);
+
 let patched = await readFile(storePath, 'utf8');
 const patchedCompleteStart = patched.indexOf('  async function completeWithProof(habitId, date, file) {');
 const patchedDownvoteStart = patched.indexOf('  async function setProofDownvote(checkInId, downvoted) {', patchedCompleteStart);
