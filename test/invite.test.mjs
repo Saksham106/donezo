@@ -11,6 +11,11 @@ import {
 
 test('validateInviteCode normalizes valid codes and rejects malformed values', () => {
   assert.deepEqual(validateInviteCode('AbC123dEf456'), { valid: true, code: 'abc123def456' });
+  assert.deepEqual(validateInviteCode('https://donezo-lime-two.vercel.app/?invite=ABCDEF0123456789ABCDEF01'), {
+    valid: true,
+    code: 'abcdef0123456789abcdef01',
+  });
+  assert.deepEqual(validateInviteCode('abc123 def456'), { valid: true, code: 'abc123def456' });
   assert.deepEqual(validateInviteCode(' short '), { valid: false, code: null });
   assert.deepEqual(validateInviteCode('abc123def45!'), { valid: false, code: null });
 });

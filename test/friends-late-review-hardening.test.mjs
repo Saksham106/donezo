@@ -29,8 +29,27 @@ test('client accepts hardened friend codes while preserving legacy 12-character 
   assert.equal(validateInviteCode('abcdef0123456789abcdef01').valid, true);
   assert.equal(validateInviteCode('abcdef012345').valid, true);
   assert.match(storeSource, /\^\(\?:\[a-z0-9\]\{12\}\|\[a-f0-9\]\{24\}\)\$/);
-  assert.match(appSource, /maxlength="24"/);
+  assert.match(appSource, /placeholder="Paste friend code or link"/);
+  assert.doesNotMatch(appSource, /name="code"[^>]*maxlength="24"/);
   assert.doesNotMatch(appSource, /Paste the 12-character code a friend sent you/);
+});
+
+test('Friends invite sheet never exposes a legacy circle code as a friend code', () => {
+  assert.match(appSource, /function activeFriendInviteCode\(\)/);
+  const sheet = appSource.slice(appSource.indexOf('function inviteSheet()'), appSource.indexOf('function peopleSheet()'));
+  assert.match(sheet, /activeFriendInviteCode\(\)/);
+  assert.doesNotMatch(sheet, /circleInviteCode|createdCircleInvite/);
+});
+
+test('sharing or copying creates a fresh single-use friend invite every time', () => {
+  const share = appSource.slice(appSource.indexOf('async function handleShareInvite()'), appSource.indexOf('async function handleCopyRawInvite()'));
+  const copy = appSource.slice(appSource.indexOf('async function handleCopyRawInvite()'), appSource.indexOf('function clearPendingInvite()'));
+  assert.match(share, /const directFriendFlow = typeof repo\?\.createFriendInvite === 'function'/);
+  assert.match(share, /if \(directFriendFlow\) \{\s*const invite = await handleCreateFriendInvite\(\)/);
+  assert.doesNotMatch(share, /inviteSheetOpen/);
+  assert.match(copy, /const directFriendFlow = typeof repo\?\.createFriendInvite === 'function'/);
+  assert.match(copy, /if \(directFriendFlow\) \{\s*const invite = await handleCreateFriendInvite\(\)/);
+  assert.doesNotMatch(copy, /inviteSheetOpen/);
 });
 
 test('new Friends spaces share a direct friend invite rather than a legacy circle code', () => {

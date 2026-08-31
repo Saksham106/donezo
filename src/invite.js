@@ -2,8 +2,19 @@
 // 24 hexadecimal characters (96 random bits). Accept both during migration.
 const INVITE_PATTERN = /^(?:[a-z0-9]{12}|[a-f0-9]{24})$/;
 
+export function normalizeInviteInput(value) {
+  let raw = String(value || '').trim();
+  try {
+    const url = new URL(raw);
+    if (url.searchParams.has('invite')) raw = url.searchParams.get('invite') || '';
+  } catch {
+    // A raw code is expected most of the time.
+  }
+  return raw.replace(/\s+/g, '').toLowerCase();
+}
+
 export function validateInviteCode(value) {
-  const code = String(value || '').trim().toLowerCase();
+  const code = normalizeInviteInput(value);
   return INVITE_PATTERN.test(code)
     ? { valid: true, code }
     : { valid: false, code: null };

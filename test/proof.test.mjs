@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   MAX_PROOF_BYTES,
   createProofReviewState,
   formatProofFileSize,
   imageFileFromPasteData,
+  proofMimeType,
   readClipboardImage,
   transitionProofReview,
   validateProofFile,
@@ -13,15 +15,31 @@ import {
 const makeFile = (type = 'image/jpeg', size = 1024) => ({ type, size, name: 'proof.jpg' });
 
 test('proof validation preserves current file types and 4 MB limit', () => {
-  for (const type of ['image/jpeg', 'image/png', 'image/webp', 'image/heic']) {
+  for (const type of ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif']) {
     assert.deepEqual(validateProofFile(makeFile(type, MAX_PROOF_BYTES)), { valid: true, error: null });
   }
   assert.equal(validateProofFile(makeFile('image/gif')).valid, false);
-  assert.match(validateProofFile(makeFile('image/gif')).error, /JPG, PNG, WebP, or HEIC/);
+  assert.match(validateProofFile(makeFile('image/gif')).error, /JPG, PNG, WebP, HEIC, or HEIF/);
   assert.equal(validateProofFile(makeFile('image/jpeg', MAX_PROOF_BYTES + 1)).valid, false);
   assert.match(validateProofFile(makeFile('image/jpeg', MAX_PROOF_BYTES + 1)).error, /4 MB/);
   assert.equal(validateProofFile(makeFile('image/jpeg', 0)).valid, false);
   assert.match(validateProofFile(makeFile('image/jpeg', 0)).error, /empty/i);
+});
+
+test('camera-roll proof types normalize iPhone aliases and missing MIME metadata', () => {
+  assert.equal(proofMimeType({ type: 'image/jpg', name: 'camera.jpg' }), 'image/jpeg');
+  assert.equal(proofMimeType({ type: 'image/heif', name: 'IMG_0042.HEIF' }), 'image/heif');
+  assert.equal(proofMimeType({ type: '', name: 'IMG_0042.HEIC' }), 'image/heic');
+  assert.equal(proofMimeType({ type: 'application/octet-stream', name: 'saved-photo.jpeg' }), 'image/jpeg');
+  assert.equal(proofMimeType({ type: '', name: 'not-a-photo.txt' }), null);
+  assert.deepEqual(validateProofFile({ type: '', name: 'IMG_0042.HEIC', size: 2048 }), { valid: true, error: null });
+});
+
+test('proof storage accepts every client-supported camera-roll MIME type', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/0024_friend_discovery.sql', import.meta.url), 'utf8');
+  for (const type of ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']) {
+    assert.match(migration, new RegExp(type.replace('/', '\\/')));
+  }
 });
 
 test('proof file size feedback is concise and deterministic', () => {

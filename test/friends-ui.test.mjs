@@ -44,6 +44,40 @@ test('Friends and League prefer new state while preserving member fallbacks', ()
   assert.match(league, /leagueMembers\(state\)/);
 });
 
+test('People and profiles make friend requests and friend-of-friend adds obvious', () => {
+  const people = slice('peopleSheet', 'proofRejectSheet');
+  const profile = slice('friendProfileSheet', 'recoverySheet');
+  assert.match(people, /Friend requests/);
+  assert.match(people, /data-accept-friend/);
+  assert.match(profile, /Their friends/);
+  assert.match(profile, /data-add-friend/);
+  assert.match(profile, /data-accept-friend/);
+  assert.match(app, /repo\.loadFriendConnections/);
+  assert.match(app, /repo\.inviteFriend/);
+  assert.match(app, /repo\.acceptFriend/);
+});
+
+test('every League row opens a profile and shows daily accountability', () => {
+  const league = slice('leagueScreen', 'challengeInfoSheet');
+  assert.match(league, /data-friend-profile/);
+  assert.match(league, /dailyAccountabilitySummary/);
+  assert.match(league, /Today/);
+  assert.match(league, /Yesterday/);
+  assert.match(league, /league-daily-status/);
+});
+
+test('global Proofs stay chronological while profiles offer a newest-first swipeable proof history', () => {
+  const friends = slice('friendsScreen', 'challengeProgress');
+  const profile = slice('friendProfileSheet', 'recoverySheet');
+  assert.match(app, /function personProofCarousel/);
+  assert.match(app, /new Date\(b\.when\).*new Date\(a\.when\)/s);
+  assert.doesNotMatch(friends, /personProofCarousel/);
+  assert.match(profile, /personProofCarousel\(person\.id, recent\)/);
+  assert.match(profile, /All activity/);
+  assert.match(social, /\.profile-proof-carousel\{[^}]*scroll-snap-type:x mandatory/);
+  assert.match(social, /\.profile-proof-card\{[^}]*scroll-snap-align:start/);
+});
+
 test('habit sheet exposes all-friends, selected-friends, and only-me audience controls', () => {
   const source = slice('habitSheet', 'settingsSheet');
   assert.match(source, /name="audienceMode"/);

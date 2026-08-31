@@ -5,6 +5,8 @@ import {
   rejectedCheckInIds,
 } from './domain.js';
 import { getScheduleOccurrence, normalizeSchedule } from './schedule.js';
+import { normalizeInviteInput } from './invite.js';
+import { proofMimeType } from './proof.js';
 import { validateStake } from './stakes.js';
 import { validateCommentBody } from './social-domain.js';
 import { computeEarnedBadges } from './badges-domain.js';
@@ -32,7 +34,7 @@ function appError(error, fallback) {
 }
 
 function normalizeFriendInviteCode(value) {
-  const code = String(value || '').trim().toLowerCase();
+  const code = normalizeInviteInput(value);
   if (!/^(?:[a-z0-9]{12}|[a-f0-9]{24})$/.test(code)) throw new Error('Enter a valid friend invite code');
   return code;
 }
@@ -55,6 +57,7 @@ export function proofObjectPath(userId, habitId, mimeType, timestamp = Date.now(
     'image/png': 'png',
     'image/webp': 'webp',
     'image/heic': 'heic',
+    'image/heif': 'heif',
   };
   const extension = extensions[mimeType];
   if (!extension) throw new Error('Unsupported image type');
@@ -93,13 +96,15 @@ export function mapDatabaseState(user, rows) {
     : [{ user_id: user.id, profiles: profile }];
   const friendships = rows.friendships || [];
   const friendIds = new Set(directFriendIds(user.id, friendships));
-  const friendProfiles = (rows.friendProfiles || rows.friends || [])
+  const directoryProfiles = rows.friendProfiles || rows.friends || [];
+  const friendProfiles = directoryProfiles
     .filter((friendProfile) => friendIds.has(friendProfile.id));
   const networkMemberRows = [
     { user_id: user.id, profiles: profile },
     ...friendProfiles.map((friendProfile) => ({ user_id: friendProfile.id, profiles: friendProfile })),
   ].filter((membership, index, all) => all.findIndex((item) => item.user_id === membership.user_id) === index);
-  const memberProfileById = new Map([...memberRows, ...networkMemberRows].map((membership) => {
+  const directoryMemberRows = directoryProfiles.map((directoryProfile) => ({ user_id: directoryProfile.id, profiles: directoryProfile }));
+  const memberProfileById = new Map([...memberRows, ...networkMemberRows, ...directoryMemberRows].map((membership) => {
     const memberProfile = membership.profiles || {};
     return [membership.user_id || memberProfile.id, memberProfile];
   }));
@@ -261,6 +266,8 @@ export function mapDatabaseState(user, rows) {
   };
   const members = memberRows.map(mapMember);
   const personalizedLeague = networkMemberRows.map(mapMember);
+  const peopleDirectory = directoryMemberRows.map(mapMember)
+    .filter((person, index, all) => all.findIndex((item) => item.id === person.id) === index);
   const friends = personalizedLeague.filter((member) => member.id !== user.id);
   const memberById = new Map(personalizedLeague.map((member) => [member.id, member]));
   const checkInActivities = checkIns
@@ -426,8 +433,16 @@ export function mapDatabaseState(user, rows) {
   return {
     currentUserId: user.id,
     friendships,
-    friendRequests: rows.friendRequests || [],
+    friendRequests: (rows.friendRequests || []).map((request) => ({
+      id: request.id,
+      requesterId: request.requester_id || request.requesterId,
+      addresseeId: request.addressee_id || request.addresseeId,
+      status: request.status,
+      createdAt: request.created_at || request.createdAt || null,
+      respondedAt: request.responded_at || request.respondedAt || null,
+    })),
     friends,
+    peopleDirectory,
     personalizedLeague,
     circles,
     circleId: rows.circle?.id || null,
@@ -487,8 +502,10 @@ export function createSupabaseRepository(client, user) {
     const notificationPreferences = notificationPreferencesResult.data;
     const friendships = friendshipsResult.data || [];
     const friendIds = directFriendIds(user.id, friendships);
-    const friendProfilesResult = friendIds.length
-      ? await client.from('profiles').select('id,username,display_name,avatar_url,timezone,created_at,recap_awards_enabled').in('id', friendIds)
+    const requestProfileIds = (requestsResult.data || []).flatMap((request) => [request.requester_id, request.addressee_id]);
+    const visibleProfileIds = [...new Set([...friendIds, ...requestProfileIds].filter((id) => id && id !== user.id))];
+    const friendProfilesResult = visibleProfileIds.length
+      ? await client.from('profiles').select('id,username,display_name,avatar_url,timezone,created_at,recap_awards_enabled').in('id', visibleProfileIds)
       : { data: [], error: null };
     if (friendProfilesResult.error) throw appError(friendProfilesResult.error, 'Could not load friends');
     const circles = (membershipsResult.data || []).map((membership) => ({
@@ -862,10 +879,12 @@ export function createSupabaseRepository(client, user) {
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
     if (existing && !existing.invalid) throw new Error('Already checked in today');
     const oldProofPath = existing?.proofPath || null;
-    const path = proofObjectPath(user.id, habitId, file.type);
+    const mimeType = proofMimeType(file);
+    if (!mimeType) throw new Error('Unsupported image type');
+    const path = proofObjectPath(user.id, habitId, mimeType);
     const { error: uploadError } = await client.storage.from('proofs').upload(path, file, {
       cacheControl: '3600',
-      contentType: file.type,
+      contentType: mimeType,
       upsert: false,
     });
     if (uploadError) throw appError(uploadError, 'Could not upload proof');
@@ -1132,7 +1151,14 @@ export function createSupabaseRepository(client, user) {
     const friendships = friendshipsResult.data || [];
     const requests = requestsResult.data || [];
     state.friendships = friendships;
-    state.friendRequests = requests;
+    state.friendRequests = requests.map((request) => ({
+      id: request.id,
+      requesterId: request.requester_id || request.requesterId,
+      addresseeId: request.addressee_id || request.addresseeId,
+      status: request.status,
+      createdAt: request.created_at || request.createdAt || null,
+      respondedAt: request.responded_at || request.respondedAt || null,
+    }));
     const friendIds = new Set(directFriendIds(user.id, friendships));
     return {
       friends: (profilesResult.data || []).filter((profile) => friendIds.has(profile.id)),
@@ -1149,26 +1175,47 @@ export function createSupabaseRepository(client, user) {
     return { ...(typeof data === 'object' && data ? data : {}), code };
   }
 
+  async function loadFriendConnections(targetFriendId) {
+    if (!targetFriendId || targetFriendId === user.id) return [];
+    const { data, error } = await client.rpc('list_friend_connections', { target_friend_id: targetFriendId });
+    if (error) throw appError(error, 'Could not load this friend’s friends');
+    return (data || []).map((person) => {
+      const name = person.display_name || person.username || 'Donezo user';
+      return {
+        id: person.user_id,
+        name,
+        handle: person.username ? `@${person.username}` : '',
+        avatar: initials(name),
+        avatarUrl: person.avatar_url || null,
+        relationship: person.relationship_status || 'available',
+        requestId: person.request_id || null,
+        mutualCount: Number(person.mutual_count || 0),
+      };
+    });
+  }
+
   async function acceptFriendInvite(inviteCode) {
     const code = normalizeFriendInviteCode(inviteCode);
     const { data, error } = await client.rpc('accept_friend_invite', { supplied_code: code });
     if (error) throw appError(error, 'Could not accept friend invite');
     await load(state.circleId);
-    return data;
+    return data || true;
   }
 
   async function inviteFriend(targetUserId) {
     if (!targetUserId || targetUserId === user.id) throw new Error('Choose another user');
     const { data, error } = await client.rpc('invite_friend', { target_user_id: targetUserId });
     if (error) throw appError(error, 'Could not send friend invite');
-    return data;
+    await load(state.circleId);
+    return data || true;
   }
 
   async function acceptFriend(requestId) {
     if (!requestId) throw new Error('Friend request is required');
     const { data, error } = await client.rpc('accept_friend', { target_request_id: requestId });
     if (error) throw appError(error, 'Could not accept friend invite');
-    return data;
+    await load(state.circleId);
+    return data || true;
   }
 
   async function removeFriend(targetUserId) {
@@ -1257,6 +1304,7 @@ export function createSupabaseRepository(client, user) {
     savePushSubscription,
     getProofUrl,
     loadFriends,
+    loadFriendConnections,
     createFriendInvite,
     acceptFriendInvite,
     inviteFriend,
@@ -1296,6 +1344,31 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   function getFriends() {
     const ids = new Set(getFriendIds());
     return (state.profiles || state.members || []).filter((profile) => ids.has(profile.id)).map((profile) => clone(profile));
+  }
+
+  function loadFriendConnections(targetFriendId) {
+    const actor = state.currentUserId;
+    if (!getFriendIds().includes(targetFriendId)) throw new Error('Direct friendship required');
+    const candidateIds = directFriendIds(targetFriendId, state.friendships || []).filter((id) => id !== actor);
+    const profiles = state.profiles || state.members || [];
+    const actorFriendIds = new Set(getFriendIds());
+    return candidateIds.map((candidateId) => {
+      const profile = profiles.find((item) => item.id === candidateId) || { id: candidateId, name: 'Donezo user' };
+      const pending = (state.friendRequests || []).find((request) => request.status === 'pending'
+        && ((request.requesterId === actor && request.addresseeId === candidateId)
+          || (request.requesterId === candidateId && request.addresseeId === actor)));
+      const name = profile.name || profile.display_name || profile.username || 'Donezo user';
+      return {
+        id: candidateId,
+        name,
+        handle: profile.handle || (profile.username ? `@${profile.username}` : ''),
+        avatar: profile.avatar || initials(name),
+        avatarUrl: profile.avatarUrl || profile.avatar_url || null,
+        relationship: actorFriendIds.has(candidateId) ? 'friend' : pending?.requesterId === actor ? 'outgoing' : pending ? 'incoming' : 'available',
+        requestId: pending?.id || null,
+        mutualCount: directFriendIds(candidateId, state.friendships || []).filter((id) => actorFriendIds.has(id)).length,
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   function ensureFriendsWorkspace() {
@@ -1660,7 +1733,7 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   return {
-    getState, asUser, ensureFriendsWorkspace, getFriends, getFriendIds, createFriendInvite, acceptFriendInvite, inviteFriend, acceptFriend, removeFriend, addFriendForTest,
+    getState, asUser, ensureFriendsWorkspace, getFriends, getFriendIds, loadFriendConnections, createFriendInvite, acceptFriendInvite, inviteFriend, acceptFriend, removeFriend, addFriendForTest,
     setHabitAudience, getUnifiedFeed, getPersonalizedLeague,
     toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit,
     sendNudge, startBaton, passBaton, setBatonEnabled, addComment, deleteComment,
