@@ -49,7 +49,9 @@ test('People and profiles make friend requests and friend-of-friend adds obvious
   const profile = slice('friendProfileSheet', 'recoverySheet');
   assert.match(people, /Friend requests/);
   assert.match(people, /data-accept-friend/);
-  assert.match(profile, /Their friends/);
+  assert.match(profile, /profile-connections/);
+  assert.match(profile, /connectionCount/);
+  assert.match(profile, /\.length \+ 1/);
   assert.match(profile, /data-add-friend/);
   assert.match(profile, /data-accept-friend/);
   assert.match(app, /repo\.loadFriendConnections/);

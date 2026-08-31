@@ -13,7 +13,7 @@ const slice = (start, end) => app.slice(app.indexOf(start), app.indexOf(end));
 test('League challenge has clear action and explanation while Friendly Stake creation is removed', () => {
   const league = slice('function leagueScreen()', 'function stakeHistory()');
   assert.match(league, /data-challenge-info/);
-  assert.match(league, /aria-label="How do challenges work\?"/);
+  assert.match(league, /aria-label="How do League points work\?"/);
   assert.match(league, /aria-label="Start a weekly challenge"/);
   assert.doesNotMatch(league, /Start a friendly stake|data-stake-create|data-open-stake/);
   assert.match(app, /function challengeInfoSheet\(\)/);

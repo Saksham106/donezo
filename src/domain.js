@@ -175,20 +175,20 @@ function inclusiveDays(startString, endString) {
   return days;
 }
 
-export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
+function weeklyCommitmentLedger(memberId, habits, checkIns, todayString) {
   const weekStart = mondayOf(todayString);
   const eligibleHabits = habits.filter((habit) => (
     habit.ownerId === memberId
     && (habit.active !== false || Boolean(habit.archivedDate))
   ));
-  const completed = new Map();
+  const completedQuantities = new Map();
   for (const checkIn of checkIns.filter((item) => item.userId === memberId && item.invalid !== true)) {
     const key = `${checkIn.habitId}:${checkIn.date}`;
     const quantity = Number(checkIn.completedQuantity ?? checkIn.completed_quantity ?? 1);
-    completed.set(key, (completed.get(key) || 0) + (Number.isFinite(quantity) ? Math.max(0, quantity) : 0));
+    completedQuantities.set(key, (completedQuantities.get(key) || 0) + (Number.isFinite(quantity) ? Math.max(0, quantity) : 0));
   }
-  let possible = 0;
-  let completedCount = 0;
+  const days = new Map();
+  const completedDaysByHabit = new Map();
 
   for (const habit of eligibleHabits) {
     const createdDate = habit.createdDate
@@ -219,30 +219,74 @@ export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
         };
       }
       if (!occurrence.scheduled) continue;
-      possible += 1;
-      if ((completed.get(`${habit.id}:${day}`) || 0) >= occurrence.targetQuantity) completedCount += 1;
+      const complete = (completedQuantities.get(`${habit.id}:${day}`) || 0) >= occurrence.targetQuantity;
+      if (!days.has(day)) days.set(day, []);
+      days.get(day).push({ habitId: habit.id, complete, mature: createdDate < weekStart });
+      if (complete) {
+        if (!completedDaysByHabit.has(habit.id)) completedDaysByHabit.set(habit.id, new Set());
+        completedDaysByHabit.get(habit.id).add(day);
+      }
     }
   }
 
+  return { weekStart, days, completedDaysByHabit };
+}
+
+export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
+  const { days } = weeklyCommitmentLedger(memberId, habits, checkIns, todayString);
+  const occurrences = [...days.values()].flat();
+  const completed = occurrences.filter((item) => item.complete).length;
+  const possible = occurrences.length;
   return {
-    completed: completedCount,
+    completed,
     possible,
-    percent: possible === 0 ? 0 : Math.round((completedCount / possible) * 100),
+    percent: possible === 0 ? 0 : Math.round((completed / possible) * 100),
+  };
+}
+
+export function weeklyLeaguePoints(memberId, habits, checkIns, todayString) {
+  const { days, completedDaysByHabit } = weeklyCommitmentLedger(memberId, habits, checkIns, todayString);
+  const completionWeights = [10, 10, 10, 5, 2];
+  let completionPoints = 0;
+  let cleanDayBonus = 0;
+  let completed = 0;
+  let possible = 0;
+
+  for (const occurrences of days.values()) {
+    const completedToday = occurrences.filter((item) => item.complete);
+    possible += occurrences.length;
+    completed += completedToday.length;
+    const pointEligible = completedToday.filter((item) => (
+      item.mature || (completedDaysByHabit.get(item.habitId)?.size || 0) >= 2
+    ));
+    completionPoints += pointEligible.slice(0, completionWeights.length)
+      .reduce((sum, _item, index) => sum + completionWeights[index], 0);
+    if (pointEligible.length && completedToday.length === occurrences.length) cleanDayBonus += 5;
+  }
+
+  return {
+    points: completionPoints + cleanDayBonus,
+    completionPoints,
+    cleanDayBonus,
+    completed,
+    possible,
+    percent: possible === 0 ? 0 : Math.round((completed / possible) * 100),
   };
 }
 
 export function rankMembersByWeeklyScore(members, habits, checkIns, todayString) {
   return members
     .map((member) => {
-      const score = weeklyCompletionScore(member.id, habits, checkIns, todayString);
+      const score = weeklyLeaguePoints(member.id, habits, checkIns, todayString);
       return {
         ...member,
+        weeklyPoints: score.points,
         weeklyScore: score.percent,
         weeklyCompleted: score.completed,
         weeklyPossible: score.possible,
       };
     })
-    .sort((a, b) => b.weeklyScore - a.weeklyScore || (b.currentStreak || 0) - (a.currentStreak || 0) || a.name.localeCompare(b.name))
+    .sort((a, b) => b.weeklyPoints - a.weeklyPoints || b.weeklyScore - a.weeklyScore || (b.currentStreak || 0) - (a.currentStreak || 0) || a.name.localeCompare(b.name))
     .map((member, index) => ({ ...member, rank: index + 1 }));
 }
 

@@ -75,6 +75,7 @@ let challengeInfoOpen = false;
 let stakeSheetOpen = false;
 let feedLimit = 12;
 let inviteSheetOpen = false;
+let addFriendSheetOpen = false;
 let peopleSheetOpen = false;
 let squadFeed = localStorage.getItem('donezo.squadFeed') || 'proofs';
 const proofThumbnailUrls = new Map();
@@ -394,6 +395,16 @@ function weekBounds(dateString = today()) {
   return { start, end: shiftDate(start, 6) };
 }
 
+function formatLeagueWeekRange(bounds = weekBounds()) {
+  const format = (dateString, weekday) => new Intl.DateTimeFormat('en-US', {
+    weekday,
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(`${dateString}T12:00:00Z`));
+  return `${format(bounds.start, 'short')} – ${format(bounds.end, 'short')}`;
+}
+
 function missedHabits() {
   const state = getState();
   const yesterday = shiftDate(today(), -1);
@@ -457,18 +468,23 @@ function checkInScreen() {
   return `${pageHeading('Check in', `${progress.completed}/${progress.total} DONE TODAY`, incomplete.length ? `${incomplete.length} left. Tap it and get the receipt.` : 'You are clear. Touch grass or something.')}<section class="checkin-progress"><div><b>${progress.percent}%</b><span>complete</span></div><div class="bar"><i style="width:${progress.percent}%"></i></div></section><div class="section-head"><h2>Remaining</h2><span>${incomplete.length}</span></div><div class="habit-list">${incomplete.length ? incomplete.map((habit) => habitCard(habit, true)).join('') : '<div class="empty compact-empty"><b>All done.</b><p>Your squad has no ammo today.</p></div>'}</div>${completed.length ? `<div class="section-head subdued"><h2>Completed</h2><span>${completed.length}</span></div><div class="habit-list completed-list">${completed.map((habit) => habitCard(habit, true)).join('')}</div>` : ''}`;
 }
 
+function activityProfileButton(userId, primary, secondary) {
+  const person = member(userId);
+  return `<button class="activity-profile" type="button" data-friend-profile="${userId}" aria-label="Open ${esc(person?.name || 'friend')} profile"><div class="avatar">${esc(person?.avatar || '?')}</div><span><strong>${primary}</strong><small>${secondary}</small></span></button>`;
+}
+
 function activityCard(activity, { showProofActions = false } = {}) {
   const actor = member(activity.userId);
   const mine = activity.userId === me().id;
   if (activity.type === 'callout') {
     const target = member(activity.toUserId);
-    return `<article class="activity callout"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')} called out ${esc(target?.name || 'a friend')}</strong><small>${esc(formatWhen(activity.when))} · visible to this group</small></div></div><div class="callout-message"><span>⚡</span><p>${esc(activity.message)}</p></div></article>`;
+    return `<article class="activity callout"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')} called out ${esc(target?.name || 'a friend')}`, `${esc(formatWhen(activity.when))} · visible to this group`)}</div><div class="callout-message"><span>⚡</span><p>${esc(activity.message)}</p></div></article>`;
   }
   if (['missed', 'recovered', 'recovery'].includes(activity.type)) {
     const recovered = activity.type === 'recovered';
     const missed = activity.type === 'missed';
     const verb = missed ? 'missed one' : recovered ? 'came back' : 'made a recovery move';
-    return `<article class="activity ${activity.type}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')} ${verb}</strong><small>${esc(formatWhen(activity.when))}</small></div></div><div class="activity-body"><span>${missed ? '○' : '↩'}</span><div><strong>${esc(activity.emoji)} ${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${!mine && !missed ? `<button class="btn small-btn" data-nudge="${activity.userId}">Send support</button>` : ''}</article>`;
+    return `<article class="activity ${activity.type}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')} ${verb}`, esc(formatWhen(activity.when)))}</div><div class="activity-body"><span>${missed ? '○' : '↩'}</span><div><strong>${esc(activity.emoji)} ${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${!mine && !missed ? `<button class="btn small-btn" data-nudge="${activity.userId}">Send support</button>` : ''}</article>`;
   }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(friendList(getState()).length);
@@ -486,7 +502,7 @@ function activityCard(activity, { showProofActions = false } = {}) {
     : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
   const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('')}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
   const activityMessage = activity.message === 'Done. Proof beats promises.' ? '' : activity.message;
-  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head"><div class="avatar">${esc(actor?.avatar || '?')}</div><div><strong>${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}</strong><small>${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}</small></div></div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}`, `${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}`)}</div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
 function personProofCarousel(userId, activities) {
@@ -520,7 +536,7 @@ function squadScreen() {
   const visibleActivities = feed.slice(0, feedLimit);
   const groupedActivities = squadFeed === 'activity' ? groupSquadActivity(visibleActivities, state.comments || []) : visibleActivities;
   const activities = groupedActivities.map((activity) => activity.type === 'grouped_checkin'
-    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><p>${activity.items.map((item) => esc(member(item.userId)?.name || 'Friend')).join(', ')}</p></article>`
+    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><div class="activity-people">${activity.items.map((item) => `<button type="button" data-friend-profile="${item.userId}">${esc(member(item.userId)?.name || 'Friend')}</button>`).join('')}</div></article>`
     : activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
@@ -543,7 +559,7 @@ function friendsScreen() {
     ? groupSquadActivity(visibleActivities, state.comments || [])
     : visibleActivities;
   const activities = displayActivities.map((activity) => activity.type === 'grouped_checkin'
-    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><p>${activity.items.map((item) => esc(member(item.userId)?.name || 'Friend')).join(', ')}</p></article>`
+    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><div class="activity-people">${activity.items.map((item) => `<button type="button" data-friend-profile="${item.userId}">${esc(member(item.userId)?.name || 'Friend')}</button>`).join('')}</div></article>`
     : activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const feedName = squadFeed === 'proofs' ? 'proofs' : 'activity';
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older ${feedName}</button>` : '';
@@ -553,7 +569,7 @@ function friendsScreen() {
   const empty = squadFeed === 'proofs'
     ? '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>'
     : '<div class="empty compact-empty"><b>No activity yet.</b><p>Check-ins, callouts, and public friend updates show up here.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Be first</button></div>';
-  return `<div class="friends-heading-row"><div class="friends-heading-copy"><p class="eyebrow">${friendList(state).length} CONNECTED</p><h1>Friends</h1></div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><div class="squad-feed-tabs" role="tablist" aria-label="Friends updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><section class="proof-feed" aria-label="Friends ${feedName}"><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
+  return `<div class="friends-heading-row"><div class="friends-heading-copy"><p class="eyebrow">${friendList(state).length} CONNECTED</p><h1>Friends</h1></div><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div><div class="friends-refresh-meta"><small>${esc(syncText)}</small></div><div class="friends-action-row"><button class="btn primary" type="button" data-invite-open>${icon('userPlus')} Invite</button><button class="btn" type="button" data-add-friend-open>Add by link</button></div><div class="squad-feed-tabs" role="tablist" aria-label="Friends updates"><button type="button" role="tab" aria-selected="${squadFeed === 'proofs'}" class="${squadFeed === 'proofs' ? 'active' : ''}" data-squad-feed="proofs">Proofs</button><button type="button" role="tab" aria-selected="${squadFeed === 'activity'}" class="${squadFeed === 'activity' ? 'active' : ''}" data-squad-feed="activity">Activity</button></div><section class="proof-feed" aria-label="Friends ${feedName}"><div class="activity-list">${activities || empty}${loadMore}</div></section>`;
 }
 
 function challengeProgress(challenge) {
@@ -655,10 +671,12 @@ async function createRecapImage() {
 
 function leagueScreen() {
   const state = getState();
+  const period = weekBounds();
+  const weekRange = formatLeagueWeekRange(period);
   const ranked = rankMembersByWeeklyScore(leagueMembers(state), state.habits, state.checkIns, today());
   const mine = ranked.find((item) => item.id === me().id);
   const leader = ranked[0];
-  const gap = leader && mine ? Math.max(0, leader.weeklyScore - mine.weeklyScore) : 0;
+  const gap = leader && mine ? Math.max(0, leader.weeklyPoints - mine.weeklyPoints) : 0;
   const stake = (state.stakes || []).find((item) => ['pending', 'active'].includes(item.status));
   const myConsent = stake ? (state.stakeConsents || []).find((item) => item.stakeId === stake.id && item.userId === me().id) : null;
   const canResolve = stake?.status === 'active' && stake.createdBy === me().id && today() > stake.endsOn;
@@ -676,14 +694,14 @@ function leagueScreen() {
       : missed.length
         ? `Yesterday · missed ${missed.slice(0, 2).map((habit) => `${habit.emoji || '○'} ${habit.title}`).join(', ')}${missed.length > 2 ? ` +${missed.length - 2}` : ''}`
         : 'Yesterday · clean';
-    return `<button type="button" class="league-row" data-friend-profile="${item.id}" aria-label="Open ${esc(item.name)} profile"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong class="league-name ${item.id === me().id ? 'mine' : ''}">${esc(item.name)}${item.id === me().id ? ' · you' : ''}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} this week · 🔥 ${item.currentStreak}</small><span class="league-daily-status"><small>${esc(todayLabel)}</small><small class="league-yesterday ${missed.length ? 'missed' : ''}">${esc(yesterdayLabel)}</small></span></span><strong>${item.weeklyScore}%</strong></button>`;
+    return `<button type="button" class="league-row" data-friend-profile="${item.id}" aria-label="Open ${esc(item.name)} profile"><b>${item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`}</b><div class="avatar">${esc(item.avatar)}</div><span><strong class="league-name ${item.id === me().id ? 'mine' : ''}">${esc(item.name)}${item.id === me().id ? ' · you' : ''}</strong><small>${item.weeklyCompleted}/${item.weeklyPossible} · ${item.weeklyScore}% complete · 🔥 ${item.currentStreak}</small><span class="league-daily-status"><small>${esc(todayLabel)}</small><small class="league-yesterday ${missed.length ? 'missed' : ''}">${esc(yesterdayLabel)}</small></span></span><strong>${item.weeklyPoints} pts</strong></button>`;
   }).join('');
-  return `<div class="league-title-row">${pageHeading('Your League', 'THIS WEEK', 'Your receipts decide your table.')}<div class="league-header-actions"><button class="league-header-action info" type="button" data-challenge-info aria-label="How do challenges work?" title="How challenges work">${icon('eye')}</button><button class="league-header-action start" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('target')}</button></div></div><section class="league-summary"><span>Your rank</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyScore || 0}%</strong></div><small>${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${standings}</div>${activeChallengeCard()}${stakeCard}${challengeHistory()}${stake ? stakeHistory() : ''}`;
+  return `<div class="league-title-row">${pageHeading('Your League', weekRange.toUpperCase(), 'Monday through Sunday · resets every Monday.')}<div class="league-header-actions"><button class="league-header-action info" type="button" data-challenge-info aria-label="How do League points work?" title="League points">${icon('eye')}</button><button class="league-header-action start" type="button" data-challenge aria-label="Start a weekly challenge" title="Start challenge">${icon('target')}</button></div></div><section class="league-summary"><span>Your rank · ${esc(weekRange)}</span><div><b>#${mine?.rank || '—'}</b><strong>${mine?.weeklyPoints || 0} pts</strong></div><small>${mine?.weeklyScore || 0}% complete · ${mine?.weeklyCompleted || 0}/${mine?.weeklyPossible || 0} commitments${leader?.id === mine?.id ? ' · You are on top. Act normal.' : ` · ${gap} pts behind ${esc(leader?.name || 'leader')}.`}</small></section><div class="section-head first"><h2>Standings</h2><span>${ranked.length}</span></div><div class="league-list">${standings}</div>${activeChallengeCard()}${stakeCard}${challengeHistory()}${stake ? stakeHistory() : ''}`;
 }
 
 function challengeInfoSheet() {
   if (!challengeInfoOpen) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet challenge-info-sheet" role="dialog" aria-modal="true" aria-label="League actions" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">LEAGUE ACTIONS</p><h2>Move together.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><section class="league-action-section"><div class="challenge-explainer"><span>${icon('target')}</span><p><strong>Weekly challenge</strong><br>Pick one squad target. Real check-ins move the same progress bar.</p></div><button class="btn primary full" type="button" data-challenge>Start a challenge</button></section><section class="league-action-section"><p class="eyebrow">PASS THE MOMENTUM</p>${batonCard()}</section></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet challenge-info-sheet" role="dialog" aria-modal="true" aria-label="League points and actions" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">LEAGUE POINTS</p><h2>More work counts. Spam doesn’t.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><section class="league-action-section league-points-rules"><p><strong>Completed commitments</strong><br>First 3 each day earn 10 points. The 4th earns 5, the 5th earns 2. Anything beyond that does not pad the table.</p><p><strong>Clean-day bonus</strong><br>Finish everything due that day for 5 extra points.</p><p><strong>Anti-spam lock</strong><br>New habits unlock volume points after 2 separate days. They still count toward your completion rate immediately.</p><small>The League runs Monday through Sunday and resets every Monday.</small></section><section class="league-action-section"><div class="challenge-explainer"><span>${icon('target')}</span><p><strong>Weekly challenge</strong><br>Pick one shared target. Real check-ins move the same progress bar.</p></div><button class="btn primary full" type="button" data-challenge>Start a challenge</button></section><section class="league-action-section"><p class="eyebrow">PASS THE MOMENTUM</p>${batonCard()}</section></section></div>`;
 }
 
 function stakeHistory() {
@@ -811,15 +829,15 @@ function settingsSheet() {
   const habitChoices = myHabits(state).map((habit) => `<label class="notification-option compact"><span class="notification-option-icon" aria-hidden="true">${esc(habit.emoji)}</span><span><strong>${esc(habit.title)}</strong><small>Personal reminder</small></span><span class="switch-control notification-option-toggle"><input type="checkbox" name="habitEnabled" value="${habit.id}" ${preferences.habitOverrides[habit.id] !== false ? 'checked' : ''}><span aria-hidden="true"></span></span></label>`).join('');
   const squadList = (state.circles || []).map((circle) => `<button type="button" class="settings-squad ${circle.id === state.circleId ? 'active' : ''}" data-select-squad="${circle.id}"><span><strong>${esc(circle.name)}</strong><small>${circle.role}${circle.id === state.circleId ? ' · active' : ''}</small></span><span>›</span></button>`).join('');
   const views = {
-    menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="friends"><span class="settings-menu-icon">♧</span><span><strong>Friends</strong><small>Invite people and manage connections</small></span><b>›</b></button><button type="button" data-settings-view="appearance"><span class="settings-menu-icon">◐</span><span><strong>Appearance</strong><small>System, light, or dark</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
+    menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="appearance"><span class="settings-menu-icon">◐</span><span><strong>Appearance</strong><small>System, light, or dark</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
     appearance: `<section class="appearance-settings"><p class="sheet-copy">Pick what feels right. System follows your phone automatically.</p><div class="theme-choice" role="radiogroup" aria-label="App theme"><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'system'}" class="${currentThemeChoice() === 'system' ? 'active' : ''}" data-theme-choice="system"><span>◐</span><strong>System</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'light'}" class="${currentThemeChoice() === 'light' ? 'active' : ''}" data-theme-choice="light"><span>☀</span><strong>Light</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'dark'}" class="${currentThemeChoice() === 'dark' ? 'active' : ''}" data-theme-choice="dark"><span>☾</span><strong>Dark</strong></button></div></section>`,
     profile: `<form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button>`,
-    friends: `<section class="friends-settings"><p class="sheet-copy">Your Friends space is one shared feed. Invite someone, then choose who can see each habit.</p><button class="btn primary full" type="button" data-invite-open>Invite friends</button><details><summary>Join with an invite code</summary><form id="join-friend-form" class="form sheet-form"><label>Invite code or link<input name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="none" placeholder="Paste friend code or link" required></label><button class="btn full" type="submit">Join friend</button></form></details></section>`,
+
     squads: `<section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep groups separate. Switching does not lose your place.</p></div><span>${(state.circles || []).length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section>`,
     notifications: `<section class="notification-settings"><div class="notification-hero"><span class="notification-hero-icon" aria-hidden="true">🔔</span><div><strong>Stay in the loop, not glued to it.</strong><small>${capability.supported ? `Push is ${capability.permission}. You control what earns a buzz.` : 'Push is not supported here. Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test' : 'Enable'}</button></div><form id="notification-preferences-form" class="form notification-form"><section class="notification-panel"><div class="notification-panel-head"><div><strong>Quiet hours</strong><small>Donezo shuts up while you sleep.</small></div><label class="switch-control"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}><span aria-hidden="true"></span></label></div><div class="quiet-hours-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label class="timezone-field">Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required><small>Uses your habit timezone so reminders land correctly.</small></label></section><section class="notification-panel"><div class="notification-panel-head"><div><strong>What can buzz you</strong><small>Keep only the stuff you would actually open.</small></div></div><div class="notification-options">${categoryChoices}</div></section>${habitChoices ? `<section class="notification-panel"><div class="notification-panel-head"><div><strong>Habit reminders</strong><small>Mute individual habits without muting Donezo.</small></div></div><div class="notification-options">${habitChoices}</div></section>` : ''}<button class="btn primary full" ${busy ? 'disabled' : ''}>Save notifications</button></form></section>`,
     social: `<form id="social-preferences-form" class="form settings-social-form"><label class="preference-check"><input type="checkbox" name="recapAwardsEnabled" ${me().awardOptOut ? '' : 'checked'}><span><strong>Named recap awards</strong><small>Let your friends include your name in weekly and monthly awards.</small></span></label><label class="preference-check"><input type="checkbox" name="batonEnabled" ${state.batonOptedOut ? '' : 'checked'}><span><strong>Friend Baton</strong><small>Friends can pass you the next turn. No penalty if it expires.</small></span></label><button class="btn full" ${busy ? 'disabled' : ''}>Save social settings</button></form>`,
   };
-  const title = ({ menu: 'Settings', profile: 'Profile & app', friends: 'Friends', appearance: 'Appearance', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
+  const title = ({ menu: 'Settings', profile: 'Profile & app', appearance: 'Appearance', squads: 'Squads', notifications: 'Notifications', social: 'Social & privacy' })[settingsView] || 'Settings';
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div>${settingsView === 'menu' ? '<p class="eyebrow">SETTINGS</p>' : '<button class="settings-back" type="button" data-settings-back>‹ Settings</button>'}<h2>${title}</h2></div><button class="icon-btn" type="button" data-close-settings aria-label="Close">×</button></div>${views[settingsView] || views.menu}</section></div>`;
 }
 
@@ -840,6 +858,11 @@ function nudgeInboxSheet() {
 function inviteSheet() {
   if (!inviteSheetOpen) return '';
   return `<div class="sheet-backdrop" data-close-invite-backdrop><section class="sheet compact-sheet invite-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Invite a friend</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share a fresh private link every time. They choose whether to connect.</p><div class="invite-sheet-actions"><button class="btn primary full" type="button" data-share-invite>Share invite</button></div></section></div>`;
+}
+
+function addFriendSheet() {
+  if (!addFriendSheetOpen) return '';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet add-friend-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Add a friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD A FRIEND</p><h2>Paste their link.</h2></div><button class="icon-btn" type="button" data-close-add-friend aria-label="Close">×</button></div><p class="sheet-copy">A full Donezo invite link or the raw invite code both work.</p>${inviteMessage ? `<div class="form-message" role="alert">${esc(inviteMessage)}</div>` : ''}<form id="join-friend-form" class="form sheet-form"><label>Invite link or code<input name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="none" placeholder="Paste invite link or code" required autofocus></label><button class="btn primary full" type="submit">Add friend</button></form></section></div>`;
 }
 
 function peopleSheet() {
@@ -872,7 +895,7 @@ function commentSheet() {
   const state = getState();
   const activity = activityList(state).find((item) => item.checkInId === commentCheckInId);
   const comments = (state.comments || []).filter((item) => item.checkInId === commentCheckInId);
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><div><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><p>${esc(comment.body)}</p><small>${esc(formatWhen(comment.createdAt))}</small></div>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><button class="comment-profile" type="button" data-friend-profile="${comment.authorId}" aria-label="Open ${esc(member(comment.authorId)?.name || 'friend')} profile"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><span><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><small>${esc(formatWhen(comment.createdAt))}</small></span></button><p>${esc(comment.body)}</p>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
 }
 
 function batonSheet() {
@@ -941,7 +964,9 @@ function friendProfileSheet() {
       : `<div class="friend-connection-profile"><div class="avatar">${esc(connection.avatar || '?')}</div><span><strong>${esc(connection.name)}</strong><small>${esc(detail)}</small></span></div>`;
     return `<article class="friend-connection-row">${identity}${action}</article>`;
   }).join('');
-  const connections = person.id === me().id ? '' : `<section class="profile-connections"><strong>Their friends</strong>${friendConnectionsLoading ? '<p class="profile-connection-state">Loading friends…</p>' : connectionRows || '<p class="profile-connection-state">No other friends to show yet.</p>'}</section>`;
+  // The discovery RPC omits the viewer, who is already a direct friend.
+  const connectionCount = (friendConnections || []).length + 1;
+  const connections = person.id === me().id ? '' : `<details class="profile-connections"><summary><span><strong>${friendConnectionsLoading ? 'Friends' : `${connectionCount} ${connectionCount === 1 ? 'friend' : 'friends'}`}</strong><small>${friendConnectionsLoading ? 'Loading…' : 'Tap to view mutuals and add people'}</small></span><b aria-hidden="true">›</b></summary><div class="profile-connections-list">${friendConnectionsLoading ? '<p class="profile-connection-state">Loading friends…</p>' : connectionRows || '<p class="profile-connection-state">No other friends to show yet.</p>'}</div></details>`;
   const socialActions = person.id === me().id ? '' : `<div class="friend-profile-actions"><button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>${typeof repo?.removeFriend === 'function' ? `<button class="text-btn danger" type="button" data-remove-friend="${person.id}" data-remove-friend-name="${esc(person.name)}">Remove friend</button>` : ''}</div>`;
   return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Close profile">×</button></div>${connections}<div class="profile-daily"><article><strong>Today · ${daily.today.completed}/${daily.today.total}</strong><p>${esc(todayReceipts)}</p></article><article class="${daily.yesterday.missed.length ? 'missed' : ''}"><strong>Yesterday · ${daily.yesterday.completed}/${daily.yesterday.total}</strong><p>${esc(yesterdayReceipts)}</p></article></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><section class="profile-proofs"><strong>Proof history</strong>${personProofCarousel(person.id, recent)}</section><section class="profile-recent"><strong>All activity</strong><div class="profile-activity-list">${recent.length ? recent.map((item) => activityCard(item, { showProofActions: Boolean(item.proofPath) })).join('') : '<p>No updates yet.</p>'}</div></section>${socialActions}</section></div>`;
 }
@@ -990,7 +1015,7 @@ function proofViewerSheet() {
     : proofViewer.status === 'error'
       ? `<div class="proof-viewer-error" role="alert"><strong>Couldn’t load that proof.</strong><p>${esc(proofViewer.error || 'The signed link may have expired.')}</p><button class="btn primary" type="button" data-proof-viewer-retry>Try again</button></div>`
       : `<div class="proof-viewer-image-wrap"><img data-proof-viewer-image src="${esc(proofViewer.url)}" alt="Proof for ${esc(proofViewer.habitTitle)}"></div>`;
-  return `<div class="sheet-backdrop"><section class="sheet proof-viewer-sheet" role="dialog" aria-modal="true" aria-label="View proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">PROOF</p><h2>${esc(proofViewer.habitTitle)}</h2></div><button class="icon-btn" type="button" data-proof-viewer-close aria-label="Close proof">×</button></div><div class="proof-viewer-context"><strong>${esc(actor?.name || 'Friend')}</strong><span>${esc(proofViewer.whenLabel || '')}</span></div>${body}</section></div>`;
+  return `<div class="sheet-backdrop"><section class="sheet proof-viewer-sheet" role="dialog" aria-modal="true" aria-label="View proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">PROOF</p><h2>${esc(proofViewer.habitTitle)}</h2></div><button class="icon-btn" type="button" data-proof-viewer-close aria-label="Close proof">×</button></div><button class="proof-viewer-context" type="button" data-friend-profile="${proofViewer.userId}" aria-label="Open ${esc(actor?.name || 'friend')} profile"><strong>${esc(actor?.name || 'Friend')}</strong><span>${esc(proofViewer.whenLabel || '')}</span></button>${body}</section></div>`;
 }
 
 function clearProofReview() {
@@ -1179,6 +1204,10 @@ function bindProofActions() {
 async function openFriendProfile(userId) {
   if (!userId) return;
   friendProfileReturnTab = tab;
+  proofViewerRequestId += 1;
+  proofViewer = null;
+  commentCheckInId = null;
+  nudgeInboxOpen = false;
   friendProfileUserId = userId;
   friendConnections = null;
   friendConnectionsLoading = userId !== getState()?.currentUserId && typeof repo?.loadFriendConnections === 'function';
@@ -1249,7 +1278,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;
@@ -1282,6 +1311,7 @@ function render() {
   app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; localStorage.setItem('donezo.squadFeed', squadFeed); feedLimit = 12; render(); }; });
   app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; inviteSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-add-friend-open]').forEach((element) => { element.onclick = () => { inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-friend-profile]').forEach((element) => { element.onclick = () => openFriendProfile(element.dataset.friendProfile); });
   app.querySelectorAll('[data-add-friend]').forEach((element) => { element.onclick = async () => {
     const added = await runMutation(() => repo.inviteFriend(element.dataset.addFriend), 'Friend request sent.');
@@ -1357,7 +1387,7 @@ function render() {
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { setActiveTab('today'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-close-habit], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
+  app.querySelectorAll('[data-close-habit], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-add-friend], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
   app.querySelectorAll('[data-close-settings]').forEach((element) => { element.onclick = () => {
     if (settingsView !== 'menu') settingsView = 'menu';
     else settingsSheetOpen = false;
@@ -1457,6 +1487,7 @@ function closeSheets() {
   settingsView = 'menu';
   nudgeInboxOpen = false;
   inviteSheetOpen = false;
+  addFriendSheetOpen = false;
   peopleSheetOpen = false;
   commentCheckInId = null;
   batonSheetOpen = false;
@@ -1661,8 +1692,10 @@ async function handleJoinCircle(event) {
   if (submit) { submit.disabled = true; submit.textContent = 'Joining…'; }
   try {
     await redeemInvite(repo, validation.code);
-    localStorage.setItem('donezo.activeSquadId', getState().circleId);
+    if (getState().circleId) localStorage.setItem('donezo.activeSquadId', getState().circleId);
+    else localStorage.removeItem('donezo.activeSquadId');
     settingsSheetOpen = false;
+    addFriendSheetOpen = false;
     pendingInvite = { present: false, valid: false, code: null, raw: null };
     history.replaceState({}, '', clearInviteParam(window.location.href));
     notify('You’re in. Time to lock in.');

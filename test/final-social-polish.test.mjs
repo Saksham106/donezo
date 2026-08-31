@@ -18,7 +18,7 @@ test('Squad is stripped back and Baton lives in League actions', () => {
   const squad = app.slice(app.indexOf('function squadScreen()'), app.indexOf('function challengeProgress'));
   const leagueActions = app.slice(app.indexOf('function challengeInfoSheet()'), app.indexOf('function stakeHistory()'));
   assert.doesNotMatch(squad, /See what happened|Hype your people|\$\{batonCard\(\)\}/);
-  assert.match(leagueActions, /LEAGUE ACTIONS/);
+  assert.match(leagueActions, /LEAGUE POINTS/);
   assert.match(leagueActions, /\$\{batonCard\(\)\}/);
   assert.match(app, /challengeInfoOpen\s*=\s*false;\s*batonSheetOpen\s*=\s*true/);
 });
@@ -53,5 +53,5 @@ test('new proof rejection requires a confirmation sheet', () => {
 });
 
 test('service worker cache advances for this shell release', () => {
-  assert.match(sw, /donezo-shell-v21/);
+  assert.match(sw, /donezo-shell-v22/);
 });
