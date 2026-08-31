@@ -1,0 +1,42 @@
+name: Apply fluid performance review fixes
+
+on:
+  push:
+    branches:
+      - feat/fluid-performance-invite-ux-2026-08-31
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Apply, test, and commit review fixes
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_only
+        run: |
+          if [ "$(git log -1 --pretty=%s)" = "fix: harden cached startup and invite sharing" ]; then
+            echo "Review-fix implementation commit already generated."
+            exit 0
+          fi
+          npm ci
+          node scripts/run-fluid-review-fixes.mjs
+          npm test
+          npm run check
+          npm run build
+          git config user.name "Saksham Goel"
+          git config user.email "67731724+Saksham106@users.noreply.github.com"
+          git add src/app.js
+          if git diff --cached --quiet; then
+            echo "No product changes generated"
+            exit 0
+          fi
+          git commit -m "fix: harden cached startup and invite sharing"
+          git push
