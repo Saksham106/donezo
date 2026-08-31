@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
 const storePath = 'src/store.js';
+const appPath = 'src/app.js';
 const runnerPath = 'scripts/apply-fluid-performance.mjs';
 const original = await readFile(storePath, 'utf8');
 const completeStart = original.indexOf('  async function completeWithProof(habitId, date, file) {');
@@ -15,6 +16,16 @@ runner = runner.replace(
 );
 await writeFile(runnerPath, runner);
 await import('./apply-fluid-performance.mjs');
+
+// Preserve the pre-existing draft-safety contract exactly: refresh data may
+// be cached after the mounted draft is protected, never between the state
+// timestamp and the draft-preserving render decision.
+let app = await readFile(appPath, 'utf8');
+app = app.replace(
+  `  lastRefreshAt = new Date().toISOString();\n  scheduleStateCacheWrite(activeRepo);\n  if (!hasUnsavedDraft()) renderPreservingScroll();`,
+  `  lastRefreshAt = new Date().toISOString();\n  if (!hasUnsavedDraft()) renderPreservingScroll();\n  scheduleStateCacheWrite(activeRepo);`,
+);
+await writeFile(appPath, app);
 
 // The patch runner advances old v24-positive assertions to v25. The new
 // performance test intentionally contains a negative v24 assertion too,
