@@ -143,6 +143,7 @@ export function mapDatabaseState(user, rows) {
       effectiveUntil: version.effective_until,
       frequency: version.schedule_frequency,
       weekdays: version.schedule_weekdays || [],
+      weeklyTargetDays: Number(version.weekly_target_days ?? 1),
       targetQuantity: Number(version.target_quantity ?? 1),
       targetUnit: version.target_unit || 'count',
       dueTime: version.due_time?.slice(0, 5) || null,
@@ -165,6 +166,7 @@ export function mapDatabaseState(user, rows) {
       frequency: habit.frequency,
       scheduleFrequency: habit.schedule_frequency || habit.frequency || 'daily',
       scheduleWeekdays: habit.schedule_weekdays || [],
+      weeklyTargetDays: Number(habit.weekly_target_days ?? 1),
       targetQuantity: Number(habit.target_quantity ?? 1),
       targetUnit: habit.target_unit || 'count',
       targetTime: (habit.due_time || habit.target_time)?.slice(0, 5) || '',
@@ -890,6 +892,7 @@ export function createSupabaseRepository(client, user) {
     const schedule = normalizeSchedule({
       frequency: input.scheduleFrequency || input.frequency || 'daily',
       weekdays: input.scheduleWeekdays || [],
+      weeklyTargetDays: input.weeklyTargetDays ?? 1,
       targetQuantity: input.targetQuantity ?? 1,
       targetUnit: input.targetUnit || 'count',
       dueTime: input.targetTime || null,
@@ -906,6 +909,7 @@ export function createSupabaseRepository(client, user) {
       p_due_time: schedule.dueTime,
       p_grace_minutes: schedule.graceMinutes,
       p_timezone: schedule.timezone,
+      p_weekly_target_days: schedule.weeklyTargetDays,
     });
     if (error) throw appError(error, 'Could not save the habit schedule');
   }
