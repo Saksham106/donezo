@@ -619,6 +619,217 @@ export function createSupabaseRepository(client, user) {
     return clone(state);
   }
 
+  function peekState() {
+    return state;
+  }
+
+  function hydrateState(cachedState) {
+    if (!cachedState || cachedState.currentUserId !== user.id) throw new Error('Cached state belongs to a different user');
+    state = clone(cachedState);
+    return state;
+  }
+
+  function syncMemberMetrics(memberId) {
+    if (!memberId) return;
+    const profile = [...(state.personalizedLeague || []), ...(state.members || [])].find((item) => item.id === memberId);
+    const timeZone = profile?.timeZone || 'UTC';
+    const validCheckIns = (state.checkIns || []).filter((checkIn) => checkIn.userId === memberId && !checkIn.invalid);
+    const dates = [...new Set(validCheckIns.map((checkIn) => checkIn.date))];
+    const habitById = new Map((state.habits || []).map((habit) => [habit.id, habit]));
+    const xp = validCheckIns.reduce((total, checkIn) => total + (habitById.get(checkIn.habitId)?.xp || 0), 0);
+    const today = dateInTimezone(timeZone);
+    const update = (item) => {
+      if (item?.id !== memberId) return;
+      item.xp = xp;
+      item.currentStreak = calculateStreak(dates, today);
+      item.bestStreak = calculateBestStreak(dates);
+    };
+    (state.members || []).forEach(update);
+    (state.personalizedLeague || []).forEach(update);
+    (state.friends || []).forEach(update);
+  }
+
+  function syncReactionActivity(checkInId) {
+    const positive = (state.reactions || []).filter((reaction) => reaction.checkInId === checkInId && reaction.emoji !== '👎');
+    const reactionCounts = positive.reduce((counts, reaction) => {
+      counts[reaction.emoji] = (counts[reaction.emoji] || 0) + 1;
+      return counts;
+    }, {});
+    const userReactions = positive.filter((reaction) => reaction.userId === user.id).map((reaction) => reaction.emoji);
+    state.friendActivities = (state.friendActivities || []).map((activity) => activity.checkInId === checkInId
+      ? { ...activity, reactionCounts, userReactions }
+      : activity);
+    state.activities = state.friendActivities;
+  }
+
+  function syncProofVerdict(checkInId) {
+    const checkIn = (state.checkIns || []).find((item) => item.id === checkInId);
+    if (!checkIn) return;
+    const downvoteUsers = new Set((state.reactions || [])
+      .filter((reaction) => reaction.checkInId === checkInId && reaction.emoji === '👎' && reaction.userId !== checkIn.userId)
+      .map((reaction) => reaction.userId));
+    const audienceSize = Math.max(1, checkIn.authorizedViewerIds?.length || state.members?.length || 1);
+    const invalid = rejectedCheckInIds([checkIn], state.reactions || [], state.members?.length || audienceSize, new Map([[checkInId, audienceSize]])).has(checkInId);
+    checkIn.downvotes = downvoteUsers.size;
+    checkIn.userDownvoted = downvoteUsers.has(user.id);
+    checkIn.invalid = invalid;
+    syncMemberMetrics(checkIn.userId);
+    state.friendActivities = (state.friendActivities || []).map((activity) => activity.checkInId === checkInId
+      ? {
+          ...activity,
+          invalid,
+          downvotes: checkIn.downvotes,
+          userDownvoted: checkIn.userDownvoted,
+          message: invalid ? 'Proof got cooked 💀 — run it back.' : (checkIn.note || 'Done. Proof beats promises.'),
+        }
+      : activity);
+    state.activities = state.friendActivities;
+  }
+
+  function normalizeLocalCheckIn(row, habitId, date) {
+    return {
+      id: row.id,
+      habitId: row.habitId || row.habit_id || habitId,
+      userId: row.userId || row.user_id || user.id,
+      date: row.date || row.check_date || date,
+      completedAt: row.completedAt || row.completed_at || new Date().toISOString(),
+      completedQuantity: Number(row.completedQuantity ?? row.completed_quantity ?? 1),
+      proofPath: row.proofPath ?? row.proof_path ?? null,
+      note: row.note ?? null,
+      authorizedViewerIds: row.authorizedViewerIds || row.authorized_viewer_ids || null,
+      invalid: Boolean(row.invalid),
+      downvotes: Number(row.downvotes || 0),
+      userDownvoted: Boolean(row.userDownvoted),
+    };
+  }
+
+  function syncCompletedActivity(checkIn, previousId = null) {
+    let activities = (state.friendActivities || []).filter((activity) => !(activity.type === 'completed' && (activity.checkInId === previousId || activity.checkInId === checkIn?.id)));
+    if (checkIn) {
+      const habit = (state.habits || []).find((item) => item.id === checkIn.habitId);
+      const actor = (state.personalizedLeague || []).find((item) => item.id === checkIn.userId) || (state.members || []).find((item) => item.id === checkIn.userId);
+      activities.push({
+        id: checkIn.id,
+        checkInId: checkIn.id,
+        userId: checkIn.userId,
+        type: 'completed',
+        habitTitle: habit?.title || 'Habit',
+        emoji: habit?.emoji || '⚡',
+        when: checkIn.completedAt,
+        streak: actor?.currentStreak || 0,
+        message: checkIn.invalid ? 'Proof got cooked 💀 — run it back.' : (checkIn.note || 'Done. Proof beats promises.'),
+        proofPath: checkIn.proofPath,
+        invalid: Boolean(checkIn.invalid),
+        downvotes: Number(checkIn.downvotes || 0),
+        userDownvoted: Boolean(checkIn.userDownvoted),
+        reactionCounts: {},
+        userReactions: [],
+      });
+    }
+    state.friendActivities = activities.sort((a, b) => new Date(b.when) - new Date(a.when)).slice(0, 40);
+    state.activities = state.friendActivities;
+  }
+
+  function applyPositiveReaction(checkInId, emoji) {
+    if (emoji != null && !['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
+    if (!(state.checkIns || []).some((item) => item.id === checkInId)) throw new Error('That update is no longer available');
+    const existing = (state.reactions || []).filter((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji !== '👎');
+    const previous = existing[0]?.emoji || null;
+    state.reactions = (state.reactions || []).filter((reaction) => !(reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji !== '👎'));
+    if (emoji) state.reactions.push({ id: uid('optimistic-reaction'), checkInId, userId: user.id, emoji, createdAt: new Date().toISOString() });
+    syncReactionActivity(checkInId);
+    return previous;
+  }
+
+  function applyProofDownvote(checkInId, downvoted) {
+    const checkIn = (state.checkIns || []).find((item) => item.id === checkInId);
+    if (!checkIn?.proofPath) throw new Error('Nothing to vote on');
+    if (checkIn.userId === user.id) throw new Error('You cannot cook your own proof 😭');
+    const previous = Boolean(checkIn.userDownvoted);
+    state.reactions = (state.reactions || []).filter((reaction) => !(reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji === '👎'));
+    if (downvoted) state.reactions.push({ id: uid('optimistic-downvote'), checkInId, userId: user.id, emoji: '👎', createdAt: new Date().toISOString() });
+    syncProofVerdict(checkInId);
+    return previous;
+  }
+
+  function applySimpleCheckIn(habitId, date, checked, suppliedCheckIn = null) {
+    const habit = ownedHabit(habitId);
+    if (habit.proofMode === 'photo') throw new Error('Photo habits use the proof flow');
+    const index = (state.checkIns || []).findIndex((item) => item.habitId === habitId && item.userId === user.id && item.date === date);
+    const previous = index >= 0 ? clone(state.checkIns[index]) : null;
+    if (!checked) {
+      if (index >= 0) state.checkIns.splice(index, 1);
+      syncMemberMetrics(user.id);
+      syncCompletedActivity(null, previous?.id);
+      return { previous, current: null };
+    }
+    const friendIds = (state.friends || []).map((friend) => friend.id);
+    const viewers = habit.audience === AUDIENCES.ONLY_ME
+      ? [user.id]
+      : habit.audience === AUDIENCES.SELECTED_FRIENDS
+        ? [user.id, ...(habit.selectedFriendIds || [])]
+        : [user.id, ...friendIds];
+    const raw = suppliedCheckIn || previous || {
+      id: uid('optimistic-checkin'),
+      habitId,
+      userId: user.id,
+      date,
+      completedAt: new Date().toISOString(),
+      completedQuantity: fullTargetFor(habit, date),
+      proofPath: null,
+      note: null,
+      authorizedViewerIds: [...new Set(viewers)],
+    };
+    const current = normalizeLocalCheckIn(raw, habitId, date);
+    if (index >= 0) state.checkIns[index] = current;
+    else state.checkIns.push(current);
+    syncMemberMetrics(user.id);
+    syncCompletedActivity(current, previous?.id);
+    return { previous, current: clone(current) };
+  }
+
+  function applyOptimisticComment(checkInId, body, suppliedComment = null) {
+    const cleanBody = validateCommentBody(body);
+    if (!(state.checkIns || []).some((item) => item.id === checkInId)) throw new Error('That check-in is no longer available');
+    const comment = suppliedComment
+      ? { ...suppliedComment, checkInId, authorId: suppliedComment.authorId || user.id, body: cleanBody }
+      : { id: uid('optimistic-comment'), checkInId, circleId: state.circleId || null, authorId: user.id, body: cleanBody, createdAt: new Date().toISOString() };
+    const existingIndex = (state.comments || []).findIndex((item) => item.id === comment.id);
+    if (existingIndex >= 0) state.comments[existingIndex] = comment;
+    else { state.comments ||= []; state.comments.push(comment); }
+    return clone(comment);
+  }
+
+  function replaceOptimisticComment(tempId, serverComment) {
+    const index = (state.comments || []).findIndex((item) => item.id === tempId);
+    if (index < 0) return null;
+    const current = state.comments[index];
+    const normalized = {
+      id: serverComment?.id || tempId,
+      checkInId: serverComment?.checkInId || serverComment?.check_in_id || current.checkInId,
+      circleId: serverComment?.circleId ?? serverComment?.circle_id ?? current.circleId ?? null,
+      authorId: serverComment?.authorId || serverComment?.author_id || user.id,
+      body: serverComment?.body || current.body,
+      createdAt: serverComment?.createdAt || serverComment?.created_at || current.createdAt,
+    };
+    state.comments[index] = normalized;
+    return clone(normalized);
+  }
+
+  function removeOptimisticComment(commentId) {
+    const index = (state.comments || []).findIndex((item) => item.id === commentId);
+    if (index < 0) return null;
+    return clone(state.comments.splice(index, 1)[0]);
+  }
+
+  function applyNudgeRead(nudgeId, readAt = new Date().toISOString()) {
+    const nudge = (state.nudges || []).find((item) => item.id === nudgeId && item.toUserId === user.id);
+    if (!nudge) return null;
+    const previous = nudge.readAt || null;
+    nudge.readAt = readAt;
+    return previous;
+  }
+
   async function createCircle(name) {
     const cleanName = name.trim();
     if (!cleanName || cleanName.length > 60) throw new Error('Squad name must be 1–60 characters');
@@ -874,6 +1085,28 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
+  async function toggleSimpleCheckIn(habitId, date, shouldBeChecked, existingId = null) {
+    const habit = ownedHabit(habitId);
+    if (habit.proofMode === 'photo') throw new Error('Photo habits use the proof flow');
+    if (shouldBeChecked) {
+      const { data, error } = await client.from('check_ins').insert({
+        habit_id: habitId,
+        user_id: user.id,
+        check_date: date,
+        completed_quantity: fullTargetFor(habit, date),
+      }).select('*').single();
+      if (error) throw appError(error, 'Could not complete habit');
+      return data;
+    }
+    let query = client.from('check_ins').delete().eq('user_id', user.id);
+    query = existingId && !String(existingId).startsWith('optimistic-')
+      ? query.eq('id', existingId)
+      : query.eq('habit_id', habitId).eq('check_date', date);
+    const { error } = await query;
+    if (error) throw appError(error, 'Could not undo check-in');
+    return true;
+  }
+
   async function completeWithProof(habitId, date, file) {
     const habit = ownedHabit(habitId);
     const existing = state.checkIns.find((checkIn) => checkIn.habitId === habitId && checkIn.userId === user.id && checkIn.date === date);
@@ -911,34 +1144,45 @@ export function createSupabaseRepository(client, user) {
     return load();
   }
 
-  async function toggleDownvote(checkInId) {
+  async function setProofDownvote(checkInId, downvoted) {
     const checkIn = state.checkIns.find((item) => item.id === checkInId);
     if (!checkIn?.proofPath) throw new Error('Nothing to vote on');
     if (checkIn.userId === user.id) throw new Error('You cannot cook your own proof 😭');
-    const existing = state.reactions.find((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji === '👎');
-    if (existing) {
-      const { error } = await client.from('reactions').delete().eq('id', existing.id).eq('user_id', user.id);
-      if (error) throw appError(error, 'Could not remove vote');
-    } else {
-      const { error } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji: '👎' });
-      if (error) throw appError(error, 'Could not downvote proof');
+    const { error: deleteError } = await client.from('reactions')
+      .delete()
+      .eq('check_in_id', checkInId)
+      .eq('user_id', user.id)
+      .eq('emoji', '👎');
+    if (deleteError) throw appError(deleteError, 'Could not update vote');
+    if (downvoted) {
+      const { error: insertError } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji: '👎' });
+      if (insertError) throw appError(insertError, 'Could not downvote proof');
     }
-    return load();
+    return { checkInId, downvoted: Boolean(downvoted) };
+  }
+
+  async function toggleDownvote(checkInId) {
+    const checkIn = state.checkIns.find((item) => item.id === checkInId);
+    return setProofDownvote(checkInId, !checkIn?.userDownvoted);
+  }
+
+  async function setPositiveReaction(checkInId, emoji) {
+    if (emoji != null && !['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
+    if (!state.checkIns.some((item) => item.id === checkInId)) throw new Error('That update is no longer available');
+    const { error: deleteError } = await client.from('reactions').delete().eq('check_in_id', checkInId).eq('user_id', user.id).neq('emoji', '👎');
+    if (deleteError) throw appError(deleteError, 'Could not update reaction');
+    if (emoji) {
+      const { data, error: insertError } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji }).select('*').single();
+      if (insertError) throw appError(insertError, 'Could not react');
+      return data;
+    }
+    return { check_in_id: checkInId, user_id: user.id, emoji: null };
   }
 
   async function toggleReaction(checkInId, emoji) {
     if (!['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
-    const checkIn = state.checkIns.find((item) => item.id === checkInId);
-    if (!checkIn) throw new Error('That update is no longer available');
-    const positiveReactions = state.reactions.filter((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji !== '👎');
-    const selected = positiveReactions.length === 1 && positiveReactions[0].emoji === emoji;
-    const { error: deleteError } = await client.from('reactions').delete().eq('check_in_id', checkInId).eq('user_id', user.id).neq('emoji', '👎');
-    if (deleteError) throw appError(deleteError, 'Could not update reaction');
-    if (!selected) {
-      const { error: insertError } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji });
-      if (insertError) throw appError(insertError, 'Could not react');
-    }
-    return load();
+    const existing = state.reactions.find((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji !== '👎');
+    return setPositiveReaction(checkInId, existing?.emoji === emoji ? null : emoji);
   }
 
   async function recoverHabit(habitId, missedDate, input = {}) {
@@ -1052,9 +1296,10 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function markNudgeRead(nudgeId) {
-    const { error } = await client.from('nudges').update({ read_at: new Date().toISOString() }).eq('id', nudgeId).eq('to_user_id', user.id);
+    const readAt = new Date().toISOString();
+    const { error } = await client.from('nudges').update({ read_at: readAt }).eq('id', nudgeId).eq('to_user_id', user.id);
     if (error) throw appError(error, 'Could not mark nudge read');
-    return load();
+    return { id: nudgeId, readAt };
   }
 
   async function startBaton(recipientUserId, sourceCheckInId) {
@@ -1090,10 +1335,17 @@ export function createSupabaseRepository(client, user) {
 
   async function addComment(checkInId, body) {
     if (!state.checkIns.some((item) => item.id === checkInId)) throw new Error('That check-in is no longer available');
-    const { data, error } = await client.rpc('add_check_in_comment', { target_check_in_id: checkInId, comment_body: validateCommentBody(body) });
+    const cleanBody = validateCommentBody(body);
+    const { data, error } = await client.rpc('add_check_in_comment', { target_check_in_id: checkInId, comment_body: cleanBody });
     if (error) throw appError(error, 'Could not add comment');
-    await load(state.circleId);
-    return state.comments.find((comment) => comment.id === data?.id) || data;
+    return {
+      id: data?.id || data,
+      checkInId,
+      circleId: data?.circle_id ?? state.circleId ?? null,
+      authorId: data?.author_id || user.id,
+      body: data?.body || cleanBody,
+      createdAt: data?.created_at || new Date().toISOString(),
+    };
   }
 
   async function deleteComment(commentId) {
@@ -1101,7 +1353,7 @@ export function createSupabaseRepository(client, user) {
     if (!comment || comment.authorId !== user.id) throw new Error('You can only delete your own comment');
     const { error } = await client.rpc('delete_check_in_comment', { target_comment_id: commentId });
     if (error) throw appError(error, 'Could not delete comment');
-    return load(state.circleId);
+    return true;
   }
 
   function getEarnedBadges(options = {}) {
@@ -1227,8 +1479,7 @@ export function createSupabaseRepository(client, user) {
   }
 
   async function setHabitAudience(habitId, audience, selectedFriendIds = []) {
-    const friendState = await loadFriends();
-    const normalizedAudience = normalizeAudience(audience, selectedFriendIds, user.id, friendState.friendships);
+    const normalizedAudience = normalizeAudience(audience, selectedFriendIds, user.id, state.friendships || []);
     const { data, error } = await client.rpc('set_habit_audience', {
       target_habit_id: habitId,
       requested_audience: normalizedAudience,
@@ -1269,6 +1520,15 @@ export function createSupabaseRepository(client, user) {
 
   return {
     getState,
+    peekState,
+    hydrateState,
+    applyPositiveReaction,
+    applyProofDownvote,
+    applySimpleCheckIn,
+    applyOptimisticComment,
+    replaceOptimisticComment,
+    removeOptimisticComment,
+    applyNudgeRead,
     load,
     selectCircle,
     createCircle,
@@ -1283,8 +1543,11 @@ export function createSupabaseRepository(client, user) {
     restoreHabit,
     pauseHabit,
     toggleHabit,
+    toggleSimpleCheckIn,
     completeWithProof,
+    setProofDownvote,
     toggleDownvote,
+    setPositiveReaction,
     toggleReaction,
     recoverHabit,
     createChallenge,

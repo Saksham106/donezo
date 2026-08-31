@@ -2,6 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
 import { createRefreshCoordinator } from './refresh.js';
+import { createLatestIntentCoordinator } from './optimistic.js';
+import { clearStateCache, readStateCache, writeStateCache } from './state-cache.js';
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, redeemInvite, validateInviteCode } from './invite.js';
 import { MAX_PROOF_BYTES, compressProofFile, createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, transitionProofReview, validateProofFile } from './proof.js';
 import {
@@ -104,6 +106,14 @@ let pwaUpdateAvailable = Boolean(window.DonezoPWA?.updateAvailable);
 let pwaApplying = false;
 let mutationStatus = 'idle';
 let retryMutation = null;
+let networkBootLoading = false;
+let authoritativeReady = false;
+let reconciliationTimer = null;
+let commentRetryDraft = null;
+let prefetchedFriendInvite = null;
+let friendInvitePromise = null;
+let friendInvitePreparing = false;
+const optimisticPatches = new Map();
 const screenScroll = { today: 0, friends: 0, squad: 0, league: 0, me: 0 };
 
 function currentThemeChoice() {
@@ -128,7 +138,7 @@ const starterTemplates = [
   { title: 'No phone after 10', emoji: '📵', targetTime: '22:00' },
 ];
 
-const getState = () => repo?.getState();
+const getState = () => repo?.peekState?.() || repo?.getState();
 function friendList(state = getState()) {
   return Array.isArray(state?.friends) ? state.friends : (state?.members || []);
 }
@@ -198,6 +208,62 @@ document.addEventListener('visibilitychange', () => {
 
 function readableError(error) {
   return error?.message || 'Something went wrong';
+}
+
+const yieldToPaint = () => new Promise((resolve) => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
+  else queueMicrotask(resolve);
+});
+
+function reapplyOptimisticPatches() {
+  for (const apply of optimisticPatches.values()) {
+    try { apply(); } catch { /* Authoritative refresh may make a stale patch irrelevant. */ }
+  }
+}
+
+function scheduleReconciliation(delay = 650) {
+  clearTimeout(reconciliationTimer);
+  reconciliationTimer = setTimeout(() => { void refreshCoordinator?.request('optimistic'); }, delay);
+}
+
+function scheduleStateCacheWrite(activeRepo = repo) {
+  const userId = session?.user?.id;
+  if (!userId || !activeRepo) return;
+  const write = () => {
+    if (repo !== activeRepo || session?.user?.id !== userId) return;
+    void writeStateCache(userId, activeRepo.getState());
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(write, { timeout: 1500 });
+  else setTimeout(write, 0);
+}
+
+async function runOptimisticMutation({ key, apply, rollback, persist, errorMessage = 'Could not save that change', onSuccess = null }) {
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return undefined;
+  }
+  if (!online) {
+    notify('You are offline. Nothing was saved yet.', 3200);
+    return undefined;
+  }
+  if (optimisticPatches.has(key)) return undefined;
+  optimisticPatches.set(key, apply);
+  apply();
+  renderPreservingScroll();
+  await yieldToPaint();
+  try {
+    const result = await persist();
+    optimisticPatches.delete(key);
+    if (typeof onSuccess === 'function') onSuccess(result);
+    scheduleReconciliation();
+    return result;
+  } catch (error) {
+    optimisticPatches.delete(key);
+    rollback();
+    renderPreservingScroll();
+    notify(readableError(error) || errorMessage, 3600);
+    return undefined;
+  }
 }
 
 function formatWhen(value) {
@@ -908,7 +974,7 @@ function peopleSheet() {
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
   const requests = incoming.length ? `<section class="friend-requests"><div class="section-head first"><h2>Friend requests</h2><span>${incoming.length}</span></div>${requestRows}</section>` : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite friends</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people ${friendInvitePreparing ? 'disabled aria-busy="true"' : ''}>${icon('userPlus')} ${friendInvitePreparing ? 'Preparing…' : 'Invite friends'}</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
 }
 
 function proofRejectSheet() {
@@ -922,7 +988,7 @@ function commentSheet() {
   const state = getState();
   const activity = activityList(state).find((item) => item.checkInId === commentCheckInId);
   const comments = (state.comments || []).filter((item) => item.checkInId === commentCheckInId);
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><button class="comment-profile" type="button" data-friend-profile="${comment.authorId}" aria-label="Open ${esc(member(comment.authorId)?.name || 'friend')} profile"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><span><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><small>${esc(formatWhen(comment.createdAt))}</small></span></button><p>${esc(comment.body)}</p>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><button class="comment-profile" type="button" data-friend-profile="${comment.authorId}" aria-label="Open ${esc(member(comment.authorId)?.name || 'friend')} profile"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><span><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><small>${esc(formatWhen(comment.createdAt))}</small></span></button><p>${esc(comment.body)}</p>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…" value="${commentRetryDraft?.checkInId === commentCheckInId ? esc(commentRetryDraft.body) : ''}"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
 }
 
 function batonSheet() {
@@ -1124,6 +1190,10 @@ async function handlePasteProof() {
 async function handleProofSubmit() {
   const review = proofReview;
   if (!review || review.status === 'uploading' || busy) return;
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   await refreshCoordinator?.waitForIdle();
   if (busy || proofReview !== review) return;
   const habit = getState().habits.find((item) => item.id === review.habitId);
@@ -1152,11 +1222,18 @@ async function loadProofViewerUrl() {
   const current = proofViewer;
   if (!current) return;
   const requestId = ++proofViewerRequestId;
+  const cachedUrl = proofThumbnailUrls.get(current.path) || null;
+  if (cachedUrl) {
+    proofViewer = { ...current, status: 'ready', url: cachedUrl, error: null };
+    render();
+    return;
+  }
   proofViewer = { ...current, status: 'loading', url: null, error: null };
   render();
   try {
     const url = await repo.getProofUrl(current.path);
     if (requestId !== proofViewerRequestId || !proofViewer || proofViewer.path !== current.path) return;
+    proofThumbnailUrls.set(current.path, url);
     proofViewer = { ...proofViewer, status: 'ready', url, error: null };
   } catch (error) {
     if (requestId !== proofViewerRequestId || !proofViewer || proofViewer.path !== current.path) return;
@@ -1336,8 +1413,8 @@ function render() {
   app.querySelectorAll('[data-wrapped-prev]').forEach((element) => { element.onclick = () => { wrappedIndex = Math.max(0, wrappedIndex - 1); render(); }; });
   app.querySelectorAll('[data-wrapped-close]').forEach((element) => { element.onclick = () => { wrappedOpen = false; wrappedIndex = 0; render(); }; });
   app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; localStorage.setItem('donezo.squadFeed', squadFeed); feedLimit = 12; render(); }; });
-  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; inviteSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; void primeFriendInvite(); render(); }; });
+  app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = handleShareInvite; });
   app.querySelectorAll('[data-add-friend-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-add-friend-open]').forEach((element) => { element.onclick = () => { inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-friend-profile]').forEach((element) => { element.onclick = () => openFriendProfile(element.dataset.friendProfile); });
@@ -1628,8 +1705,11 @@ function hasUnsavedDraft() {
 async function refreshRepositoryData(activeRepo) {
   await activeRepo.load();
   if (!session || repo !== activeRepo) return;
+  authoritativeReady = true;
+  reapplyOptimisticPatches();
   lastRefreshAt = new Date().toISOString();
   if (!hasUnsavedDraft()) renderPreservingScroll();
+  scheduleStateCacheWrite(activeRepo);
 }
 
 function startRefreshCoordinator(activeRepo) {
@@ -1686,7 +1766,10 @@ async function handleManualRefresh() {
 }
 
 async function runMutation(action, successMessage, { preserveDraft = false } = {}) {
-  if (busy) return undefined;
+  if (busy || networkBootLoading || !authoritativeReady) {
+    if (networkBootLoading || !authoritativeReady) notify('Refreshing your latest data…', 2200);
+    return undefined;
+  }
   if (!online) {
     mutationStatus = 'failed';
     retryMutation = () => runMutation(action, successMessage, { preserveDraft });
@@ -1783,6 +1866,10 @@ async function handleCreateCircle(event) {
 
 async function handleJoinCircle(event) {
   event.preventDefault();
+  if (session && (networkBootLoading || !authoritativeReady)) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   if (busy) return;
   const form = new FormData(event.currentTarget);
   const validation = validateInviteCode(String(form.get('code')));
@@ -1816,9 +1903,37 @@ async function handleJoinCircle(event) {
   }
 }
 
+async function handleSimpleCheckIn(habit, date, checked, successMessage = '') {
+  const current = checkInFor(habit.id, me()?.id, date);
+  const existingId = current?.id || null;
+  const previous = current ? { ...current } : null;
+  const key = `checkin:${habit.id}:${date}`;
+  const result = await runOptimisticMutation({
+    key,
+    apply: () => repo.applySimpleCheckIn(habit.id, date, checked),
+    rollback: () => repo.applySimpleCheckIn(habit.id, date, Boolean(previous), previous),
+    persist: () => repo.toggleSimpleCheckIn(habit.id, date, checked, existingId),
+    errorMessage: checked ? 'Could not complete habit' : 'Could not undo check-in',
+    onSuccess: (serverRow) => {
+      if (checked && serverRow && typeof serverRow === 'object') repo.applySimpleCheckIn(habit.id, date, true, serverRow);
+    },
+  });
+  if (result === undefined) return undefined;
+  haptic(checked ? 28 : 16);
+  if (successMessage) notify(successMessage, 4200, checked ? { action: { label: 'Undo', onClick: () => handleUndoCheckIn(habit.id, date) } } : {});
+  renderPreservingScroll();
+  return result;
+}
+
 async function handleUndoCheckIn(habitId, date = today()) {
-  if (!checkInFor(habitId, me()?.id, date)) return;
-  await runMutation(() => repo.toggleHabit(habitId, date), 'Check-in undone');
+  const habit = getState()?.habits.find((item) => item.id === habitId);
+  const checkIn = checkInFor(habitId, me()?.id, date);
+  if (!habit || !checkIn) return;
+  if (habit.proofMode === 'photo' || checkIn.proofPath) {
+    await runMutation(() => repo.toggleHabit(habitId, date), 'Check-in undone');
+    return;
+  }
+  await handleSimpleCheckIn(habit, date, false, 'Check-in undone');
 }
 
 async function handleHabit(id) {
@@ -1827,7 +1942,11 @@ async function handleHabit(id) {
   const checkInDate = today();
   const current = checkInFor(id, me()?.id, checkInDate);
   if (current && !current.invalid) {
-    await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);
+    if (habit.proofMode === 'photo' || current.proofPath) {
+      await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);
+      return;
+    }
+    await handleSimpleCheckIn(habit, checkInDate, false, `${habit.title} unchecked`);
     return;
   }
   if (habit.proofMode === 'photo') {
@@ -1835,10 +1954,7 @@ async function handleHabit(id) {
     render();
     return;
   }
-  const result = await runMutation(() => repo.toggleHabit(id, checkInDate));
-  if (!result) return;
-  haptic(28);
-  notify(`Checked in · ${habit.title}`, 4200, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(id, checkInDate) } });
+  await handleSimpleCheckIn(habit, checkInDate, true, `Checked in · ${habit.title}`);
 }
 
 function closeHabitEditor() {
@@ -1977,12 +2093,79 @@ async function handleNudgeSubmit(event) {
 }
 
 async function handleDownvote(checkInId) {
-  await runMutation(() => repo.toggleDownvote(checkInId), 'Vote counted 👎');
+  const checkIn = getState()?.checkIns.find((item) => item.id === checkInId);
+  if (!checkIn) return;
+  const previous = Boolean(checkIn.userDownvoted);
+  const desired = !previous;
+  const result = await runOptimisticMutation({
+    key: `downvote:${checkInId}`,
+    apply: () => repo.applyProofDownvote(checkInId, desired),
+    rollback: () => repo.applyProofDownvote(checkInId, previous),
+    persist: () => repo.setProofDownvote(checkInId, desired),
+    errorMessage: 'Could not update proof vote',
+  });
+  if (result !== undefined) haptic(18);
 }
 
+function patchReactionDom(checkInId) {
+  const activity = activityList(getState()).find((item) => item.checkInId === checkInId);
+  if (!activity) return;
+  const buttons = [...app.querySelectorAll('[data-reaction]')].filter((button) => button.dataset.reaction === checkInId);
+  const mine = (activity.userReactions || []).slice(-1);
+  const counts = activity.reactionCounts || {};
+  buttons.forEach((button) => {
+    const emoji = button.dataset.reactionEmoji;
+    const active = mine.includes(emoji);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+    const count = button.querySelector('span');
+    if (count) count.textContent = String(counts[emoji] || 0);
+  });
+  const total = Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0);
+  const summary = mine.length
+    ? `You reacted ${mine[0]} · ${total} ${total === 1 ? 'reaction' : 'reactions'}`
+    : total ? `${total} ${total === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
+  const summaryNode = buttons[0]?.closest('.activity-social-actions')?.querySelector('.reaction-summary');
+  if (summaryNode) summaryNode.textContent = summary;
+}
+
+const reactionCoordinator = createLatestIntentCoordinator({
+  persist: async (key, desired) => repo.setPositiveReaction(key.slice('reaction:'.length), desired),
+  onConfirmed: () => scheduleReconciliation(),
+  onError: ({ key, confirmed, error }) => {
+    const checkInId = key.slice('reaction:'.length);
+    optimisticPatches.delete(key);
+    try { repo.applyPositiveReaction(checkInId, confirmed); } catch { /* The proof may have disappeared. */ }
+    patchReactionDom(checkInId);
+    notify(readableError(error), 3600);
+  },
+});
+
 async function handleReaction(checkInId, emoji) {
-  const result = await runMutation(() => repo.toggleReaction(checkInId, emoji));
-  if (result) haptic(18);
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
+  if (!online) {
+    notify('You are offline. Nothing was saved yet.', 3200);
+    return;
+  }
+  const activity = activityList(getState()).find((item) => item.checkInId === checkInId);
+  if (!activity) return;
+  const current = (activity.userReactions || []).slice(-1)[0] || null;
+  const desired = current === emoji ? null : emoji;
+  const key = `reaction:${checkInId}`;
+  repo.applyPositiveReaction(checkInId, desired);
+  optimisticPatches.set(key, () => repo.applyPositiveReaction(checkInId, reactionCoordinator.desired(key)));
+  patchReactionDom(checkInId);
+  haptic(18);
+  reactionCoordinator.queue(key, desired, { confirmed: reactionCoordinator.confirmed(key) ?? current });
+  void reactionCoordinator.whenIdle(key).then(() => {
+    if (!reactionCoordinator.isPending(key)) {
+      optimisticPatches.delete(key);
+      scheduleReconciliation();
+    }
+  });
 }
 
 async function handleCommentSubmit(event) {
@@ -1990,22 +2173,83 @@ async function handleCommentSubmit(event) {
   const checkInId = commentCheckInId;
   const form = new FormData(event.currentTarget);
   const body = String(form.get('body') || '').trim();
-  if (!checkInId || !body) return;
-  const result = await runMutation(() => repo.addComment(checkInId, body), 'Reply sent');
-  if (result) commentCheckInId = checkInId;
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
+  if (!checkInId || !body || !online) {
+    if (!online) notify('You are offline. Nothing was saved yet.', 3200);
+    return;
+  }
+  const key = `comment:add:${checkInId}`;
+  if (optimisticPatches.has(key)) return;
+  const temp = repo.applyOptimisticComment(checkInId, body);
+  optimisticPatches.set(key, () => repo.applyOptimisticComment(checkInId, body, temp));
+  commentRetryDraft = null;
+  renderPreservingScroll();
+  await yieldToPaint();
+  try {
+    const saved = await repo.addComment(checkInId, body);
+    repo.replaceOptimisticComment(temp.id, saved);
+    optimisticPatches.delete(key);
+    renderPreservingScroll();
+    scheduleReconciliation();
+    notify('Reply sent');
+  } catch (error) {
+    optimisticPatches.delete(key);
+    repo.removeOptimisticComment(temp.id);
+    commentRetryDraft = { checkInId, body };
+    renderPreservingScroll();
+    notify(readableError(error), 3600);
+  }
 }
 
 async function handleUndoCommentDelete(comment) {
-  await runMutation(() => repo.addComment(comment.checkInId, comment.body), 'Reply restored');
+  if (!comment) return;
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
+  commentRetryDraft = { checkInId: comment.checkInId, body: comment.body };
+  const restored = repo.applyOptimisticComment(comment.checkInId, comment.body, comment);
+  try {
+    const saved = await repo.addComment(comment.checkInId, comment.body);
+    repo.replaceOptimisticComment(restored.id, saved);
+    commentRetryDraft = null;
+    scheduleReconciliation();
+    renderPreservingScroll();
+    notify('Reply restored');
+  } catch (error) {
+    repo.removeOptimisticComment(restored.id);
+    renderPreservingScroll();
+    notify(readableError(error), 3600);
+  }
 }
 
 async function handleDeleteComment(commentId) {
   const comment = (getState().comments || []).find((item) => item.id === commentId);
-  if (!comment) return;
-  const result = await runMutation(() => repo.deleteComment(commentId));
-  if (!result) return;
-  commentCheckInId = commentCheckInId || null;
-  notify('Reply deleted', 5000, { action: { label: 'Undo', onClick: () => handleUndoCommentDelete(comment) } });
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
+  if (!comment || !online) return;
+  const key = `comment:delete:${commentId}`;
+  if (optimisticPatches.has(key)) return;
+  const removed = repo.removeOptimisticComment(commentId);
+  optimisticPatches.set(key, () => repo.removeOptimisticComment(commentId));
+  renderPreservingScroll();
+  await yieldToPaint();
+  try {
+    await repo.deleteComment(commentId);
+    optimisticPatches.delete(key);
+    scheduleReconciliation();
+    notify('Reply deleted', 5000, { action: { label: 'Undo', onClick: () => handleUndoCommentDelete(comment) } });
+  } catch (error) {
+    optimisticPatches.delete(key);
+    if (removed) repo.applyOptimisticComment(removed.checkInId, removed.body, removed);
+    renderPreservingScroll();
+    notify(readableError(error), 3600);
+  }
 }
 
 async function handleBatonSubmit(event) {
@@ -2124,8 +2368,22 @@ function handleRedoProof(checkInId) {
   render();
 }
 
+async function markNudgeReadOptimistic(nudgeId) {
+  const nudge = (getState()?.nudges || []).find((item) => item.id === nudgeId);
+  if (!nudge || nudge.readAt) return true;
+  const readAt = new Date().toISOString();
+  const previous = nudge.readAt || null;
+  return runOptimisticMutation({
+    key: `nudge-read:${nudgeId}`,
+    apply: () => repo.applyNudgeRead(nudgeId, readAt),
+    rollback: () => repo.applyNudgeRead(nudgeId, previous),
+    persist: () => repo.markNudgeRead(nudgeId),
+    errorMessage: 'Could not mark nudge read',
+  });
+}
+
 async function handleReadNudge(nudgeId) {
-  await runMutation(() => repo.markNudgeRead(nudgeId));
+  await markNudgeReadOptimistic(nudgeId);
 }
 
 async function handleDisplayName(event) {
@@ -2226,32 +2484,43 @@ function activeInviteUrl() {
     || '';
 }
 
-async function handleCreateFriendInvite() {
-  if (typeof repo?.createFriendInvite !== 'function' || busy) return null;
-  const invite = await runMutation(() => repo.createFriendInvite ? repo.createFriendInvite() : null, null);
-  if (invite) {
-    createdFriendInvite = invite;
-    notify('Friend invite ready');
-    render();
-    return invite;
-  }
-  return null;
+function inviteCodeFrom(value) {
+  return typeof value === 'string' ? value : value?.code || value?.inviteCode || '';
 }
 
-async function handleShareInvite() {
-  const directFriendFlow = typeof repo?.createFriendInvite === 'function';
-  if (directFriendFlow) {
-    const invite = await handleCreateFriendInvite();
-    if (!invite) return;
-  }
-  const code = directFriendFlow ? activeFriendInviteCode() : activeInviteCode();
+function inviteUrlFrom(value, code) {
+  return (typeof value === 'object' && value?.url) || buildInviteLink(window.location.href, code);
+}
+
+function primeFriendInvite() {
+  if (typeof repo?.createFriendInvite !== 'function' || !session || !online || networkBootLoading || !authoritativeReady) return Promise.resolve(null);
+  if (prefetchedFriendInvite) return Promise.resolve(prefetchedFriendInvite);
+  if (friendInvitePromise) return friendInvitePromise;
+  friendInvitePreparing = true;
+  friendInvitePromise = repo.createFriendInvite()
+    .then((invite) => {
+      prefetchedFriendInvite = invite;
+      return invite;
+    })
+    .catch((error) => {
+      notify(readableError(error), 3600);
+      return null;
+    })
+    .finally(() => {
+      friendInvitePreparing = false;
+      friendInvitePromise = null;
+      if (peopleSheetOpen) renderPreservingScroll();
+    });
+  return friendInvitePromise;
+}
+
+async function sharePreparedInvite(invite) {
+  const code = inviteCodeFrom(invite);
   if (!validateInviteCode(code).valid) {
     notify('Invite code is not ready yet. Try again in a sec.', 3200);
-    return;
+    return false;
   }
-  const url = directFriendFlow
-    ? buildInviteLink(window.location.href, code)
-    : activeInviteUrl() || buildInviteLink(window.location.href, code);
+  const url = inviteUrlFrom(invite, code);
   const payload = {
     title: 'Join me on Donezo',
     text: 'Join me on Donezo. We’re trying to actually lock in.',
@@ -2260,17 +2529,47 @@ async function handleShareInvite() {
   if (typeof navigator.share === 'function') {
     try {
       await navigator.share(payload);
-      return;
+      if (invite === prefetchedFriendInvite) {
+        prefetchedFriendInvite = null;
+        if (peopleSheetOpen) void primeFriendInvite();
+      }
+      return true;
     } catch (error) {
-      if (error?.name === 'AbortError') return;
+      if (error?.name === 'AbortError') return false;
     }
   }
   try {
     await navigator.clipboard.writeText(url);
     notify('Invite link copied');
+    if (invite === prefetchedFriendInvite) {
+      prefetchedFriendInvite = null;
+      if (peopleSheetOpen) void primeFriendInvite();
+    }
+    return true;
   } catch {
     notify(url, 6000);
+    return false;
   }
+}
+
+async function handleShareInvite() {
+  const directFriendFlow = typeof repo?.createFriendInvite === 'function';
+  if (directFriendFlow) {
+    const invite = prefetchedFriendInvite || createdFriendInvite;
+    if (!invite) {
+      if (networkBootLoading || !authoritativeReady) notify('Refreshing your latest data…', 2200);
+      else if (friendInvitePreparing) notify('Preparing a fresh invite…', 1800);
+      else {
+        notify('Preparing a fresh invite…', 1800);
+        void primeFriendInvite();
+      }
+      return;
+    }
+    await sharePreparedInvite(invite);
+    return;
+  }
+  const code = activeInviteCode();
+  await sharePreparedInvite({ code, url: activeInviteUrl() || buildInviteLink(window.location.href, code) });
 }
 
 function clearPendingInvite() {
@@ -2297,11 +2596,19 @@ function bindInviteActions() {
 }
 
 async function handleSignOut() {
+  const userId = session?.user?.id;
   bootGeneration += 1;
+  authoritativeReady = false;
+  prefetchedFriendInvite = null;
+  friendInvitePromise = null;
+  friendInvitePreparing = false;
   stopRefreshCoordinator();
   clearProofReview();
   proofHabit = null;
   proofViewer = null;
+  optimisticPatches.clear();
+  clearTimeout(reconciliationTimer);
+  if (userId) await clearStateCache(userId);
   await supabase.auth.signOut();
 }
 
@@ -2343,8 +2650,15 @@ async function boot(nextSession) {
   clearProofReview();
   proofHabit = null;
   proofViewer = null;
+  optimisticPatches.clear();
+  clearTimeout(reconciliationTimer);
   session = nextSession;
   online = navigator.onLine !== false;
+  networkBootLoading = false;
+  authoritativeReady = false;
+  prefetchedFriendInvite = null;
+  friendInvitePromise = null;
+  friendInvitePreparing = false;
   if (!session) {
     repo = null;
     lastRefreshAt = null;
@@ -2352,20 +2666,42 @@ async function boot(nextSession) {
     return;
   }
   app.innerHTML = '<div class="standalone-screen loading"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><p>Loading your circle…</p></div>';
+  const activeRepo = createSupabaseRepository(supabase, session.user);
+  repo = activeRepo;
+  let cachedRendered = false;
+  const cachedState = await readStateCache(session.user.id);
+  if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
+  if (cachedState) {
+    try {
+      activeRepo.hydrateState(cachedState);
+      cachedRendered = true;
+      render();
+    } catch {
+      cachedRendered = false;
+    }
+  }
+  networkBootLoading = true;
   try {
-    const activeRepo = createSupabaseRepository(supabase, session.user);
-    repo = activeRepo;
     await activeRepo.load((!initialNavigationHandled && initialNavigation.circleId) || localStorage.getItem('donezo.activeSquadId') || undefined);
     if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
+    networkBootLoading = false;
+    authoritativeReady = true;
+    reapplyOptimisticPatches();
     lastRefreshAt = new Date().toISOString();
     render();
+    scheduleStateCacheWrite(activeRepo);
     startRefreshCoordinator(activeRepo);
     await applyInitialNavigation();
-    if (getNotificationCapability(window).permission === 'granted') {
-      syncPushSubscription(activeRepo).catch(() => {});
-    }
+    if (getNotificationCapability(window).permission === 'granted') syncPushSubscription(activeRepo).catch(() => {});
   } catch (error) {
     if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
+    networkBootLoading = false;
+    if (cachedRendered) {
+      startRefreshCoordinator(activeRepo);
+      notify('Could not refresh. Showing your last good sync. ' + readableError(error), 4200);
+      renderPreservingScroll();
+      return;
+    }
     stopRefreshCoordinator();
     app.innerHTML = `<div class="standalone-screen loading"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div><h1>Could not load.</h1><p>${esc(readableError(error))}</p><button class="btn primary" id="retry">Retry</button><button class="text-btn" id="sign-out">Sign out</button></div>`;
     app.querySelector('#retry')?.addEventListener('click', () => boot(session));

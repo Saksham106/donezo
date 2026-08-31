@@ -40,10 +40,17 @@ test('Friends invite sheet never exposes a legacy circle code as a friend code',
   assert.doesNotMatch(sheet, /circleInviteCode|createdCircleInvite/);
 });
 
-test('sharing creates a fresh single-use friend invite every time', () => {
+test('sharing uses a fresh prefetched single-use friend invite without sacrificing native share activation', () => {
+  const prime = appSource.slice(appSource.indexOf('function primeFriendInvite()'), appSource.indexOf('async function sharePreparedInvite('));
   const share = appSource.slice(appSource.indexOf('async function handleShareInvite()'), appSource.indexOf('function clearPendingInvite()'));
+  const prepared = appSource.slice(appSource.indexOf('async function sharePreparedInvite('), appSource.indexOf('async function handleShareInvite()'));
+  assert.match(prime, /repo\.createFriendInvite\(\)/);
   assert.match(share, /const directFriendFlow = typeof repo\?\.createFriendInvite === 'function'/);
-  assert.match(share, /if \(directFriendFlow\) \{\s*const invite = await handleCreateFriendInvite\(\)/);
+  assert.match(share, /const invite = prefetchedFriendInvite \|\| createdFriendInvite/);
+  assert.match(prepared, /await navigator\.share\(payload\)/);
+  assert.match(prepared, /prefetchedFriendInvite = null/);
+  assert.match(prepared, /void primeFriendInvite\(\)/);
+  assert.doesNotMatch(share, /await handleCreateFriendInvite\(\)/);
   assert.doesNotMatch(share, /inviteSheetOpen/);
   assert.doesNotMatch(appSource, /handleCopyRawInvite|data-copy-code/);
 });
