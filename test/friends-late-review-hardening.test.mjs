@@ -35,27 +35,23 @@ test('client accepts hardened friend codes while preserving legacy 12-character 
 });
 
 test('Friends invite sheet never exposes a legacy circle code as a friend code', () => {
-  assert.match(appSource, /function activeFriendInviteCode\(\)/);
   const sheet = appSource.slice(appSource.indexOf('function inviteSheet()'), appSource.indexOf('function peopleSheet()'));
-  assert.match(sheet, /activeFriendInviteCode\(\)/);
+  assert.match(sheet, /data-share-invite/);
   assert.doesNotMatch(sheet, /circleInviteCode|createdCircleInvite/);
 });
 
-test('sharing or copying creates a fresh single-use friend invite every time', () => {
-  const share = appSource.slice(appSource.indexOf('async function handleShareInvite()'), appSource.indexOf('async function handleCopyRawInvite()'));
-  const copy = appSource.slice(appSource.indexOf('async function handleCopyRawInvite()'), appSource.indexOf('function clearPendingInvite()'));
+test('sharing creates a fresh single-use friend invite every time', () => {
+  const share = appSource.slice(appSource.indexOf('async function handleShareInvite()'), appSource.indexOf('function clearPendingInvite()'));
   assert.match(share, /const directFriendFlow = typeof repo\?\.createFriendInvite === 'function'/);
   assert.match(share, /if \(directFriendFlow\) \{\s*const invite = await handleCreateFriendInvite\(\)/);
   assert.doesNotMatch(share, /inviteSheetOpen/);
-  assert.match(copy, /const directFriendFlow = typeof repo\?\.createFriendInvite === 'function'/);
-  assert.match(copy, /if \(directFriendFlow\) \{\s*const invite = await handleCreateFriendInvite\(\)/);
-  assert.doesNotMatch(copy, /inviteSheetOpen/);
+  assert.doesNotMatch(appSource, /handleCopyRawInvite|data-copy-code/);
 });
 
 test('new Friends spaces share a direct friend invite rather than a legacy circle code', () => {
   assert.match(appSource, /createdFriendInvite = await repo\.createFriendInvite\(\)/);
   assert.match(appSource, /redeemInvite\(repo, validation\.code\)/);
-  assert.match(appSource, /function creatorInviteScreen\(\) \{\s*const code = activeInviteCode\(\)/);
+  assert.match(appSource, /function creatorInviteScreen\(\)/);
   assert.match(appSource, /if \(\(createdFriendInvite \|\| createdCircleInvite\) && state\?\.circleId\) \{/);
 });
 

@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 import { createSupabaseRepository } from './store.js';
 import { createRefreshCoordinator } from './refresh.js';
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, redeemInvite, validateInviteCode } from './invite.js';
-import { createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, transitionProofReview, validateProofFile } from './proof.js';
+import { MAX_PROOF_BYTES, compressProofFile, createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, transitionProofReview, validateProofFile } from './proof.js';
 import {
   BADGE_CATALOG,
   accountabilityDateForMember,
@@ -53,6 +53,7 @@ function setActiveTab(nextTab) {
 }
 let proofHabit = null;
 let proofReview = null;
+let proofPreparationId = 0;
 let proofViewer = null;
 let proofViewerRequestId = 0;
 let proofRejectCheckInId = null;
@@ -331,8 +332,7 @@ function onboardingScreen() {
 }
 
 function creatorInviteScreen() {
-  const code = activeInviteCode();
-  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">FRIENDS READY</p><h1>You’re in. Bring your people.</h1><p>Share the invite now, or jump into the app and do it later from Friends.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button><button class="text-btn" type="button" data-copy-code>Copy raw code · ${esc(code)}</button></main></div>`;
+  return `<div class="standalone-screen creator-success"><header class="topbar standalone-topbar"><div class="brand"><span>ϟ</span><strong>Donezo</strong></div></header><main class="creator-success-body"><p class="eyebrow">FRIENDS READY</p><h1>You’re in. Bring your people.</h1><p>Share a fresh private link now, or do it later from Friends.</p><button class="btn primary full" type="button" data-share-invite>Share invite</button><button class="btn full" type="button" data-continue-app>Continue to app</button></main></div>`;
 }
 
 function myHabits(state = getState()) {
@@ -839,11 +839,7 @@ function nudgeInboxSheet() {
 
 function inviteSheet() {
   if (!inviteSheetOpen) return '';
-  const code = activeFriendInviteCode();
-  const createButton = typeof repo?.createFriendInvite === 'function' && !validateInviteCode(code).valid
-    ? '<button class="btn primary full" type="button" data-create-friend-invite>Create invite link</button>'
-    : '';
-  return `<div class="sheet-backdrop" data-close-invite-backdrop><section class="sheet compact-sheet invite-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Invite a friend</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share a private link. They choose whether to connect.</p>${createButton}<button class="btn primary full" type="button" data-share-invite>Share invite</button>${code ? `<div class="raw-code-row"><div><small>Invite code</small><code>${esc(code)}</code></div><button class="btn small-btn" type="button" data-copy-code>Copy code</button></div>` : ''}</section></div>`;
+  return `<div class="sheet-backdrop" data-close-invite-backdrop><section class="sheet compact-sheet invite-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Invite friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">INVITE FRIENDS</p><h2>Invite a friend</h2></div><button class="icon-btn" type="button" data-close-invite aria-label="Close">×</button></div><p class="invite-sheet-copy">Share a fresh private link every time. They choose whether to connect.</p><div class="invite-sheet-actions"><button class="btn primary full" type="button" data-share-invite>Share invite</button></div></section></div>`;
 }
 
 function peopleSheet() {
@@ -939,11 +935,15 @@ function friendProfileSheet() {
         : connection.relationship === 'outgoing'
           ? '<button class="btn small-btn" type="button" disabled>Sent</button>'
           : '<span class="connection-state">Friends</span>';
-    return `<article class="friend-connection-row"><div class="avatar">${esc(connection.avatar || '?')}</div><span><strong>${esc(connection.name)}</strong><small>${esc(detail)}</small></span>${action}</article>`;
+    const knownFriend = member(connection.id);
+    const identity = knownFriend
+      ? `<button class="friend-connection-profile" type="button" data-friend-profile="${connection.id}" aria-label="Open ${esc(connection.name)} profile"><div class="avatar">${esc(connection.avatar || '?')}</div><span><strong>${esc(connection.name)}</strong><small>${esc(detail)}</small></span></button>`
+      : `<div class="friend-connection-profile"><div class="avatar">${esc(connection.avatar || '?')}</div><span><strong>${esc(connection.name)}</strong><small>${esc(detail)}</small></span></div>`;
+    return `<article class="friend-connection-row">${identity}${action}</article>`;
   }).join('');
   const connections = person.id === me().id ? '' : `<section class="profile-connections"><strong>Their friends</strong>${friendConnectionsLoading ? '<p class="profile-connection-state">Loading friends…</p>' : connectionRows || '<p class="profile-connection-state">No other friends to show yet.</p>'}</section>`;
   const socialActions = person.id === me().id ? '' : `<div class="friend-profile-actions"><button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>${typeof repo?.removeFriend === 'function' ? `<button class="text-btn danger" type="button" data-remove-friend="${person.id}" data-remove-friend-name="${esc(person.name)}">Remove friend</button>` : ''}</div>`;
-  return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Close profile">×</button></div><div class="profile-daily"><article><strong>Today · ${daily.today.completed}/${daily.today.total}</strong><p>${esc(todayReceipts)}</p></article><article class="${daily.yesterday.missed.length ? 'missed' : ''}"><strong>Yesterday · ${daily.yesterday.completed}/${daily.yesterday.total}</strong><p>${esc(yesterdayReceipts)}</p></article></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><section class="profile-proofs"><strong>Proof history</strong>${personProofCarousel(person.id, recent)}</section><section class="profile-recent"><strong>All activity</strong><div class="profile-activity-list">${recent.length ? recent.map((item) => activityCard(item, { showProofActions: Boolean(item.proofPath) })).join('') : '<p>No updates yet.</p>'}</div></section>${connections}${socialActions}</section></div>`;
+  return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Close profile">×</button></div>${connections}<div class="profile-daily"><article><strong>Today · ${daily.today.completed}/${daily.today.total}</strong><p>${esc(todayReceipts)}</p></article><article class="${daily.yesterday.missed.length ? 'missed' : ''}"><strong>Yesterday · ${daily.yesterday.completed}/${daily.yesterday.total}</strong><p>${esc(yesterdayReceipts)}</p></article></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><section class="profile-proofs"><strong>Proof history</strong>${personProofCarousel(person.id, recent)}</section><section class="profile-recent"><strong>All activity</strong><div class="profile-activity-list">${recent.length ? recent.map((item) => activityCard(item, { showProofActions: Boolean(item.proofPath) })).join('') : '<p>No updates yet.</p>'}</div></section>${socialActions}</section></div>`;
 }
 
 function recoverySheet() {
@@ -969,7 +969,7 @@ function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
   if (!habit) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Use the camera, pick a saved photo, or paste a screenshot you copied.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Use the camera, pick a saved photo, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
 }
 
 function proofReviewSheet() {
@@ -1035,13 +1035,32 @@ function acceptProofFile(file) {
 async function handleProofFileSelection(input) {
   const file = input.files?.[0];
   input.value = '';
-  acceptProofFile(file);
+  await prepareProofFile(file);
+}
+
+async function prepareProofFile(file) {
+  if (!file) return false;
+  const habitId = proofHabit || proofReview?.habitId;
+  if (!habitId) return false;
+  const preparationId = ++proofPreparationId;
+  try {
+    if (file.size > MAX_PROOF_BYTES) notify('Compressing large photo…', 5000);
+    const prepared = await compressProofFile(file);
+    const currentHabitId = proofHabit || proofReview?.habitId;
+    if (preparationId !== proofPreparationId || currentHabitId !== habitId) return false;
+    if (prepared !== file) notify(`Photo compressed to ${formatProofFileSize(prepared.size)}`, 3200);
+    return acceptProofFile(prepared);
+  } catch (error) {
+    const currentHabitId = proofHabit || proofReview?.habitId;
+    if (preparationId === proofPreparationId && currentHabitId === habitId) notify(readableError(error), 4200);
+    return false;
+  }
 }
 
 async function handlePasteProof() {
   try {
     const file = await readClipboardImage(navigator.clipboard);
-    acceptProofFile(file);
+    await prepareProofFile(file);
   } catch (error) {
     const blocked = error?.name === 'NotAllowedError';
     notify(blocked
@@ -2116,28 +2135,6 @@ async function handleShareInvite() {
   }
 }
 
-async function handleCopyRawInvite() {
-  const directFriendFlow = typeof repo?.createFriendInvite === 'function';
-  if (directFriendFlow) {
-    const invite = await handleCreateFriendInvite();
-    if (!invite) return;
-  } else {
-    const code = activeInviteCode();
-    if (!validateInviteCode(code).valid) await handleCreateFriendInvite();
-  }
-  const readyCode = directFriendFlow ? activeFriendInviteCode() : activeInviteCode();
-  if (!validateInviteCode(readyCode).valid) {
-    notify('Invite code is not ready yet. Try again in a sec.', 3200);
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(readyCode);
-    notify('Raw invite code copied');
-  } catch {
-    notify(`Invite code: ${readyCode}`, 5000);
-  }
-}
-
 function clearPendingInvite() {
   pendingInvite = { present: false, valid: false, code: null, raw: null };
   inviteMessage = '';
@@ -2158,8 +2155,6 @@ function bindInviteActions() {
     render();
   }; });
   app.querySelectorAll('[data-share-invite]').forEach((element) => { element.onclick = handleShareInvite; });
-  app.querySelectorAll('[data-create-friend-invite]').forEach((element) => { element.onclick = handleCreateFriendInvite; });
-  app.querySelectorAll('[data-copy-code]').forEach((element) => { element.onclick = handleCopyRawInvite; });
   app.querySelectorAll('[data-continue-app]').forEach((element) => { element.onclick = () => { createdCircleInvite = null; setActiveTab('today'); createdFriendInvite = null; render(); }; });
 }
 
@@ -2179,7 +2174,7 @@ document.addEventListener('paste', (event) => {
   const file = imageFileFromPasteData(event.clipboardData);
   if (!file) return;
   event.preventDefault();
-  acceptProofFile(file);
+  void prepareProofFile(file);
 });
 
 async function applyInitialNavigation() {
