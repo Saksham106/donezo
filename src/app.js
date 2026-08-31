@@ -6,6 +6,7 @@ import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInvitePar
 import { createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, transitionProofReview, validateProofFile } from './proof.js';
 import {
   BADGE_CATALOG,
+  accountabilityDateForMember,
   dailyAccountabilitySummary,
   dailyProgress,
   localDateInTimeZone,
@@ -662,8 +663,10 @@ function leagueScreen() {
   const myConsent = stake ? (state.stakeConsents || []).find((item) => item.stakeId === stake.id && item.userId === me().id) : null;
   const canResolve = stake?.status === 'active' && stake.createdBy === me().id && today() > stake.endsOn;
   const stakeCard = stake ? `<section class="stake-card legacy-stake"><div><span>${stake.status === 'active' ? 'Existing stake' : 'Existing opt-in'}</span><strong>${esc(stake.reward || stake.consequence)}</strong><small>We retired new stakes. This one stays until the challenge ends or passes.</small></div>${stake.status === 'pending' && myConsent?.status !== 'accepted' ? `<div class="stake-actions"><button class="btn primary" data-stake-response="accepted" data-stake-id="${stake.id}">I’m in</button><button class="btn" data-stake-response="declined" data-stake-id="${stake.id}">Pass</button></div>` : ''}${canResolve ? `<button class="btn small-btn" data-resolve-stake="${stake.id}">Resolve</button>` : ''}</section>` : '';
+  const accountabilityNow = new Date();
   const standings = ranked.map((item) => {
-    const daily = dailyAccountabilitySummary(item.id, state.habits, state.checkIns, today());
+    const memberDate = accountabilityDateForMember(item, accountabilityNow);
+    const daily = dailyAccountabilitySummary(item.id, state.habits, state.checkIns, memberDate);
     const todayLabel = daily.today.total
       ? `Today ${daily.today.completed}/${daily.today.total}${daily.today.remaining.length ? ` · ${daily.today.remaining.length} left` : ' · clear'}`
       : 'Today · no habits';
@@ -919,7 +922,8 @@ function friendProfileSheet() {
   const habits = state.habits.filter((habit) => habit.ownerId === person.id && habit.active);
   const recent = activityList(state).filter((item) => item.userId === person.id);
   const score = weeklyCompletionScore(person.id, state.habits, state.checkIns, today());
-  const daily = dailyAccountabilitySummary(person.id, state.habits, state.checkIns, today());
+  const memberDate = accountabilityDateForMember(person);
+  const daily = dailyAccountabilitySummary(person.id, state.habits, state.checkIns, memberDate);
   const todayReceipts = daily.today.remaining.length
     ? `${daily.today.remaining.length} left: ${daily.today.remaining.map((habit) => `${habit.emoji || '○'} ${habit.title}`).join(', ')}`
     : daily.today.total ? 'All clear.' : 'No habits due.';

@@ -9,6 +9,7 @@ import {
   weeklyCompletionScore,
   rankMembersByWeeklyScore,
   localDateInTimeZone,
+  accountabilityDateForMember,
   proofRejectionThreshold,
   rejectedCheckInIds,
 } from '../src/domain.js';
@@ -74,6 +75,13 @@ test('rankMembers sorts highest XP first and assigns ranks', () => {
 
 test('localDateInTimeZone keeps late-evening Boston creation on the correct local day', () => {
   assert.equal(localDateInTimeZone('2026-08-28T00:30:00Z', 'America/New_York'), '2026-08-27');
+});
+
+test('accountabilityDateForMember uses each friend’s own calendar day', () => {
+  const instant = new Date('2026-08-31T00:30:00Z');
+  assert.equal(accountabilityDateForMember({ timeZone: 'America/Los_Angeles' }, instant), '2026-08-30');
+  assert.equal(accountabilityDateForMember({ timeZone: 'Asia/Tokyo' }, instant), '2026-08-31');
+  assert.equal(accountabilityDateForMember({ timeZone: 'Not/AZone' }, instant), '2026-08-31');
 });
 
 test('proofRejectionThreshold requires a strict majority of other circle members', () => {

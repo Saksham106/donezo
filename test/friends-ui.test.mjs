@@ -57,10 +57,14 @@ test('People and profiles make friend requests and friend-of-friend adds obvious
   assert.match(app, /repo\.acceptFriend/);
 });
 
-test('every League row opens a profile and shows daily accountability', () => {
+test('every League row opens a profile and shows timezone-correct daily accountability', () => {
   const league = slice('leagueScreen', 'challengeInfoSheet');
+  const profile = slice('friendProfileSheet', 'recoverySheet');
   assert.match(league, /data-friend-profile/);
-  assert.match(league, /dailyAccountabilitySummary/);
+  assert.match(league, /accountabilityDateForMember\(item, accountabilityNow\)/);
+  assert.match(league, /dailyAccountabilitySummary\(item\.id, state\.habits, state\.checkIns, memberDate\)/);
+  assert.match(profile, /accountabilityDateForMember\(person\)/);
+  assert.match(profile, /dailyAccountabilitySummary\(person\.id, state\.habits, state\.checkIns, memberDate\)/);
   assert.match(league, /Today/);
   assert.match(league, /Yesterday/);
   assert.match(league, /league-daily-status/);
