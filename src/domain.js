@@ -125,6 +125,15 @@ export function localDateInTimeZone(value, timeZone = 'UTC') {
   return `${result.year}-${result.month}-${result.day}`;
 }
 
+export function accountabilityDateForMember(member, value = new Date()) {
+  const timeZone = member?.timeZone || member?.timezone || 'UTC';
+  try {
+    return localDateInTimeZone(value, timeZone);
+  } catch {
+    return localDateInTimeZone(value, 'UTC');
+  }
+}
+
 export function proofRejectionThreshold(circleMemberCount) {
   const otherMembers = Math.max(0, Number(circleMemberCount || 0) - 1);
   return otherMembers === 0 ? Infinity : Math.floor(otherMembers / 2) + 1;
