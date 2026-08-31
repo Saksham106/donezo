@@ -7,6 +7,74 @@ export function dailyProgress(completed, total) {
   return { completed: safeCompleted, total: safeTotal, ratio, percent: Math.round(ratio * 100) };
 }
 
+function shiftLocalDate(dateString, days) {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateKey(date);
+}
+
+function accountabilityCommitments(memberId, habits, checkIns, date) {
+  const commitments = [];
+  for (const habit of habits || []) {
+    if (habit.ownerId !== memberId) continue;
+    const createdDate = habit.createdDate
+      || (habit.createdAt ? localDateInTimeZone(habit.createdAt, habit.ownerTimeZone || 'UTC') : null);
+    if (createdDate && createdDate > date) continue;
+    if (habit.active === false && (!habit.archivedDate || habit.archivedDate < date)) continue;
+    let occurrence;
+    try {
+      occurrence = getScheduleOccurrence({
+        frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+        weekdays: habit.scheduleWeekdays || [],
+        targetQuantity: habit.targetQuantity ?? 1,
+        targetUnit: habit.targetUnit || 'count',
+        dueTime: habit.targetTime || null,
+        graceMinutes: habit.graceMinutes || 0,
+        timezone: habit.scheduleTimezone || habit.ownerTimeZone || 'UTC',
+        startDate: createdDate,
+        pauseWindows: habit.pauseWindows || [],
+        versions: habit.scheduleVersions || habit.versions || [],
+      }, date);
+    } catch {
+      occurrence = { scheduled: (habit.frequency || 'daily') === 'daily', targetQuantity: Number(habit.targetQuantity ?? 1) };
+    }
+    if (!occurrence.scheduled) continue;
+    const completedQuantity = (checkIns || [])
+      .filter((item) => item.userId === memberId && item.habitId === habit.id && item.date === date && item.invalid !== true)
+      .reduce((sum, item) => sum + Math.max(0, Number(item.completedQuantity ?? item.completed_quantity ?? 1) || 0), 0);
+    commitments.push({
+      id: habit.id,
+      title: habit.title,
+      emoji: habit.emoji,
+      complete: completedQuantity >= Number(occurrence.targetQuantity ?? habit.targetQuantity ?? 1),
+    });
+  }
+  return commitments;
+}
+
+export function dailyAccountabilitySummary(memberId, habits, checkIns, date) {
+  const yesterdayDate = shiftLocalDate(date, -1);
+  const todayCommitments = accountabilityCommitments(memberId, habits, checkIns, date);
+  const yesterdayCommitments = accountabilityCommitments(memberId, habits, checkIns, yesterdayDate);
+  const todayCompleted = todayCommitments.filter((item) => item.complete).length;
+  const yesterdayCompleted = yesterdayCommitments.filter((item) => item.complete).length;
+  const publicHabit = ({ id, title, emoji }) => ({ id, title, emoji });
+  return {
+    today: {
+      completed: todayCompleted,
+      total: todayCommitments.length,
+      percent: dailyProgress(todayCompleted, todayCommitments.length).percent,
+      remaining: todayCommitments.filter((item) => !item.complete).map(publicHabit),
+    },
+    yesterday: {
+      date: yesterdayDate,
+      completed: yesterdayCompleted,
+      total: yesterdayCommitments.length,
+      missed: yesterdayCommitments.filter((item) => !item.complete).map(publicHabit),
+    },
+  };
+}
+
 export function calculateStreak(dateStrings, todayString) {
   const completed = new Set(dateStrings);
   const cursor = new Date(`${todayString}T12:00:00Z`);

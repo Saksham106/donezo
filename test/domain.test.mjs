@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   dailyProgress,
+  dailyAccountabilitySummary,
   calculateBestStreak,
   calculateStreak,
   rankMembers,
@@ -14,6 +15,38 @@ import {
 
 test('dailyProgress returns completed ratio and percentage', () => {
   assert.deepEqual(dailyProgress(3, 5), { completed: 3, total: 5, ratio: 0.6, percent: 60 });
+});
+
+test('dailyAccountabilitySummary exposes today work and exact yesterday misses', () => {
+  const habits = [
+    { id: 'gym', ownerId: 'a', title: 'Gym', emoji: '🏋️', active: true, frequency: 'daily', targetQuantity: 1, createdDate: '2026-08-20' },
+    { id: 'run', ownerId: 'a', title: 'Run', emoji: '🏃', active: true, frequency: 'daily', targetQuantity: 2, createdDate: '2026-08-20' },
+    { id: 'new', ownerId: 'a', title: 'New habit', emoji: '✨', active: true, frequency: 'daily', createdDate: '2026-08-30' },
+  ];
+  const checkIns = [
+    { habitId: 'gym', userId: 'a', date: '2026-08-30', completedQuantity: 1 },
+    { habitId: 'run', userId: 'a', date: '2026-08-30', completedQuantity: 1 },
+    { habitId: 'run', userId: 'a', date: '2026-08-29', completedQuantity: 2, invalid: true },
+  ];
+  const result = dailyAccountabilitySummary('a', habits, checkIns, '2026-08-30');
+  assert.deepEqual(result.today, {
+    completed: 1,
+    total: 3,
+    percent: 33,
+    remaining: [
+      { id: 'run', title: 'Run', emoji: '🏃' },
+      { id: 'new', title: 'New habit', emoji: '✨' },
+    ],
+  });
+  assert.deepEqual(result.yesterday, {
+    date: '2026-08-29',
+    completed: 0,
+    total: 2,
+    missed: [
+      { id: 'gym', title: 'Gym', emoji: '🏋️' },
+      { id: 'run', title: 'Run', emoji: '🏃' },
+    ],
+  });
 });
 
 test('calculateStreak counts consecutive completed days ending today', () => {

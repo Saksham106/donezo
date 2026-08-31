@@ -14,6 +14,7 @@ import { rejectedCheckInIds } from '../src/domain.js';
 import { createMemoryRepository } from '../src/store.js';
 
 const migration = await readFile(new URL('../supabase/migrations/0021_friends_audiences.sql', import.meta.url), 'utf8');
+const discoveryMigration = await readFile(new URL('../supabase/migrations/0024_friend_discovery.sql', import.meta.url), 'utf8').catch(() => '');
 const storeSource = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
 
 const seed = {
@@ -90,6 +91,39 @@ test('memory repository creates a shareable code invite and accepts it by code',
   assert.equal(accepted.status, 'accepted');
   assert.deepEqual(repo.getFriendIds(), ['me']);
   assert.throws(() => repo.acceptFriendInvite(invite.code), /invalid|used|expired/i);
+});
+
+test('a friend profile exposes their friends without granting social visibility', () => {
+  const repo = createMemoryRepository({
+    ...seed,
+    friendships: [
+      { user_a: 'alice', user_b: 'me' },
+      { user_a: 'alice', user_b: 'bob' },
+      { user_a: 'alice', user_b: 'stranger' },
+    ],
+    members: seed.profiles.map((profile) => ({ ...profile, xp: 0 })),
+  });
+  const connections = repo.loadFriendConnections('alice');
+  assert.deepEqual(connections.map(({ id, relationship }) => ({ id, relationship })), [
+    { id: 'bob', relationship: 'available' },
+    { id: 'stranger', relationship: 'available' },
+  ]);
+  repo.inviteFriend('bob');
+  assert.equal(repo.loadFriendConnections('alice').find((person) => person.id === 'bob').relationship, 'outgoing');
+  repo.asUser('bob');
+  const request = repo.getState().friendRequests.find((item) => item.addresseeId === 'bob');
+  repo.acceptFriend(request.id);
+  repo.asUser('me');
+  assert.equal(repo.getFriendIds().includes('bob'), true);
+  assert.equal(repo.getUnifiedFeed().some((item) => item.userId === 'bob'), false);
+});
+
+test('0024 exposes only direct-friend discovery and request participants', () => {
+  assert.match(discoveryMigration, /create or replace function public\.list_friend_connections\(target_friend_id uuid\)/i);
+  assert.match(discoveryMigration, /private\.are_direct_friends\(actor, target_friend_id\)/i);
+  assert.match(discoveryMigration, /friend_requests[\s\S]*requester_id[\s\S]*addressee_id/i);
+  assert.match(discoveryMigration, /revoke all on function public\.list_friend_connections\(uuid\) from public, anon/i);
+  assert.doesNotMatch(discoveryMigration, /check_ins|proof_path|habit/i);
 });
 
 test('removing a friend stops future sharing without rewriting historical proof access', () => {
