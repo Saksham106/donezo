@@ -31,9 +31,11 @@ test('proof cards lead with habit identity and preview at most two replies', () 
 });
 
 test('positive reaction toggles replace the previous positive reaction only', () => {
-  assert.match(store, /positiveReactions/);
-  assert.match(store, /emoji !== '👎'/);
+  assert.match(store, /async function setPositiveReaction\(checkInId, emoji\)/);
   assert.match(store, /\.delete\(\)[\s\S]*\.neq\('emoji', '👎'\)/);
+  assert.match(store, /if \(emoji\)/);
+  assert.match(app, /createLatestIntentCoordinator/);
+  assert.match(app, /repo\.applyPositiveReaction\(checkInId, desired\)/);
   assert.match(migration, /row_number\(\)[\s\S]*partition by check_in_id, user_id/i);
   assert.match(migration, /where emoji <> '👎'/i);
   assert.match(migration, /create unique index[\s\S]*check_in_id, user_id/i);
@@ -54,5 +56,5 @@ test('standard bottom sheets initialize reusable swipe-down dismissal', () => {
 
 test('PWA shell cache advances beyond v23', () => {
   assert.doesNotMatch(sw, /donezo-shell-v23/);
-  assert.match(sw, /donezo-shell-v24/);
+  assert.match(sw, /donezo-shell-v25/);
 });

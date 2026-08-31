@@ -60,7 +60,7 @@ test('mutations expose status, haptics, safe retry and date-stable reversible Un
   assert.match(app, /const checkInDate = today\(\)/);
   assert.match(app, /completeWithProof\(review\.habitId, checkInDate, review\.file\)/);
   assert.match(app, /handleUndoCheckIn\(review\.habitId, checkInDate\)/);
-  assert.match(app, /handleUndoCheckIn\(id, checkInDate\)/);
+  assert.match(app, /handleUndoCheckIn\(habit\.id, date\)/);
 });
 
 test('schedule edit guard includes timezone changes after today check-in', () => {
