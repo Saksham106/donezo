@@ -171,17 +171,6 @@ function bindSheetSwipeDismiss() {
   });
 }
 
-function memoryToggleReaction(checkInId, emoji) {
-  if (!['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
-  const checkIn = state.checkIns.find((item) => item.id === checkInId);
-  if (!checkIn) throw new Error('That update is no longer available');
-  const positiveReactions = (state.reactions || []).filter((reaction) => reaction.checkInId === checkInId && reaction.userId === state.currentUserId && reaction.emoji !== '👎');
-  const selected = positiveReactions.length === 1 && positiveReactions[0].emoji === emoji;
-  state.reactions = (state.reactions || []).filter((reaction) => !(reaction.checkInId === checkInId && reaction.userId === state.currentUserId && reaction.emoji !== '👎'));
-  if (!selected) state.reactions.push({ id: uid('reaction'), checkInId, userId: state.currentUserId, emoji, createdAt: new Date().toISOString() });
-  return clone(state);
-}
-
 async function supabaseToggleReaction(checkInId, emoji) {
   if (!['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
   const checkIn = state.checkIns.find((item) => item.id === checkInId);
@@ -216,35 +205,23 @@ app = replaceOnce(app, "\n  const habitForm = app.querySelector('#habit-form');"
 await write('src/app.js', app);
 
 let store = await read('src/store.js');
-const memoryStart = store.indexOf('export function createMemoryRepository');
-const supabaseStart = store.indexOf('export function createSupabaseRepository');
-if (memoryStart < 0 || supabaseStart < 0 || memoryStart >= supabaseStart) throw new Error('repository block markers missing');
-let memoryBlock = store.slice(memoryStart, supabaseStart);
-if (!memoryBlock.includes('function toggleReaction(checkInId, emoji)')) {
-  const insertionMarkers = ['\n  function recoverHabit', '\n  function createChallenge', '\n  function sendNudge'];
-  const marker = insertionMarkers.find((candidate) => memoryBlock.includes(candidate));
-  if (!marker) throw new Error('memory reaction insertion marker missing');
-  memoryBlock = replaceOnce(memoryBlock, marker, `\n${indentFunction(memoryToggleReaction.toString().replace('memoryToggleReaction', 'toggleReaction'))}\n${marker}`, 'insert memory toggleReaction');
-}
-if (!memoryBlock.includes('    toggleReaction,')) {
-  const exportMarkers = ['    toggleDownvote,\n', '    completeWithProof,\n', '    toggleHabit,\n'];
-  const marker = exportMarkers.find((candidate) => memoryBlock.includes(candidate));
-  if (!marker) throw new Error('memory reaction export marker missing');
-  memoryBlock = replaceOnce(memoryBlock, marker, `${marker}    toggleReaction,\n`, 'export memory toggleReaction');
-}
-store = `${store.slice(0, memoryStart)}${memoryBlock}${store.slice(supabaseStart)}`;
-store = replaceIndentedFunction(store, '  async function toggleReaction(checkInId, emoji) {', supabaseToggleReaction.toString().replace('supabaseToggleReaction', 'toggleReaction'), 'replace Supabase toggleReaction');
+store = replaceIndentedFunction(
+  store,
+  '  async function toggleReaction(checkInId, emoji) {',
+  supabaseToggleReaction.toString().replace('supabaseToggleReaction', 'toggleReaction'),
+  'replace Supabase toggleReaction',
+);
 await write('src/store.js', store);
 
 let styles = await read('styles.css');
 if (!styles.includes('/* Touch-native app selection behavior. */')) {
-  styles += `\n/* Touch-native app selection behavior. */\n@media (pointer: coarse){#app,#app *{-webkit-user-select:none;user-select:none}#app input,#app textarea,#app [contenteditable="true"]{-webkit-user-select:text;user-select:text}}\n`;
+  styles += '\n/* Touch-native app selection behavior. */\n@media (pointer: coarse){#app,#app *{-webkit-user-select:none;user-select:none}#app input,#app textarea,#app [contenteditable="true"]{-webkit-user-select:text;user-select:text}}\n';
 }
 await write('styles.css', styles);
 
 let social = await read('social.css');
 if (!social.includes('/* Mobile proof hierarchy and sheet gestures. */')) {
-  social += `\n/* Mobile proof hierarchy and sheet gestures. */\n.people-growth-actions{display:grid;gap:var(--space-2);margin-top:var(--space-4)}\n.proof-card-header{margin-bottom:var(--space-3)}.proof-card-title{display:flex;align-items:center;gap:var(--space-2);min-width:0}.proof-card-title>span{flex:0 0 auto;font-size:1.2rem}.proof-card-title strong{min-width:0;overflow-wrap:anywhere;font-family:var(--font-display);font-size:var(--text-lg);font-weight:800;letter-spacing:-.025em;line-height:1.15}.proof-card-byline{display:flex;align-items:center;flex-wrap:wrap;gap:.28rem;margin-top:.32rem;color:var(--color-muted);font-size:var(--text-xs);line-height:1.35}.proof-card-author{min-height:0;border:0;padding:0;background:transparent;color:inherit;font-size:inherit;font-weight:750;text-align:left}.proof-card-note{margin:var(--space-3) 0 0;color:var(--color-muted);font-size:var(--text-sm);line-height:1.4}.proof-reply-preview{display:grid;gap:.38rem;margin-top:var(--space-3);padding-top:var(--space-3);border-top:var(--rule-hairline) solid var(--color-rule)}.proof-reply-row{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.4rem;align-items:baseline;font-size:var(--text-xs);line-height:1.4}.proof-reply-row>span{min-width:0;overflow-wrap:anywhere}.proof-reply-author,.proof-reply-all{min-height:0;border:0;padding:0;background:transparent;color:var(--color-ink);font-size:inherit;font-weight:800;text-align:left}.proof-reply-all{margin-top:.15rem;color:var(--color-muted);font-weight:700}.sheet-backdrop{--sheet-backdrop-alpha:.42;background:oklch(15% .02 258/var(--sheet-backdrop-alpha));transition:background var(--dur-base) var(--ease-out)}.sheet{transition:transform var(--dur-base) var(--ease-out)}.sheet.is-dragging,.sheet-backdrop.is-dragging{transition:none}.sheet.is-dragging{will-change:transform}.sheet-handle{touch-action:none}.sheet-head{touch-action:pan-x}@media(prefers-reduced-motion:reduce){.sheet,.sheet-backdrop{transition:none}}\n`;
+  social += '\n/* Mobile proof hierarchy and sheet gestures. */\n.people-growth-actions{display:grid;gap:var(--space-2);margin-top:var(--space-4)}\n.proof-card-header{margin-bottom:var(--space-3)}.proof-card-title{display:flex;align-items:center;gap:var(--space-2);min-width:0}.proof-card-title>span{flex:0 0 auto;font-size:1.2rem}.proof-card-title strong{min-width:0;overflow-wrap:anywhere;font-family:var(--font-display);font-size:var(--text-lg);font-weight:800;letter-spacing:-.025em;line-height:1.15}.proof-card-byline{display:flex;align-items:center;flex-wrap:wrap;gap:.28rem;margin-top:.32rem;color:var(--color-muted);font-size:var(--text-xs);line-height:1.35}.proof-card-author{min-height:0;border:0;padding:0;background:transparent;color:inherit;font-size:inherit;font-weight:750;text-align:left}.proof-card-note{margin:var(--space-3) 0 0;color:var(--color-muted);font-size:var(--text-sm);line-height:1.4}.proof-reply-preview{display:grid;gap:.38rem;margin-top:var(--space-3);padding-top:var(--space-3);border-top:var(--rule-hairline) solid var(--color-rule)}.proof-reply-row{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.4rem;align-items:baseline;font-size:var(--text-xs);line-height:1.4}.proof-reply-row>span{min-width:0;overflow-wrap:anywhere}.proof-reply-author,.proof-reply-all{min-height:0;border:0;padding:0;background:transparent;color:var(--color-ink);font-size:inherit;font-weight:800;text-align:left}.proof-reply-all{margin-top:.15rem;color:var(--color-muted);font-weight:700}.sheet-backdrop{--sheet-backdrop-alpha:.42;background:oklch(15% .02 258/var(--sheet-backdrop-alpha));transition:background var(--dur-base) var(--ease-out)}.sheet{transition:transform var(--dur-base) var(--ease-out)}.sheet.is-dragging,.sheet-backdrop.is-dragging{transition:none}.sheet.is-dragging{will-change:transform}.sheet-handle{touch-action:none}.sheet-head{touch-action:pan-x}@media(prefers-reduced-motion:reduce){.sheet,.sheet-backdrop{transition:none}}\n';
 }
 await write('social.css', social);
 
