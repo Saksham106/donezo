@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   MAX_PROOF_BYTES,
+  compressProofFile,
   createProofReviewState,
   formatProofFileSize,
   imageFileFromPasteData,
@@ -33,6 +34,47 @@ test('camera-roll proof types normalize iPhone aliases and missing MIME metadata
   assert.equal(proofMimeType({ type: 'application/octet-stream', name: 'saved-photo.jpeg' }), 'image/jpeg');
   assert.equal(proofMimeType({ type: '', name: 'not-a-photo.txt' }), null);
   assert.deepEqual(validateProofFile({ type: '', name: 'IMG_0042.HEIC', size: 2048 }), { valid: true, error: null });
+});
+
+test('proof compression leaves already-small photos untouched', async () => {
+  const file = new File(['small'], 'proof.png', { type: 'image/png' });
+  let decoded = false;
+  const result = await compressProofFile(file, {
+    decodeImage: async () => { decoded = true; },
+  });
+  assert.equal(result, file);
+  assert.equal(decoded, false);
+});
+
+test('oversized camera-roll photos are resized and converted to upload-safe JPEG', async () => {
+  const file = new File([new Uint8Array(MAX_PROOF_BYTES + 1)], 'IMG_0042.HEIC', { type: 'image/heic' });
+  const attempts = [];
+  let closed = false;
+  const result = await compressProofFile(file, {
+    decodeImage: async () => ({ width: 4032, height: 3024, close: () => { closed = true; } }),
+    encodeImage: async (_image, width, height, quality) => {
+      attempts.push({ width, height, quality });
+      return new Blob([new Uint8Array(256 * 1024)], { type: 'image/jpeg' });
+    },
+  });
+  assert.equal(result.type, 'image/jpeg');
+  assert.match(result.name, /IMG_0042-compressed\.jpg$/);
+  assert.ok(result.size <= MAX_PROOF_BYTES);
+  assert.ok(attempts[0].width <= 2048);
+  assert.ok(attempts[0].height <= 2048);
+  assert.equal(closed, true);
+  assert.deepEqual(validateProofFile(result), { valid: true, error: null });
+});
+
+test('proof compression fails clearly when a photo cannot fit the upload limit', async () => {
+  const file = new File([new Uint8Array(MAX_PROOF_BYTES + 1)], 'huge.jpg', { type: 'image/jpeg' });
+  await assert.rejects(
+    () => compressProofFile(file, {
+      decodeImage: async () => ({ width: 5000, height: 5000 }),
+      encodeImage: async () => new Blob([new Uint8Array(MAX_PROOF_BYTES + 1)], { type: 'image/jpeg' }),
+    }),
+    /Couldn’t shrink this photo under 4 MB/i,
+  );
 });
 
 test('proof storage accepts every client-supported camera-roll MIME type', () => {

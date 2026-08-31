@@ -65,7 +65,7 @@ test('habit sheet defaults to photo proof and cannot horizontally overflow', () 
   assert.match(social, /input\[type="time"\]/);
 });
 
-test('photo proof flow is review-first and mobile-camera aware', () => {
+test('photo proof flow is review-first, mobile-camera aware, and compression-race safe', () => {
   assert.match(html, /id="proof-input"[^>]*accept="image\/\*"[^>]*capture="environment"/);
   assert.match(app, /proofReviewSheet/);
   assert.match(app, /Submit proof/);
@@ -73,6 +73,8 @@ test('photo proof flow is review-first and mobile-camera aware', () => {
   assert.match(app, /Choose another/);
   assert.match(app, /URL\.createObjectURL/);
   assert.match(app, /URL\.revokeObjectURL/);
+  assert.match(app, /const habitId = proofHabit \|\| proofReview\?\.habitId/);
+  assert.match(app, /currentHabitId !== habitId/);
   assert.match(app, /completeWithProof/);
 });
 
@@ -81,6 +83,7 @@ test('photo proof can be pasted from the clipboard without automatic clipboard a
   assert.match(app, /readClipboardImage/);
   assert.match(app, /addEventListener\('paste'/);
   assert.match(app, /clipboardData/);
+  assert.match(app, /addEventListener\('paste',[\s\S]*prepareProofFile\(file\)/);
 });
 
 test('proof viewing stays inside the app and preserves context', () => {
@@ -104,7 +107,7 @@ test('social stylesheet and service worker additions ship in production', () => 
   assert.match(build, /social\.css/);
   assert.match(serviceWorker, /social\.css/);
   assert.match(serviceWorker, /addEventListener\('push'/);
-  assert.match(serviceWorker, /donezo-shell-v20/);
+  assert.match(serviceWorker, /donezo-shell-v21/);
 });
 
 test('shared circle freshness is wired without replacing the app architecture', () => {
@@ -136,7 +139,7 @@ test('invite flow is compact, shareable, explicit and preserved through auth', (
   assert.match(app, /pendingInvite/);
   assert.match(app, /data-dismiss-invite/);
   assert.match(app, /data-invite-open/);
-  assert.match(app, /data-copy-code/);
+  assert.doesNotMatch(app, /data-copy-code/);
   assert.match(app, /data-continue-app/);
   assert.match(app, /createdCircleInvite/);
   assert.match(app, /Join a squad/);

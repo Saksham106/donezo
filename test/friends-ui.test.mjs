@@ -57,6 +57,22 @@ test('People and profiles make friend requests and friend-of-friend adds obvious
   assert.match(app, /repo\.acceptFriend/);
 });
 
+test('Invite friends is one clear action instead of duplicate link controls', () => {
+  const sheet = slice('inviteSheet', 'peopleSheet');
+  assert.match(sheet, /invite-sheet-actions/);
+  assert.match(sheet, /data-share-invite/);
+  assert.match(sheet, /fresh private link every time/i);
+  assert.doesNotMatch(sheet, /data-create-friend-invite|Create invite link|data-copy-code|raw-code-row/);
+  assert.match(social, /\.invite-sheet-actions\{[^}]*gap:/);
+});
+
+test('friend connections sit near the top of profiles and open known friends', () => {
+  const profile = slice('friendProfileSheet', 'recoverySheet');
+  assert.ok(profile.indexOf('${connections}') < profile.indexOf('profile-daily'));
+  assert.match(profile, /friend-connection-profile/);
+  assert.match(profile, /data-friend-profile/);
+});
+
 test('every League row opens a profile and shows timezone-correct daily accountability', () => {
   const league = slice('leagueScreen', 'challengeInfoSheet');
   const profile = slice('friendProfileSheet', 'recoverySheet');
