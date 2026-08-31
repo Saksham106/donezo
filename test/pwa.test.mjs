@@ -161,7 +161,7 @@ test('ships the controller entry point and a versioned network-first shell worke
   assert.match(html, /name="mobile-web-app-capable" content="yes"/);
   assert.match(html, /<script type="module" src="\/pwa\.js"><\/script>/);
   assert.match(build, /cp\('src\/pwa\.js', 'dist\/pwa\.js'\)/);
-  assert.match(worker, /donezo-shell-v21/);
+  assert.match(worker, /donezo-shell-v22/);
   assert.match(worker, /SKIP_WAITING/);
   assert.match(worker, /request\.mode === 'navigate'/);
   assert.match(worker, /cache:\s*'no-store'/);
