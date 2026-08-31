@@ -930,13 +930,13 @@ export function createSupabaseRepository(client, user) {
     if (!['👏', '🔥', '💪', '😂'].includes(emoji)) throw new Error('Choose a supported reaction');
     const checkIn = state.checkIns.find((item) => item.id === checkInId);
     if (!checkIn) throw new Error('That update is no longer available');
-    const existing = state.reactions.find((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji === emoji);
-    if (existing) {
-      const { error } = await client.from('reactions').delete().eq('id', existing.id).eq('user_id', user.id);
-      if (error) throw appError(error, 'Could not remove reaction');
-    } else {
-      const { error } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji });
-      if (error) throw appError(error, 'Could not react');
+    const positiveReactions = state.reactions.filter((reaction) => reaction.checkInId === checkInId && reaction.userId === user.id && reaction.emoji !== '👎');
+    const selected = positiveReactions.length === 1 && positiveReactions[0].emoji === emoji;
+    const { error: deleteError } = await client.from('reactions').delete().eq('check_in_id', checkInId).eq('user_id', user.id).neq('emoji', '👎');
+    if (deleteError) throw appError(deleteError, 'Could not update reaction');
+    if (!selected) {
+      const { error: insertError } = await client.from('reactions').insert({ check_in_id: checkInId, user_id: user.id, emoji });
+      if (insertError) throw appError(insertError, 'Could not react');
     }
     return load();
   }
