@@ -26,6 +26,7 @@ function accountabilityCommitments(memberId, habits, checkIns, date) {
       occurrence = getScheduleOccurrence({
         frequency: habit.scheduleFrequency || habit.frequency || 'daily',
         weekdays: habit.scheduleWeekdays || [],
+        weeklyTargetDays: habit.weeklyTargetDays ?? 1,
         targetQuantity: habit.targetQuantity ?? 1,
         targetUnit: habit.targetUnit || 'count',
         dueTime: habit.targetTime || null,
@@ -175,8 +176,46 @@ function inclusiveDays(startString, endString) {
   return days;
 }
 
+function isPausedDate(pauseWindows, date) {
+  return (pauseWindows || []).some((pause) => {
+    const start = pause.startDate ?? pause.start_date;
+    const end = pause.endDate ?? pause.end_date ?? start;
+    return start && end && start <= date && date <= end;
+  });
+}
+
+function flexibleActivationDate(effectiveFrom, versionNumber = 1) {
+  const weekStart = mondayOf(effectiveFrom);
+  if (Number(versionNumber) > 1 && effectiveFrom === weekStart) return effectiveFrom;
+  return shiftLocalDate(weekStart, 7);
+}
+
+function flexibleSegmentsForHabit(habit, createdDate) {
+  const versions = habit.scheduleVersions || habit.versions || [];
+  if (versions.length) {
+    return versions
+      .filter((version) => (version.frequency || version.scheduleFrequency || version.schedule_frequency) === 'times_per_week')
+      .map((version) => ({
+        version: Number(version.version || 1),
+        effectiveFrom: version.effectiveFrom ?? version.effective_from ?? createdDate,
+        effectiveUntil: version.effectiveUntil ?? version.effective_until ?? null,
+        weeklyTargetDays: Number(version.weeklyTargetDays ?? version.weekly_target_days ?? habit.weeklyTargetDays ?? 1),
+        targetQuantity: Number(version.targetQuantity ?? version.target_quantity ?? habit.targetQuantity ?? 1),
+      }));
+  }
+  if ((habit.scheduleFrequency || habit.frequency) !== 'times_per_week') return [];
+  return [{
+    version: 1,
+    effectiveFrom: createdDate,
+    effectiveUntil: null,
+    weeklyTargetDays: Number(habit.weeklyTargetDays ?? 1),
+    targetQuantity: Number(habit.targetQuantity ?? 1),
+  }];
+}
+
 function weeklyCommitmentLedger(memberId, habits, checkIns, todayString) {
   const weekStart = mondayOf(todayString);
+  const weekEnd = shiftLocalDate(weekStart, 6);
   const eligibleHabits = habits.filter((habit) => (
     habit.ownerId === memberId
     && (habit.active !== false || Boolean(habit.archivedDate))
@@ -189,6 +228,7 @@ function weeklyCommitmentLedger(memberId, habits, checkIns, todayString) {
   }
   const days = new Map();
   const completedDaysByHabit = new Map();
+  let flexibleRemaining = 0;
 
   for (const habit of eligibleHabits) {
     const createdDate = habit.createdDate
@@ -203,6 +243,7 @@ function weeklyCommitmentLedger(memberId, habits, checkIns, todayString) {
         occurrence = getScheduleOccurrence({
           frequency: habit.scheduleFrequency || habit.frequency || 'daily',
           weekdays: habit.scheduleWeekdays || [],
+          weeklyTargetDays: habit.weeklyTargetDays ?? 1,
           targetQuantity: habit.targetQuantity ?? 1,
           targetUnit: habit.targetUnit || 'count',
           dueTime: habit.targetTime || null,
@@ -227,16 +268,42 @@ function weeklyCommitmentLedger(memberId, habits, checkIns, todayString) {
         completedDaysByHabit.get(habit.id).add(day);
       }
     }
+
+    for (const segment of flexibleSegmentsForHabit(habit, createdDate)) {
+      if (!segment.effectiveFrom) continue;
+      const activationDate = flexibleActivationDate(segment.effectiveFrom, segment.version);
+      if (weekStart < activationDate) continue;
+      const eligibleDates = inclusiveDays(weekStart, weekEnd).filter((day) => (
+        day >= activationDate
+        && day >= segment.effectiveFrom
+        && (!segment.effectiveUntil || day < segment.effectiveUntil)
+        && (!habit.archivedDate || day <= habit.archivedDate)
+        && !isPausedDate(habit.pauseWindows, day)
+      ));
+      const effectiveTarget = Math.min(Math.max(0, segment.weeklyTargetDays), eligibleDates.length);
+      if (!effectiveTarget) continue;
+      const completedDates = eligibleDates
+        .filter((day) => day <= todayString)
+        .filter((day) => (completedQuantities.get(`${habit.id}:${day}`) || 0) >= segment.targetQuantity)
+        .slice(0, effectiveTarget);
+      flexibleRemaining += effectiveTarget - completedDates.length;
+      for (const day of completedDates) {
+        if (!days.has(day)) days.set(day, []);
+        days.get(day).push({ habitId: habit.id, complete: true, mature: createdDate < weekStart, flexible: true });
+        if (!completedDaysByHabit.has(habit.id)) completedDaysByHabit.set(habit.id, new Set());
+        completedDaysByHabit.get(habit.id).add(day);
+      }
+    }
   }
 
-  return { weekStart, days, completedDaysByHabit };
+  return { weekStart, days, completedDaysByHabit, flexibleRemaining };
 }
 
 export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
-  const { days } = weeklyCommitmentLedger(memberId, habits, checkIns, todayString);
+  const { days, flexibleRemaining } = weeklyCommitmentLedger(memberId, habits, checkIns, todayString);
   const occurrences = [...days.values()].flat();
   const completed = occurrences.filter((item) => item.complete).length;
-  const possible = occurrences.length;
+  const possible = occurrences.length + flexibleRemaining;
   return {
     completed,
     possible,
@@ -245,12 +312,12 @@ export function weeklyCompletionScore(memberId, habits, checkIns, todayString) {
 }
 
 export function weeklyLeaguePoints(memberId, habits, checkIns, todayString) {
-  const { days, completedDaysByHabit } = weeklyCommitmentLedger(memberId, habits, checkIns, todayString);
+  const { days, completedDaysByHabit, flexibleRemaining } = weeklyCommitmentLedger(memberId, habits, checkIns, todayString);
   const completionWeights = [10, 10, 10, 5, 2];
   let completionPoints = 0;
   let cleanDayBonus = 0;
   let completed = 0;
-  let possible = 0;
+  let possible = flexibleRemaining;
 
   for (const occurrences of days.values()) {
     const completedToday = occurrences.filter((item) => item.complete);
