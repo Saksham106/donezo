@@ -1,0 +1,39 @@
+name: Apply fluid performance implementation
+
+on:
+  push:
+    branches:
+      - feat/fluid-performance-invite-ux-2026-08-31
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message != 'feat: implement fluid performance pass'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/run-fluid-performance.mjs
+      - run: npm test
+      - run: npm run check
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_only
+      - name: Commit implementation
+        run: |
+          git config user.name "Saksham Goel"
+          git config user.email "67731724+Saksham106@users.noreply.github.com"
+          git add src/app.js src/store.js social.css sw.js test
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "feat: implement fluid performance pass"
+          git push
