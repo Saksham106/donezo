@@ -107,9 +107,12 @@ let pwaApplying = false;
 let mutationStatus = 'idle';
 let retryMutation = null;
 let networkBootLoading = false;
+let authoritativeReady = false;
 let reconciliationTimer = null;
 let commentRetryDraft = null;
-let inviteShareBusy = false;
+let prefetchedFriendInvite = null;
+let friendInvitePromise = null;
+let friendInvitePreparing = false;
 const optimisticPatches = new Map();
 const screenScroll = { today: 0, friends: 0, squad: 0, league: 0, me: 0 };
 
@@ -235,6 +238,10 @@ function scheduleStateCacheWrite(activeRepo = repo) {
 }
 
 async function runOptimisticMutation({ key, apply, rollback, persist, errorMessage = 'Could not save that change', onSuccess = null }) {
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return undefined;
+  }
   if (!online) {
     notify('You are offline. Nothing was saved yet.', 3200);
     return undefined;
@@ -967,7 +974,7 @@ function peopleSheet() {
     return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
   }).join('');
   const requests = incoming.length ? `<section class="friend-requests"><div class="section-head first"><h2>Friend requests</h2><span>${incoming.length}</span></div>${requestRows}</section>` : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people>${icon('userPlus')} Invite friends</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people ${friendInvitePreparing ? 'disabled aria-busy="true"' : ''}>${icon('userPlus')} ${friendInvitePreparing ? 'Preparing…' : 'Invite friends'}</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
 }
 
 function proofRejectSheet() {
@@ -1183,6 +1190,10 @@ async function handlePasteProof() {
 async function handleProofSubmit() {
   const review = proofReview;
   if (!review || review.status === 'uploading' || busy) return;
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   await refreshCoordinator?.waitForIdle();
   if (busy || proofReview !== review) return;
   const habit = getState().habits.find((item) => item.id === review.habitId);
@@ -1402,7 +1413,7 @@ function render() {
   app.querySelectorAll('[data-wrapped-prev]').forEach((element) => { element.onclick = () => { wrappedIndex = Math.max(0, wrappedIndex - 1); render(); }; });
   app.querySelectorAll('[data-wrapped-close]').forEach((element) => { element.onclick = () => { wrappedOpen = false; wrappedIndex = 0; render(); }; });
   app.querySelectorAll('[data-squad-feed]').forEach((element) => { element.onclick = () => { squadFeed = element.dataset.squadFeed; localStorage.setItem('donezo.squadFeed', squadFeed); feedLimit = 12; render(); }; });
-  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; render(); }; });
+  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; void primeFriendInvite(); render(); }; });
   app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = handleShareInvite; });
   app.querySelectorAll('[data-add-friend-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-add-friend-open]').forEach((element) => { element.onclick = () => { inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
@@ -1694,6 +1705,7 @@ function hasUnsavedDraft() {
 async function refreshRepositoryData(activeRepo) {
   await activeRepo.load();
   if (!session || repo !== activeRepo) return;
+  authoritativeReady = true;
   reapplyOptimisticPatches();
   lastRefreshAt = new Date().toISOString();
   if (!hasUnsavedDraft()) renderPreservingScroll();
@@ -1754,8 +1766,8 @@ async function handleManualRefresh() {
 }
 
 async function runMutation(action, successMessage, { preserveDraft = false } = {}) {
-  if (busy || networkBootLoading) {
-    if (networkBootLoading) notify('Finishing the latest sync…', 1800);
+  if (busy || networkBootLoading || !authoritativeReady) {
+    if (networkBootLoading || !authoritativeReady) notify('Refreshing your latest data…', 2200);
     return undefined;
   }
   if (!online) {
@@ -1854,6 +1866,10 @@ async function handleCreateCircle(event) {
 
 async function handleJoinCircle(event) {
   event.preventDefault();
+  if (session && (networkBootLoading || !authoritativeReady)) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   if (busy) return;
   const form = new FormData(event.currentTarget);
   const validation = validateInviteCode(String(form.get('code')));
@@ -2126,6 +2142,10 @@ const reactionCoordinator = createLatestIntentCoordinator({
 });
 
 async function handleReaction(checkInId, emoji) {
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   if (!online) {
     notify('You are offline. Nothing was saved yet.', 3200);
     return;
@@ -2153,6 +2173,10 @@ async function handleCommentSubmit(event) {
   const checkInId = commentCheckInId;
   const form = new FormData(event.currentTarget);
   const body = String(form.get('body') || '').trim();
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   if (!checkInId || !body || !online) {
     if (!online) notify('You are offline. Nothing was saved yet.', 3200);
     return;
@@ -2168,6 +2192,7 @@ async function handleCommentSubmit(event) {
     const saved = await repo.addComment(checkInId, body);
     repo.replaceOptimisticComment(temp.id, saved);
     optimisticPatches.delete(key);
+    renderPreservingScroll();
     scheduleReconciliation();
     notify('Reply sent');
   } catch (error) {
@@ -2181,8 +2206,11 @@ async function handleCommentSubmit(event) {
 
 async function handleUndoCommentDelete(comment) {
   if (!comment) return;
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   commentRetryDraft = { checkInId: comment.checkInId, body: comment.body };
-  const fakeEvent = { preventDefault() {}, currentTarget: { entries: undefined } };
   const restored = repo.applyOptimisticComment(comment.checkInId, comment.body, comment);
   try {
     const saved = await repo.addComment(comment.checkInId, comment.body);
@@ -2196,11 +2224,14 @@ async function handleUndoCommentDelete(comment) {
     renderPreservingScroll();
     notify(readableError(error), 3600);
   }
-  void fakeEvent;
 }
 
 async function handleDeleteComment(commentId) {
   const comment = (getState().comments || []).find((item) => item.id === commentId);
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
   if (!comment || !online) return;
   const key = `comment:delete:${commentId}`;
   if (optimisticPatches.has(key)) return;
@@ -2453,40 +2484,43 @@ function activeInviteUrl() {
     || '';
 }
 
-async function handleCreateFriendInvite() {
-  if (typeof repo?.createFriendInvite !== 'function' || inviteShareBusy) return null;
-  inviteShareBusy = true;
-  try {
-    return await repo.createFriendInvite();
-  } catch (error) {
-    notify(readableError(error), 3600);
-    return null;
-  } finally {
-    inviteShareBusy = false;
-  }
+function inviteCodeFrom(value) {
+  return typeof value === 'string' ? value : value?.code || value?.inviteCode || '';
 }
 
-async function handleShareInvite() {
-  const directFriendFlow = typeof repo?.createFriendInvite === 'function';
-  let code = '';
-  let url = '';
-  if (directFriendFlow) {
-    const invite = await handleCreateFriendInvite();
-    if (!invite) return;
-    code = typeof invite === 'string' ? invite : invite.code || invite.inviteCode || '';
-    if (!validateInviteCode(code).valid) {
-      notify('Invite code is not ready yet. Try again in a sec.', 3200);
-      return;
-    }
-    url = (typeof invite === 'object' && invite?.url) || buildInviteLink(window.location.href, code);
-  } else {
-    code = activeInviteCode();
-    if (!validateInviteCode(code).valid) {
-      notify('Invite code is not ready yet. Try again in a sec.', 3200);
-      return;
-    }
-    url = activeInviteUrl() || buildInviteLink(window.location.href, code);
+function inviteUrlFrom(value, code) {
+  return (typeof value === 'object' && value?.url) || buildInviteLink(window.location.href, code);
+}
+
+function primeFriendInvite() {
+  if (typeof repo?.createFriendInvite !== 'function' || !session || !online || networkBootLoading || !authoritativeReady) return Promise.resolve(null);
+  if (prefetchedFriendInvite) return Promise.resolve(prefetchedFriendInvite);
+  if (friendInvitePromise) return friendInvitePromise;
+  friendInvitePreparing = true;
+  friendInvitePromise = repo.createFriendInvite()
+    .then((invite) => {
+      prefetchedFriendInvite = invite;
+      return invite;
+    })
+    .catch((error) => {
+      notify(readableError(error), 3600);
+      return null;
+    })
+    .finally(() => {
+      friendInvitePreparing = false;
+      friendInvitePromise = null;
+      if (peopleSheetOpen) renderPreservingScroll();
+    });
+  return friendInvitePromise;
+}
+
+async function sharePreparedInvite(invite) {
+  const code = inviteCodeFrom(invite);
+  if (!validateInviteCode(code).valid) {
+    notify('Invite code is not ready yet. Try again in a sec.', 3200);
+    return false;
   }
+  const url = inviteUrlFrom(invite, code);
   const payload = {
     title: 'Join me on Donezo',
     text: 'Join me on Donezo. We’re trying to actually lock in.',
@@ -2495,17 +2529,47 @@ async function handleShareInvite() {
   if (typeof navigator.share === 'function') {
     try {
       await navigator.share(payload);
-      return;
+      if (invite === prefetchedFriendInvite) {
+        prefetchedFriendInvite = null;
+        if (peopleSheetOpen) void primeFriendInvite();
+      }
+      return true;
     } catch (error) {
-      if (error?.name === 'AbortError') return;
+      if (error?.name === 'AbortError') return false;
     }
   }
   try {
     await navigator.clipboard.writeText(url);
     notify('Invite link copied');
+    if (invite === prefetchedFriendInvite) {
+      prefetchedFriendInvite = null;
+      if (peopleSheetOpen) void primeFriendInvite();
+    }
+    return true;
   } catch {
     notify(url, 6000);
+    return false;
   }
+}
+
+async function handleShareInvite() {
+  const directFriendFlow = typeof repo?.createFriendInvite === 'function';
+  if (directFriendFlow) {
+    const invite = prefetchedFriendInvite || createdFriendInvite;
+    if (!invite) {
+      if (networkBootLoading || !authoritativeReady) notify('Refreshing your latest data…', 2200);
+      else if (friendInvitePreparing) notify('Preparing a fresh invite…', 1800);
+      else {
+        notify('Preparing a fresh invite…', 1800);
+        void primeFriendInvite();
+      }
+      return;
+    }
+    await sharePreparedInvite(invite);
+    return;
+  }
+  const code = activeInviteCode();
+  await sharePreparedInvite({ code, url: activeInviteUrl() || buildInviteLink(window.location.href, code) });
 }
 
 function clearPendingInvite() {
@@ -2534,6 +2598,10 @@ function bindInviteActions() {
 async function handleSignOut() {
   const userId = session?.user?.id;
   bootGeneration += 1;
+  authoritativeReady = false;
+  prefetchedFriendInvite = null;
+  friendInvitePromise = null;
+  friendInvitePreparing = false;
   stopRefreshCoordinator();
   clearProofReview();
   proofHabit = null;
@@ -2587,6 +2655,10 @@ async function boot(nextSession) {
   session = nextSession;
   online = navigator.onLine !== false;
   networkBootLoading = false;
+  authoritativeReady = false;
+  prefetchedFriendInvite = null;
+  friendInvitePromise = null;
+  friendInvitePreparing = false;
   if (!session) {
     repo = null;
     lastRefreshAt = null;
@@ -2613,6 +2685,7 @@ async function boot(nextSession) {
     await activeRepo.load((!initialNavigationHandled && initialNavigation.circleId) || localStorage.getItem('donezo.activeSquadId') || undefined);
     if (generation !== bootGeneration || nextSession?.user?.id !== session?.user?.id) return;
     networkBootLoading = false;
+    authoritativeReady = true;
     reapplyOptimisticPatches();
     lastRefreshAt = new Date().toISOString();
     render();
