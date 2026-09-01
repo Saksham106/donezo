@@ -1,0 +1,44 @@
+name: Bump PWA shell v26
+on:
+  push:
+    paths:
+      - '.github/workflows/bump-pwa-v26.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/flexible-weekly-habits-dark-mode-2026-08-31
+      - name: Bump shell version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          paths = [Path('sw.js'), *Path('test').glob('*.test.mjs')]
+          changed = []
+          for path in paths:
+            text = path.read_text()
+            if 'donezo-shell-v25' not in text:
+              continue
+            path.write_text(text.replace('donezo-shell-v25', 'donezo-shell-v26'))
+            changed.append(str(path))
+          if 'sw.js' not in changed:
+            raise SystemExit('service worker version anchor missing')
+          print('\n'.join(changed))
+          PY
+      - name: Verify
+        run: |
+          npm ci
+          npm test
+          npm run check
+          VITE_SUPABASE_URL=https://example.supabase.co VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_only npm run build
+          git diff --check
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add sw.js test
+          git commit -m 'chore: bump PWA shell to v26'
+          git push origin HEAD:feat/flexible-weekly-habits-dark-mode-2026-08-31
