@@ -57,3 +57,9 @@ test('repository schedule persistence sends weeklyTargetDays to normalizeSchedul
   assert.match(store, /weeklyTargetDays:\s*input\.weeklyTargetDays\s*\?\?\s*1/);
   assert.match(store, /p_weekly_target_days:\s*schedule\.weeklyTargetDays/);
 });
+
+test('editing only the flexible weekly day target creates a new schedule version', () => {
+  const updateHabit = store.slice(store.indexOf('async function updateHabit('), store.indexOf('async function archiveHabit('));
+  assert.match(updateHabit, /Number\(input\.weeklyTargetDays\s*\?\?\s*1\)\s*!==\s*Number\(habit\.weeklyTargetDays\s*\?\?\s*1\)/);
+  assert.match(updateHabit, /if \(scheduleChanged\) await saveHabitSchedule\(habitId, input\)/);
+});
