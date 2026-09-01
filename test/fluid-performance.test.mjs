@@ -235,9 +235,9 @@ test('proof viewer reuses a cached signed thumbnail URL before signing again', (
   assert.ok(viewer.indexOf('proofThumbnailUrls.get(') < viewer.indexOf('repo.getProofUrl'));
 });
 
-test('new performance modules are syntax-checked and shell cache advances to v26', () => {
+test('new performance modules are syntax-checked and shell cache advances to v27', () => {
   assert.match(pkg.scripts.check, /src\/optimistic\.js/);
   assert.match(pkg.scripts.check, /src\/state-cache\.js/);
-  assert.match(sw, /donezo-shell-v26/);
+  assert.match(sw, /donezo-shell-v27/);
   assert.doesNotMatch(sw, /donezo-shell-v25/);
 });
