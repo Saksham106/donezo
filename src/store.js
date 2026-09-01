@@ -988,6 +988,7 @@ export function createSupabaseRepository(client, user) {
     const scheduleChanged = Boolean(input.scheduleFrequency) && (
       input.scheduleFrequency !== (habit.scheduleFrequency || habit.frequency || 'daily')
       || (input.scheduleWeekdays || []).join(',') !== (habit.scheduleWeekdays || []).join(',')
+      || Number(input.weeklyTargetDays ?? 1) !== Number(habit.weeklyTargetDays ?? 1)
       || Number(input.targetQuantity ?? 1) !== Number(habit.targetQuantity ?? 1)
       || String(input.targetUnit || 'count').trim() !== String(habit.targetUnit || 'count')
       || String(input.targetTime || '') !== String(habit.targetTime || '')
