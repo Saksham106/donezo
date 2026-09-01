@@ -1,0 +1,72 @@
+name: Patch Today undo confirmation
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-today-undo-notifications.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/today-undo-confirm-notifications-2026-08-31
+      - name: Patch app behavior
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/app.js')
+          s = p.read_text()
+
+          old = "let proofRejectCheckInId = null;\nlet selectedEmoji = '⚡';"
+          new = "let proofRejectCheckInId = null;\nlet checkInUndoRequest = null;\nlet selectedEmoji = '⚡';"
+          if old not in s: raise SystemExit('state anchor missing')
+          s = s.replace(old, new, 1)
+
+          anchor = "function proofRejectSheet() {\n"
+          sheet = '''function checkInUndoSheet() {\n  if (!checkInUndoRequest) return '';\n  const habit = getState()?.habits.find((item) => item.id === checkInUndoRequest.habitId);\n  if (!habit) return '';\n  return `<div class=\"sheet-backdrop checkin-undo-layer\"><section class=\"sheet compact-sheet checkin-undo-sheet\" role=\"alertdialog\" aria-modal=\"true\" aria-label=\"Confirm check-in undo\" data-sheet><div class=\"sheet-handle\"></div><div class=\"sheet-head\"><div><p class=\"eyebrow\">CHECK-IN</p><h2>Undo this check-in?</h2></div><button class=\"icon-btn\" type=\"button\" data-cancel-check-in-undo aria-label=\"Keep check-in\">×</button></div><p class=\"sheet-copy\">This removes today’s completion for ${esc(habit.title)}. You can check it off again anytime.</p><div class=\"confirm-actions\"><button class=\"btn\" type=\"button\" data-cancel-check-in-undo>Keep it done</button><button class=\"btn danger-soft\" type=\"button\" data-confirm-check-in-undo>Undo check-in</button></div></section></div>`;\n}\n\n'''
+          if anchor not in s: raise SystemExit('sheet anchor missing')
+          s = s.replace(anchor, sheet + anchor, 1)
+
+          old = "${addFriendSheet()}${proofRejectSheet()}${commentSheet()}"
+          new = "${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}"
+          if old not in s: raise SystemExit('render sheet anchor missing')
+          s = s.replace(old, new, 1)
+
+          anchor = "async function handleHabit(id) {\n"
+          request = '''function requestCheckInUndo(habit, date = today()) {\n  if (!habit?.id) return;\n  checkInUndoRequest = { habitId: habit.id, date };\n  renderPreservingScroll();\n}\n\n'''
+          if anchor not in s: raise SystemExit('handleHabit anchor missing')
+          s = s.replace(anchor, request + anchor, 1)
+
+          old = '''  if (current && !current.invalid) {\n    if (habit.proofMode === 'photo' || current.proofPath) {\n      await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);\n      return;\n    }\n    await handleSimpleCheckIn(habit, checkInDate, false, `${habit.title} unchecked`);\n    return;\n  }'''
+          new = '''  if (current && !current.invalid) {\n    requestCheckInUndo(habit, checkInDate);\n    return;\n  }'''
+          if old not in s: raise SystemExit('completed habit anchor missing')
+          s = s.replace(old, new, 1)
+
+          old = "  app.querySelector('[data-confirm-reject]')?.addEventListener('click', () => { const id = proofRejectCheckInId; proofRejectCheckInId = null; handleDownvote(id); });"
+          new = "  app.querySelector('[data-confirm-check-in-undo]')?.addEventListener('click', () => { const request = checkInUndoRequest; checkInUndoRequest = null; if (request) handleUndoCheckIn(request.habitId, request.date); });\n  app.querySelectorAll('[data-cancel-check-in-undo]').forEach((element) => { element.onclick = () => { checkInUndoRequest = null; render(); }; });\n" + old
+          if old not in s: raise SystemExit('confirmation binding anchor missing')
+          s = s.replace(old, new, 1)
+
+          old = "    startRefreshCoordinator(activeRepo);"
+          new = "    startRefreshCoordinator(activeRepo);\n    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {\n      void syncPushSubscription(activeRepo).catch(() => {});\n    }"
+          if old not in s: raise SystemExit('boot sync anchor missing')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+      - name: Verify
+        run: |
+          npm ci
+          npm test
+          npm run check
+          VITE_SUPABASE_URL=https://example.supabase.co VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_only npm run build
+          git diff --check
+      - name: Commit app patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/app.js
+          git commit -m 'feat: confirm Today check-in undo and refresh push subscriptions'
+          git push origin HEAD:fix/today-undo-confirm-notifications-2026-08-31
