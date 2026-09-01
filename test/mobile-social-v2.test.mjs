@@ -49,6 +49,18 @@ test('League puts standings first and uses direct compact social actions', () =>
   assert.doesNotMatch(source, /empty-challenge/);
 });
 
+test('Today offers a dismissible notification opt-in card without auto-prompting', () => {
+  assert.match(app, /function notificationOptInBanner\(\)/);
+  assert.match(app, /donezo\.notificationPromptDismissed/);
+  assert.match(app, /data-enable-notifications/);
+  assert.match(app, /data-dismiss-notification-prompt/);
+  assert.match(app, /tab !== 'today'/);
+  assert.match(app, /shouldOfferNotificationPrompt/);
+  assert.match(app, /data-enable-notifications[^\n]+handleNotifications/);
+  assert.match(social, /\.notification-opt-in-banner\{/);
+  assert.match(social, /\.notification-opt-in-banner\.stacked\{/);
+});
+
 test('mobile social stylesheet is complete and not accidentally swallowed by a malformed rule', () => {
   assert.doesNotMatch(social, /\[truncated\]/);
   assert.match(social, /\.activation-card\{[^}]*padding:/s);
