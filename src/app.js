@@ -26,6 +26,7 @@ import {
   getNotificationCapability,
   parseNotificationDeepLink,
   sendTestNotification,
+  shouldOfferNotificationPrompt,
   syncPushSubscription,
 } from './notifications.js';
 
@@ -42,6 +43,7 @@ const legacySquadSwitcherAttribute = 'data-squad-switcher';
 // Persisted squad-era deep links and fixtures remain parseable, but are not rendered in Friends.
 const legacyUiMarkers = ['Join a squad', 'data-settings-view="squads"', "scheduleFrequency.value = 'selected_weekdays'", "else if (step === 4) setActiveTab('squad')"];
 const THEME_KEY = 'donezo.theme';
+const NOTIFICATION_PROMPT_DISMISSED_KEY = 'donezo.notificationPromptDismissed';
 const requestedTab = initialNavigation.tab === 'squad'
   ? 'friends'
   : initialNavigation.tab || localStorage.getItem('donezo.activeTab') || 'today';
@@ -350,6 +352,13 @@ function pwaUpdateBanner() {
   const draftOpen = hasUnsavedDraft();
   const detail = draftOpen ? 'Finish or close what you are editing first.' : 'A fresh version is ready.';
   return `<aside class="pwa-update-banner" role="status"><div><strong>${pwaApplying ? 'Updating Donezo…' : 'Update ready'}</strong><small>${esc(detail)}</small></div><button class="btn small-btn" type="button" data-apply-update ${pwaApplying || draftOpen ? 'disabled' : ''}>${draftOpen ? 'Not yet' : pwaApplying ? 'Updating…' : 'Update'}</button></aside>`;
+}
+
+function notificationOptInBanner() {
+  const capability = getNotificationCapability(window);
+  const dismissed = localStorage.getItem(NOTIFICATION_PROMPT_DISMISSED_KEY) === '1';
+  if (tab !== 'today' || !shouldOfferNotificationPrompt(capability, dismissed)) return '';
+  return `<aside class="notification-opt-in-banner ${pwaUpdateAvailable ? 'stacked' : ''}" role="status"><div><strong>Get the useful nudges.</strong><small>Habit reminders and friend updates can reach you even when Donezo is closed.</small></div><div class="notification-opt-in-actions"><button class="text-btn compact" type="button" data-dismiss-notification-prompt>Dismiss</button><button class="btn primary small-btn" type="button" data-enable-notifications>Enable</button></div></aside>`;
 }
 
 function nav() {
@@ -1500,7 +1509,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;
@@ -1567,6 +1576,8 @@ function render() {
   app.querySelectorAll('[data-load-more]').forEach((element) => { element.onclick = () => { feedLimit += 12; renderPreservingScroll(); }; });
   app.querySelectorAll('[data-share-recap]').forEach((element) => { element.onclick = handleShareRecap; });
   app.querySelectorAll('[data-apply-update]').forEach((element) => { element.onclick = handleApplyPwaUpdate; });
+  app.querySelectorAll('[data-enable-notifications]').forEach((element) => { element.onclick = handleNotifications; });
+  app.querySelectorAll('[data-dismiss-notification-prompt]').forEach((element) => { element.onclick = () => { localStorage.setItem(NOTIFICATION_PROMPT_DISMISSED_KEY, '1'); render(); }; });
   app.querySelectorAll('[data-activation-next]').forEach((element) => { element.onclick = () => handleActivationNext(Number(element.dataset.activationNext)); });
   app.querySelectorAll('[data-nudge]').forEach((element) => { element.onclick = () => { nudgeComposerUserId = element.dataset.nudge; render(); }; });
   app.querySelectorAll('[data-proof]').forEach((element) => { element.onclick = () => handleProofView(element.dataset.proof); });

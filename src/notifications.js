@@ -227,6 +227,10 @@ export function getNotificationCapability(env = globalThis) {
   return { supported: true, permission: NotificationApi.permission || 'default' };
 }
 
+export function shouldOfferNotificationPrompt(capability, dismissed = false) {
+  return Boolean(capability?.supported && capability.permission === 'default' && !dismissed);
+}
+
 export function urlBase64ToUint8Array(value) {
   const padding = '='.repeat((4 - (value.length % 4)) % 4);
   const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as notificationModule from '../src/notifications.js';
 import {
   buildNotificationEvent,
   evaluateNotificationPreferences,
@@ -32,6 +33,16 @@ test('reports unsupported when Notification or service workers are unavailable',
 test('reports current permission when browser APIs exist', () => {
   const env = { Notification: { permission: 'granted' }, navigator: { serviceWorker: {} } };
   assert.deepEqual(getNotificationCapability(env), { supported: true, permission: 'granted' });
+});
+
+test('notification opt-in prompt is offered only before a permission decision and before dismissal', () => {
+  const shouldOffer = notificationModule.shouldOfferNotificationPrompt;
+  assert.equal(typeof shouldOffer, 'function');
+  assert.equal(shouldOffer({ supported: true, permission: 'default' }, false), true);
+  assert.equal(shouldOffer({ supported: true, permission: 'default' }, true), false);
+  assert.equal(shouldOffer({ supported: true, permission: 'granted' }, false), false);
+  assert.equal(shouldOffer({ supported: true, permission: 'denied' }, false), false);
+  assert.equal(shouldOffer({ supported: false, permission: 'unsupported' }, false), false);
 });
 
 test('urlBase64ToUint8Array decodes VAPID application server keys', () => {
