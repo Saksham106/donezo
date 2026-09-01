@@ -5,7 +5,7 @@ import { createECDH, createHash } from 'node:crypto';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'content-type',
+  'Access-Control-Allow-Headers': 'content-type, x-donezo-worker-token',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json',
 };
@@ -51,8 +51,9 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  // Deliberately do not accept recipient/title/body/payload request fields.
-  // This endpoint can only wake a bounded drain of server-owned queue rows.
+  // The request cannot select a recipient or provide notification content. It
+  // may only wake the server-owned queue, and the wake itself must carry the
+  // per-project random token generated into Supabase Vault.
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceRoleKey) return json({ error: 'Server configuration missing' }, 500);
@@ -60,6 +61,13 @@ Deno.serve(async (req: Request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  const wakeToken = req.headers.get('x-donezo-worker-token');
+  if (!wakeToken) return json({ error: 'Unauthorized' }, 401);
+  const { data: wakeAuthorized, error: wakeAuthError } = await admin.rpc('verify_notification_worker_token', {
+    supplied_token: wakeToken,
+  });
+  if (wakeAuthError || wakeAuthorized !== true) return json({ error: 'Unauthorized' }, 401);
+
   const vapid = deriveVapidKeys(serviceRoleKey);
   webpush.setVapidDetails(
     'https://donezo-lime-two.vercel.app',
