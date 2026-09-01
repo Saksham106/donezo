@@ -25,6 +25,8 @@ jobs:
               raise SystemExit('could not extract UI patch script')
           script = textwrap.dedent(match.group(1))
           script = script.replace("replace_once(current_guard, guarded, 'handleHabit weekly guard')", "pass  # patched structurally below")
+          script = script.replace("bind_anchor = 'function bindEvents() {'", "bind_anchor = 'function restoreScreenScroll() {'")
+          script = script.replace("function bindEvents() {'''.replace('          ', '')", "function restoreScreenScroll() {'''.replace('          ', '')")
           exec(compile(script, 'patch-flexible-weekly-ui-v2', 'exec'))
 
           app_path = Path('src/app.js')
