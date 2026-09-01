@@ -145,7 +145,7 @@ test('database schedule versions are normalized onto their habit', () => {
   });
   assert.deepEqual(state.habits[0].scheduleVersions, [{
     id: 'version-1', version: 1, effectiveFrom: '2026-08-27', effectiveUntil: null,
-    frequency: 'selected_weekdays', weekdays: [1, 3, 5], targetQuantity: 2,
+    frequency: 'selected_weekdays', weekdays: [1, 3, 5], weeklyTargetDays: 1, targetQuantity: 2,
     targetUnit: 'miles', dueTime: '08:30', graceMinutes: 15, timezone: 'America/New_York',
   }]);
 });

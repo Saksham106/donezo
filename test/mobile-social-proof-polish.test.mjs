@@ -56,5 +56,5 @@ test('standard bottom sheets initialize reusable swipe-down dismissal', () => {
 
 test('PWA shell cache advances beyond v23', () => {
   assert.doesNotMatch(sw, /donezo-shell-v23/);
-  assert.match(sw, /donezo-shell-v25/);
+  assert.match(sw, /donezo-shell-v26/);
 });

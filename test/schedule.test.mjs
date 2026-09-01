@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as scheduleModule from '../src/schedule.js';
 import {
   getScheduleOccurrence,
   listScheduleOccurrences,
   evaluateScheduleDate,
   resolveScheduleVersion,
   localDateTimeToUtc,
+  normalizeSchedule,
 } from '../src/schedule.js';
 
 const daily = (overrides = {}) => ({
@@ -98,4 +100,56 @@ test('historical schedule versions are selected by local effective dates', () =>
 test('local date-time conversion keeps due time stable over both DST offsets', () => {
   assert.equal(localDateTimeToUtc('2026-11-01', '01:30', 'America/New_York'), '2026-11-01T05:30:00.000Z');
   assert.equal(localDateTimeToUtc('2026-11-02', '01:30', 'America/New_York'), '2026-11-02T06:30:00.000Z');
+});
+
+test('times-per-week schedules normalize a dedicated 1–7 day target', () => {
+  const schedule = normalizeSchedule({
+    frequency: 'times_per_week',
+    weeklyTargetDays: 4,
+    timezone: 'America/New_York',
+  });
+  assert.equal(schedule.frequency, 'times_per_week');
+  assert.equal(schedule.weeklyTargetDays, 4);
+  assert.throws(() => normalizeSchedule({ frequency: 'times_per_week', weeklyTargetDays: 0, timezone: 'UTC' }), /1–7/);
+  assert.throws(() => normalizeSchedule({ frequency: 'times_per_week', weeklyTargetDays: 8, timezone: 'UTC' }), /1–7/);
+});
+
+test('times-per-week schedules never invent an arbitrary fixed weekday occurrence', () => {
+  const occurrence = getScheduleOccurrence({
+    frequency: 'times_per_week',
+    weeklyTargetDays: 4,
+    timezone: 'UTC',
+    startDate: '2026-08-24',
+  }, '2026-08-27');
+  assert.equal(occurrence.scheduled, false);
+  assert.equal(occurrence.frequency, 'times_per_week');
+  assert.equal(occurrence.weeklyTargetDays, 4);
+});
+
+test('weekStartForDate returns the Monday containing a local calendar date', () => {
+  assert.equal(scheduleModule.weekStartForDate('2026-08-24'), '2026-08-24');
+  assert.equal(scheduleModule.weekStartForDate('2026-08-27'), '2026-08-24');
+  assert.equal(scheduleModule.weekStartForDate('2026-08-30'), '2026-08-24');
+});
+
+test('effectiveWeeklyTarget skips the creation week and caps the goal by non-paused days', () => {
+  const schedule = {
+    frequency: 'times_per_week',
+    weeklyTargetDays: 4,
+    timezone: 'UTC',
+    startDate: '2026-08-27',
+    pauseWindows: [],
+  };
+  assert.equal(scheduleModule.effectiveWeeklyTarget(schedule, '2026-08-24'), 0);
+  assert.equal(scheduleModule.effectiveWeeklyTarget(schedule, '2026-08-31'), 4);
+  assert.equal(scheduleModule.effectiveWeeklyTarget({
+    ...schedule,
+    startDate: '2026-08-20',
+    pauseWindows: [{ startDate: '2026-08-31', endDate: '2026-09-04' }],
+  }, '2026-08-31'), 2);
+  assert.equal(scheduleModule.effectiveWeeklyTarget({
+    ...schedule,
+    startDate: '2026-08-20',
+    pauseWindows: [{ startDate: '2026-08-31', endDate: '2026-09-06' }],
+  }, '2026-08-31'), 0);
 });

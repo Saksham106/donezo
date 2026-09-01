@@ -1,4 +1,4 @@
-const FREQUENCIES = new Set(['daily', 'selected_weekdays', 'weekly']);
+const FREQUENCIES = new Set(['daily', 'selected_weekdays', 'weekly', 'times_per_week']);
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?$/;
 const DAY_NAMES = new Map([
@@ -49,6 +49,13 @@ function dayOfWeek(dateString) {
   return dateAtNoon(dateString).getUTCDay();
 }
 
+export function weekStartForDate(localDate) {
+  assertDate(localDate, 'local date');
+  const day = dayOfWeek(localDate);
+  const mondayOffset = day === 0 ? 6 : day - 1;
+  return addDays(localDate, -mondayOffset);
+}
+
 function normalizeWeekdays(value) {
   const values = Array.isArray(value) ? value : value == null ? [] : [value];
   return [...new Set(values.map((entry) => {
@@ -96,6 +103,10 @@ export function normalizeSchedule(input = {}) {
   if (!Number.isFinite(targetQuantity) || targetQuantity <= 0) throw new Error('Target quantity must be greater than zero');
   const graceMinutes = Number(input.graceMinutes ?? input.grace_minutes ?? 0);
   if (!Number.isInteger(graceMinutes) || graceMinutes < 0) throw new Error('Grace minutes must be a non-negative integer');
+  const weeklyTargetDays = Number(input.weeklyTargetDays ?? input.weekly_target_days ?? 1);
+  if (frequency === 'times_per_week' && (!Number.isInteger(weeklyTargetDays) || weeklyTargetDays < 1 || weeklyTargetDays > 7)) {
+    throw new Error('Days per week must be an integer from 1–7');
+  }
 
   const timezone = validateTimeZone(input.timezone ?? input.scheduleTimezone ?? input.schedule_timezone ?? 'UTC');
   const weekdays = normalizeWeekdays(input.weekdays ?? input.daysOfWeek ?? input.scheduleWeekdays ?? input.schedule_weekdays ?? input.dayOfWeek ?? input.day_of_week);
@@ -108,6 +119,7 @@ export function normalizeSchedule(input = {}) {
     ...input,
     frequency,
     weekdays,
+    weeklyTargetDays,
     targetQuantity,
     targetUnit: String(input.targetUnit ?? input.target_unit ?? input.unit ?? 'count').trim() || 'count',
     dueTime,
@@ -199,6 +211,23 @@ function isPaused(schedule, date) {
   return schedule.pauseWindows.some((window) => window.startDate <= date && date <= window.endDate);
 }
 
+export function effectiveWeeklyTarget(input, weekStart) {
+  assertDate(weekStart, 'week start');
+  const schedule = normalizeSchedule(input);
+  if (schedule.frequency !== 'times_per_week') return 0;
+  if (schedule.startDate) {
+    const firstFullWeek = addDays(weekStartForDate(schedule.startDate), 7);
+    if (weekStart < firstFullWeek) return 0;
+  }
+  let eligibleDays = 0;
+  for (let offset = 0; offset < 7; offset += 1) {
+    const date = addDays(weekStart, offset);
+    const inRange = (!schedule.startDate || date >= schedule.startDate) && (!schedule.endDate || date <= schedule.endDate);
+    if (inRange && !isPaused(schedule, date)) eligibleDays += 1;
+  }
+  return Math.min(schedule.weeklyTargetDays, eligibleDays);
+}
+
 function weeklyDateMatches(schedule, date) {
   const weekday = schedule.weekdays[0] ?? (schedule.startDate ? dayOfWeek(schedule.startDate) : 1);
   if (dayOfWeek(date) !== weekday) return false;
@@ -225,7 +254,9 @@ export function getScheduleOccurrence(input, localDate) {
     ? inRange
     : schedule.frequency === 'selected_weekdays'
       ? inRange && schedule.weekdays.includes(dayOfWeek(localDate))
-      : inRange && weeklyDateMatches(schedule, localDate);
+      : schedule.frequency === 'weekly'
+        ? inRange && weeklyDateMatches(schedule, localDate)
+        : false;
   if (paused) scheduled = false;
   return {
     date: localDate,
@@ -233,6 +264,7 @@ export function getScheduleOccurrence(input, localDate) {
     paused,
     frequency: schedule.frequency,
     weekdays: schedule.weekdays,
+    weeklyTargetDays: schedule.weeklyTargetDays,
     targetQuantity: schedule.targetQuantity,
     targetUnit: schedule.targetUnit,
     timezone: schedule.timezone,
