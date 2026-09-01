@@ -34,13 +34,16 @@ test('nudge receipts expose only the read_at column to recipients', () => {
   assert.doesNotMatch(readReceiptMigration, /grant update on table/i);
 });
 
-test('push sender is authenticated, pinned, and prunes dead subscriptions', () => {
+test('push sender is authenticated, pinned, prunes dead subscriptions, and settles no-subscription events', () => {
   assert.match(pushFunction, /web-push@3\.6\.7/);
   assert.match(pushFunction, /@supabase\/supabase-js@2\.112\.4/);
   assert.match(pushFunction, /vapid-public-key/);
   assert.match(pushFunction, /nudge\.from_user_id !== user\.id/);
   assert.match(pushFunction, /statusCode === 404 \|\| statusCode === 410/);
-  assert.match(pushFunction, /return json\(\{ delivered, failed, pruned, suppressed: false, deduped: false \}\)/);
+  assert.match(pushFunction, /\(subscriptions \|\| \[\]\)\.length === 0/);
+  assert.match(pushFunction, /status: 'suppressed'/);
+  assert.match(pushFunction, /no_subscription/);
+  assert.match(pushFunction, /suppressed: delivered === 0 && failed === 0/);
   assert.match(pushFunction, /Could not load nudge/);
   assert.doesNotMatch(pushFunction, /VAPID_PRIVATE_KEY/);
   assert.match(pushFunction, /from\('friendships'\)/);
