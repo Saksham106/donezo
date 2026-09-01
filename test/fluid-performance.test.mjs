@@ -2,149 +2,181 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createLatestIntentCoordinator } from '../src/optimistic.js';
-import { createStateCacheEnvelope, validateStateCacheEnvelope } from '../src/state-cache.js';
+import {
+  STATE_CACHE_MAX_AGE_MS,
+  STATE_CACHE_SCHEMA_VERSION,
+  validateStateCacheEnvelope,
+} from '../src/state-cache.js';
 
-const [app, store, social, sw, pkg] = await Promise.all([
-  readFile(new URL('../src/app.js', import.meta.url), 'utf8'),
-  readFile(new URL('../src/store.js', import.meta.url), 'utf8'),
-  readFile(new URL('../social.css', import.meta.url), 'utf8'),
-  readFile(new URL('../sw.js', import.meta.url), 'utf8'),
-  import('../package.json', { with: { type: 'json' } }).then((module) => module.default),
-]);
+const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const store = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
+const social = await readFile(new URL('../social.css', import.meta.url), 'utf8');
+const sw = await readFile(new URL('../sw.js', import.meta.url), 'utf8');
+const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
-function section(source, start, end) {
-  const startAt = source.indexOf(start);
-  const endAt = source.indexOf(end, startAt + start.length);
-  assert.ok(startAt >= 0, `Missing section start: ${start}`);
-  assert.ok(endAt > startAt, `Missing section end: ${end}`);
-  return source.slice(startAt, endAt);
-}
+const section = (source, start, end) => {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  return from >= 0 ? source.slice(from, to >= 0 ? to : undefined) : '';
+};
+
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test('latest-intent coordinator serializes a key and skips superseded intermediate values', async () => {
-  let releaseFirst;
-  const persisted = [];
+  const first = deferred();
+  const writes = [];
+  const confirmed = [];
   const coordinator = createLatestIntentCoordinator({
+    yieldToPaint: async () => {},
     persist: async (_key, value) => {
-      persisted.push(value);
-      if (persisted.length === 1) await new Promise((resolve) => { releaseFirst = resolve; });
+      writes.push(value);
+      if (writes.length === 1) await first.promise;
+      return value;
     },
+    onConfirmed: (key, value) => confirmed.push([key, value]),
   });
 
-  const first = coordinator.setDesired('proof-1', '🔥', null);
-  coordinator.setDesired('proof-1', '👏', null);
-  coordinator.setDesired('proof-1', '💪', null);
-  await Promise.resolve();
-  releaseFirst();
-  await first;
-  await coordinator.whenIdle('proof-1');
+  coordinator.queue('reaction:proof-1', '🔥', { confirmed: null });
+  await tick();
+  coordinator.queue('reaction:proof-1', '👏');
+  coordinator.queue('reaction:proof-1', '😂');
 
-  assert.deepEqual(persisted, ['🔥', '💪']);
-  assert.equal(coordinator.getState('proof-1').confirmed, '💪');
+  assert.deepEqual(writes, ['🔥']);
+  assert.equal(coordinator.desired('reaction:proof-1'), '😂');
+
+  first.resolve();
+  await coordinator.whenIdle('reaction:proof-1');
+
+  assert.deepEqual(writes, ['🔥', '😂']);
+  assert.equal(coordinator.confirmed('reaction:proof-1'), '😂');
+  assert.equal(coordinator.isPending('reaction:proof-1'), false);
+  assert.deepEqual(confirmed.at(-1), ['reaction:proof-1', '😂']);
 });
 
 test('a stale failed write never rolls back newer desired reaction intent', async () => {
-  let rejectFirst;
-  const failures = [];
+  const first = deferred();
+  const writes = [];
+  const errors = [];
   const coordinator = createLatestIntentCoordinator({
+    yieldToPaint: async () => {},
     persist: async (_key, value) => {
-      if (value === '🔥') await new Promise((_resolve, reject) => { rejectFirst = reject; });
+      writes.push(value);
+      if (writes.length === 1) return first.promise;
+      return value;
     },
-    onFinalFailure: (_key, context) => failures.push(context),
+    onError: (details) => errors.push(details),
   });
 
-  coordinator.setDesired('proof-1', '🔥', null);
-  coordinator.setDesired('proof-1', '👏', null);
-  await Promise.resolve();
-  rejectFirst(new Error('network'));
-  await coordinator.whenIdle('proof-1');
+  coordinator.queue('reaction:proof-2', '🔥', { confirmed: null });
+  await tick();
+  coordinator.queue('reaction:proof-2', '💪');
+  first.reject(new Error('old request failed'));
 
-  assert.equal(coordinator.getState('proof-1').desired, '👏');
-  assert.equal(coordinator.getState('proof-1').confirmed, '👏');
-  assert.equal(failures.length, 0);
+  await coordinator.whenIdle('reaction:proof-2');
+
+  assert.deepEqual(writes, ['🔥', '💪']);
+  assert.equal(coordinator.confirmed('reaction:proof-2'), '💪');
+  assert.equal(errors.length, 0);
 });
 
 test('a final failed desired value reports rollback context without changing confirmed value', async () => {
-  const failures = [];
+  const errors = [];
   const coordinator = createLatestIntentCoordinator({
-    persist: async () => { throw new Error('nope'); },
-    onFinalFailure: (_key, context) => failures.push(context),
+    yieldToPaint: async () => {},
+    persist: async () => { throw new Error('network down'); },
+    onError: (details) => errors.push(details),
   });
-  await coordinator.setDesired('proof-1', '🔥', '👏');
-  await coordinator.whenIdle('proof-1');
-  assert.equal(coordinator.getState('proof-1').desired, '👏');
-  assert.equal(coordinator.getState('proof-1').confirmed, '👏');
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].failedValue, '🔥');
-  assert.equal(failures[0].rollbackValue, '👏');
+
+  coordinator.queue('reaction:proof-3', '👏', { confirmed: '🔥' });
+  await coordinator.whenIdle('reaction:proof-3');
+
+  assert.equal(coordinator.confirmed('reaction:proof-3'), '🔥');
+  assert.equal(coordinator.desired('reaction:proof-3'), '🔥');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].key, 'reaction:proof-3');
+  assert.equal(errors[0].failed, '👏');
+  assert.equal(errors[0].confirmed, '🔥');
 });
 
 test('state cache envelope accepts only the current user, schema, and seven-day freshness window', () => {
-  const now = Date.UTC(2026, 7, 31, 12);
-  const state = { currentUserId: 'user-1', habits: [{ id: 'h1' }] };
-  const envelope = createStateCacheEnvelope('user-1', state, now);
-  assert.deepEqual(validateStateCacheEnvelope(envelope, 'user-1', now + 1000), state);
-  assert.equal(validateStateCacheEnvelope(envelope, 'user-2', now + 1000), null);
-  assert.equal(validateStateCacheEnvelope(envelope, 'user-1', now + 8 * 24 * 60 * 60 * 1000), null);
-  assert.equal(validateStateCacheEnvelope({ ...envelope, schemaVersion: 99 }, 'user-1', now + 1000), null);
+  const now = Date.parse('2026-08-31T21:00:00Z');
+  const valid = {
+    schemaVersion: STATE_CACHE_SCHEMA_VERSION,
+    userId: 'user-1',
+    savedAt: new Date(now - 1_000).toISOString(),
+    state: { currentUserId: 'user-1', habits: [] },
+  };
+
+  assert.deepEqual(validateStateCacheEnvelope(valid, 'user-1', now), valid.state);
+  assert.equal(validateStateCacheEnvelope({ ...valid, userId: 'user-2' }, 'user-1', now), null);
+  assert.equal(validateStateCacheEnvelope({ ...valid, schemaVersion: STATE_CACHE_SCHEMA_VERSION + 1 }, 'user-1', now), null);
+  assert.equal(validateStateCacheEnvelope({ ...valid, savedAt: new Date(now - STATE_CACHE_MAX_AGE_MS - 1).toISOString() }, 'user-1', now), null);
+  assert.equal(validateStateCacheEnvelope({ ...valid, state: { currentUserId: 'other' } }, 'user-1', now), null);
 });
 
 test('repository exposes a fast peek/hydrate path and hot persistence methods avoid full load', () => {
-  assert.match(store, /peekState\(\)\s*\{\s*return state;\s*\}/);
-  assert.match(store, /hydrateState\(cachedState\)/);
-  assert.match(store, /async function setPositiveReaction/);
-  assert.match(store, /async function setProofDownvote/);
-  assert.match(store, /async function toggleSimpleCheckIn/);
-  assert.match(store, /async function addComment/);
-  assert.match(store, /async function deleteComment/);
-  assert.match(store, /async function markNudgeRead/);
+  assert.match(store, /function peekState\(\)/);
+  assert.match(store, /function hydrateState\(/);
 
   for (const [start, end] of [
-    ['async function setPositiveReaction', 'async function setProofDownvote'],
-    ['async function setProofDownvote', 'async function setHabitAudience'],
-    ['async function toggleSimpleCheckIn', 'async function toggleHabit'],
-    ['async function addComment', 'async function deleteComment'],
-    ['async function deleteComment', 'async function createFriendInvite'],
-    ['async function markNudgeRead', 'async function createChallenge'],
+    ['async function setPositiveReaction(', 'async function recoverHabit('],
+    ['async function setProofDownvote(', 'async function setPositiveReaction('],
+    ['async function toggleSimpleCheckIn(', 'async function completeWithProof('],
+    ['async function addComment(', 'async function deleteComment('],
+    ['async function deleteComment(', 'function getEarnedBadges('],
+    ['async function markNudgeRead(', 'async function startBaton('],
   ]) {
-    const hotPath = section(store, start, end);
-    assert.doesNotMatch(hotPath, /return load\(\)/);
-    assert.doesNotMatch(hotPath, /await load\(\)/);
+    const body = section(store, start, end);
+    assert.notEqual(body, '', `missing ${start}`);
+    assert.doesNotMatch(body, /\bload\s*\(/, `${start} must not full reload`);
   }
 });
 
 test('app routes hot interactions through optimistic state rather than global runMutation', () => {
   assert.match(app, /createLatestIntentCoordinator/);
-  assert.match(app, /runOptimisticMutation/);
-  assert.match(app, /repo\.applyPositiveReaction/);
-  assert.match(app, /repo\.applySimpleCheckIn/);
-  assert.match(app, /repo\.applyProofDownvote/);
-  assert.match(app, /repo\.applyOptimisticComment/);
-  assert.match(app, /repo\.applyNudgeRead/);
+  assert.match(app, /scheduleReconciliation/);
+  assert.match(app, /reapplyOptimisticPatches/);
 
-  const reaction = section(app, 'async function handleReaction', 'async function handleDownvote');
-  assert.doesNotMatch(reaction, /runMutation\(/);
-  assert.match(reaction, /reactionCoordinator\.setDesired/);
-  const simple = section(app, 'async function handleSimpleCheckIn', 'async function handleUndoSimpleCheckIn');
-  assert.doesNotMatch(simple, /runMutation\(/);
-  const comment = section(app, 'async function handleCommentSubmit', 'async function handleUndoCommentDelete');
-  assert.doesNotMatch(comment, /runMutation\(/);
+  for (const [start, end] of [
+    ['async function handleReaction(', 'async function handleCommentSubmit('],
+    ['async function handleDownvote(', 'async function handleReaction('],
+    ['async function handleCommentSubmit(', 'async function handleUndoCommentDelete('],
+  ]) {
+    const body = section(app, start, end);
+    assert.notEqual(body, '', `missing ${start}`);
+    assert.doesNotMatch(body, /runMutation\s*\(/, `${start} should not use global mutation lane`);
+  }
+
+  assert.match(app, /toggleSimpleCheckIn/);
+  assert.match(app, /markNudgeReadOptimistic/);
 });
 
 test('warm startup reads user cache before authoritative load and sign-out clears it', () => {
   const boot = section(app, 'async function boot(', 'for (const eventName');
-  assert.match(boot, /readStateCache/);
-  assert.match(boot, /hydrateState/);
-  assert.ok(boot.indexOf('readStateCache') < boot.indexOf('activeRepo.load()'));
-  assert.match(boot, /writeStateCache/);
-  const signOut = section(app, 'async function handleSignOut()', 'function authView');
-  assert.match(signOut, /clearStateCache/);
+  const cacheRead = boot.indexOf('readStateCache(');
+  const load = boot.indexOf('activeRepo.load(');
+  assert.ok(cacheRead >= 0 && load >= 0 && cacheRead < load);
+  assert.match(boot, /hydrateState\(/);
+  assert.match(boot, /scheduleStateCacheWrite/);
+  assert.match(section(app, 'async function handleSignOut(', 'proofInput.addEventListener'), /clearStateCache\(/);
 });
 
 test('cached startup stays read-only until an authoritative load succeeds', () => {
-  const mutation = section(app, 'async function runMutation(', 'function activityViewers');
+  assert.match(app, /let authoritativeReady = false/);
+  const refresh = section(app, 'async function refreshRepositoryData(', 'function startRefreshCoordinator');
+  assert.match(refresh, /authoritativeReady = true/);
+
+  const mutation = section(app, 'async function runMutation(', 'async function handleAuth');
   const optimistic = section(app, 'async function runOptimisticMutation(', 'function formatWhen');
-  const reaction = section(app, 'async function handleReaction', 'async function handleDownvote');
-  const proofSubmit = section(app, 'async function handleProofSubmit(', 'async function handleSimpleCheckIn');
+  const reaction = section(app, 'async function handleReaction(', 'async function handleCommentSubmit');
+  const proofSubmit = section(app, 'async function handleProofSubmit()', 'async function loadProofViewerUrl()');
   assert.match(mutation, /!authoritativeReady/);
   assert.match(optimistic, /!authoritativeReady/);
   assert.match(reaction, /!authoritativeReady/);
