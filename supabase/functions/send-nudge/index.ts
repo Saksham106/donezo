@@ -124,6 +124,17 @@ export default {
       return json({ delivered: 0, failed: 0, pruned: 0, suppressed: Boolean(event?.suppressed), deduped: Boolean(event?.deduped) });
     }
 
+    if ((subscriptions || []).length === 0) {
+      if (event.eventId) {
+        const { error: eventUpdateError } = await admin
+          .from('notification_events')
+          .update({ status: 'suppressed', last_error: 'no_subscription' })
+          .eq('id', event.eventId);
+        if (eventUpdateError) console.error('notification event suppression failed', eventUpdateError.message);
+      }
+      return json({ delivered: 0, failed: 0, pruned: 0, suppressed: true, deduped: false, reason: 'no_subscription' });
+    }
+
     webpush.setVapidDetails(
       'https://donezo-lime-two.vercel.app',
       vapid.publicKey,
@@ -164,14 +175,18 @@ export default {
       }
     }
 
-    if (event.eventId && (delivered > 0 || failed > 0)) {
-      const status = delivered > 0 ? 'delivered' : 'failed';
+    if (event.eventId && (delivered > 0 || failed > 0 || pruned > 0)) {
+      const status = delivered > 0 ? 'delivered' : failed > 0 ? 'failed' : 'suppressed';
       const { error: eventUpdateError } = await admin
         .from('notification_events')
-        .update({ status, delivered_at: delivered > 0 ? new Date().toISOString() : null })
+        .update({
+          status,
+          delivered_at: delivered > 0 ? new Date().toISOString() : null,
+          last_error: delivered > 0 ? null : failed > 0 ? 'push_delivery_failed' : 'no_live_subscription',
+        })
         .eq('id', event.eventId);
       if (eventUpdateError) console.error('notification event status update failed', eventUpdateError.message);
     }
-    return json({ delivered, failed, pruned, suppressed: false, deduped: false });
+    return json({ delivered, failed, pruned, suppressed: delivered === 0 && failed === 0, deduped: false });
   },
 };
