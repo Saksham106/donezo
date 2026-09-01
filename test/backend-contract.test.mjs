@@ -34,17 +34,17 @@ test('nudge receipts expose only the read_at column to recipients', () => {
   assert.doesNotMatch(readReceiptMigration, /grant update on table/i);
 });
 
-test('push sender is authenticated, pinned, and prunes dead subscriptions', () => {
-  assert.match(pushFunction, /web-push@3\.6\.7/);
+test('nudge enqueue endpoint is authenticated, pinned, and delegates delivery to the shared worker', () => {
   assert.match(pushFunction, /@supabase\/supabase-js@2\.112\.4/);
   assert.match(pushFunction, /vapid-public-key/);
   assert.match(pushFunction, /nudge\.from_user_id !== user\.id/);
-  assert.match(pushFunction, /statusCode === 404 \|\| statusCode === 410/);
-  assert.match(pushFunction, /return json\(\{ delivered, failed, pruned, suppressed: false, deduped: false \}\)/);
+  assert.match(pushFunction, /queued:\s*true/);
   assert.match(pushFunction, /Could not load nudge/);
   assert.doesNotMatch(pushFunction, /VAPID_PRIVATE_KEY/);
   assert.match(pushFunction, /from\('friendships'\)/);
   assert.doesNotMatch(pushFunction, /from\('circle_members'\)/);
+  assert.doesNotMatch(pushFunction, /webpush\.sendNotification/);
+  assert.doesNotMatch(pushFunction, /from\('push_subscriptions'\)/);
   assert.match(pushFunction, /if \(!directFriends\) return json\(\{ error: 'Friendship changed' \}, 403\)/);
 });
 
@@ -96,7 +96,7 @@ test('social stakes cannot reference a challenge from another squad', () => {
   assert.match(crossCircleMigration, /challenge_id is null or exists[\s\S]*challenge\.circle_id = group_stakes\.circle_id/i);
 });
 
-test('push sender turns a nudge into a policy-checked event and preserves its context', () => {
+test('nudge endpoint turns a nudge into a policy-checked queued event and preserves its context', () => {
   assert.match(pushFunction, /enqueue_notification_event/);
   assert.match(pushFunction, /target_notification_category: 'nudge'/);
   assert.match(pushFunction, /source_nudge_id/);

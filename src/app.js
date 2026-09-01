@@ -60,6 +60,7 @@ let proofPreparationId = 0;
 let proofViewer = null;
 let proofViewerRequestId = 0;
 let proofRejectCheckInId = null;
+let checkInUndoRequest = null;
 let selectedEmoji = '⚡';
 let habitSheetOpen = false;
 let editingHabitId = null;
@@ -1087,6 +1088,13 @@ function peopleSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people ${friendInvitePreparing ? 'disabled aria-busy="true"' : ''}>${icon('userPlus')} ${friendInvitePreparing ? 'Preparing…' : 'Invite friends'}</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
 }
 
+function checkInUndoSheet() {
+  if (!checkInUndoRequest) return '';
+  const habit = getState()?.habits.find((item) => item.id === checkInUndoRequest.habitId);
+  if (!habit) return '';
+  return `<div class="sheet-backdrop checkin-undo-layer"><section class="sheet compact-sheet checkin-undo-sheet" role="alertdialog" aria-modal="true" aria-label="Confirm check-in undo" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">CHECK-IN</p><h2>Undo this check-in?</h2></div><button class="icon-btn" type="button" data-cancel-check-in-undo aria-label="Keep check-in">×</button></div><p class="sheet-copy">This removes today’s completion for ${esc(habit.title)}. You can check it off again anytime.</p><div class="confirm-actions"><button class="btn" type="button" data-cancel-check-in-undo>Keep it done</button><button class="btn danger-soft" type="button" data-confirm-check-in-undo>Undo check-in</button></div></section></div>`;
+}
+
 function proofRejectSheet() {
   if (!proofRejectCheckInId) return '';
   const activity = activityList(getState()).find((item) => item.checkInId === proofRejectCheckInId);
@@ -1492,7 +1500,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${proofReviewSheet()}${proofViewerSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;
@@ -1567,6 +1575,8 @@ function render() {
     if (activity?.userDownvoted) handleDownvote(element.dataset.requestReject);
     else { proofRejectCheckInId = element.dataset.requestReject; render(); }
   }; });
+  app.querySelector('[data-confirm-check-in-undo]')?.addEventListener('click', () => { const request = checkInUndoRequest; checkInUndoRequest = null; if (request) handleUndoCheckIn(request.habitId, request.date); });
+  app.querySelectorAll('[data-cancel-check-in-undo]').forEach((element) => { element.onclick = () => { checkInUndoRequest = null; render(); }; });
   app.querySelector('[data-confirm-reject]')?.addEventListener('click', () => { const id = proofRejectCheckInId; proofRejectCheckInId = null; handleDownvote(id); });
   app.querySelectorAll('[data-cancel-reject]').forEach((element) => { element.onclick = () => { proofRejectCheckInId = null; render(); }; });
   app.querySelectorAll('[data-redo-checkin]').forEach((element) => { element.onclick = () => handleRedoProof(element.dataset.redoCheckin); });
@@ -2068,17 +2078,19 @@ async function handleUndoCheckIn(habitId, date = today()) {
   await handleSimpleCheckIn(habit, date, false, 'Check-in undone');
 }
 
+function requestCheckInUndo(habit, date = today()) {
+  if (!habit?.id) return;
+  checkInUndoRequest = { habitId: habit.id, date };
+  renderPreservingScroll();
+}
+
 async function handleHabit(id) {
   const habit = getState().habits.find((item) => item.id === id);
   if (!habit) return;
   const checkInDate = today();
   const current = checkInFor(id, me()?.id, checkInDate);
   if (current && !current.invalid) {
-    if (habit.proofMode === 'photo' || current.proofPath) {
-      await runMutation(() => repo.toggleHabit(id, checkInDate), `${habit.title} unchecked`);
-      return;
-    }
-    await handleSimpleCheckIn(habit, checkInDate, false, `${habit.title} unchecked`);
+    requestCheckInUndo(habit, checkInDate);
     return;
   }
   const weekly = flexibleWeekProgress(habit, checkInDate);
@@ -2838,6 +2850,9 @@ async function boot(nextSession) {
     render();
     scheduleStateCacheWrite(activeRepo);
     startRefreshCoordinator(activeRepo);
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      void syncPushSubscription(activeRepo).catch(() => {});
+    }
     await applyInitialNavigation();
     if (getNotificationCapability(window).permission === 'granted') syncPushSubscription(activeRepo).catch(() => {});
   } catch (error) {
