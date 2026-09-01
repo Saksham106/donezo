@@ -1,5 +1,4 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.112.4';
-import webpush from 'npm:web-push@3.6.7';
 import { Buffer } from 'node:buffer';
 import { createECDH, createHash } from 'node:crypto';
 
@@ -86,11 +85,11 @@ export default {
     }
     if (!directFriends) return json({ error: 'Friendship changed' }, 403);
 
-    const [{ data: sender }, { data: subscriptions, error: subscriptionError }] = await Promise.all([
-      admin.from('profiles').select('display_name').eq('id', nudge.from_user_id).maybeSingle(),
-      admin.from('push_subscriptions').select('id,endpoint,p256dh,auth').eq('user_id', nudge.to_user_id),
-    ]);
-    if (subscriptionError) return json({ error: 'Could not load push subscriptions' }, 500);
+    const { data: sender } = await admin
+      .from('profiles')
+      .select('display_name')
+      .eq('id', nudge.from_user_id)
+      .maybeSingle();
 
     const eventResult = await admin.rpc('enqueue_notification_event', {
       target_recipient_user_id: nudge.to_user_id,
@@ -108,12 +107,14 @@ export default {
         nudgeId: nudge.id,
         senderId: nudge.from_user_id,
         recipientId: nudge.to_user_id,
+        source: 'nudge',
       },
     });
     if (eventResult.error) {
       console.error('notification event enqueue failed', eventResult.error.message);
       return json({ error: 'Could not queue notification' }, 500);
     }
+
     const event = eventResult.data as {
       accepted?: boolean;
       suppressed?: boolean;
@@ -121,72 +122,26 @@ export default {
       eventId?: string;
     } | null;
     if (!event?.accepted) {
-      return json({ delivered: 0, failed: 0, pruned: 0, suppressed: Boolean(event?.suppressed), deduped: Boolean(event?.deduped) });
+      return json({
+        queued: false,
+        delivered: 0,
+        failed: 0,
+        pruned: 0,
+        suppressed: Boolean(event?.suppressed),
+        deduped: Boolean(event?.deduped),
+      });
     }
 
-    if ((subscriptions || []).length === 0) {
-      if (event.eventId) {
-        const { error: eventUpdateError } = await admin
-          .from('notification_events')
-          .update({ status: 'suppressed', last_error: 'no_subscription' })
-          .eq('id', event.eventId);
-        if (eventUpdateError) console.error('notification event suppression failed', eventUpdateError.message);
-      }
-      return json({ delivered: 0, failed: 0, pruned: 0, suppressed: true, deduped: false, reason: 'no_subscription' });
-    }
-
-    webpush.setVapidDetails(
-      'https://donezo-lime-two.vercel.app',
-      vapid.publicKey,
-      vapid.privateKey,
-    );
-
-    const payload = JSON.stringify({
-      title: `${sender?.display_name || 'Your friend'} nudged you ⚡`,
-      body: nudge.message,
-      url: '/?nudges=1',
-      tag: `donezo-${nudge.circle_id}-nudge`,
+    // Delivery belongs exclusively to notification-worker. The insert wakes it
+    // through the authenticated pg_net trigger, removing the old double-send race.
+    return json({
+      queued: true,
+      delivered: 0,
+      failed: 0,
+      pruned: 0,
+      suppressed: false,
+      deduped: false,
+      eventId: event.eventId || null,
     });
-
-    let delivered = 0;
-    let failed = 0;
-    let pruned = 0;
-    for (const subscription of subscriptions || []) {
-      try {
-        await webpush.sendNotification({
-          endpoint: subscription.endpoint,
-          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-        }, payload, { TTL: 60 * 60 });
-        delivered += 1;
-      } catch (error) {
-        const statusCode = Number((error as { statusCode?: number })?.statusCode || 0);
-        if (statusCode === 404 || statusCode === 410) {
-          const { error: pruneError } = await admin.from('push_subscriptions').delete().eq('id', subscription.id);
-          if (pruneError) {
-            failed += 1;
-            console.error('dead subscription prune failed', pruneError.message);
-          } else {
-            pruned += 1;
-          }
-        } else {
-          failed += 1;
-          console.error('push delivery failed', statusCode || error);
-        }
-      }
-    }
-
-    if (event.eventId && (delivered > 0 || failed > 0 || pruned > 0)) {
-      const status = delivered > 0 ? 'delivered' : failed > 0 ? 'failed' : 'suppressed';
-      const { error: eventUpdateError } = await admin
-        .from('notification_events')
-        .update({
-          status,
-          delivered_at: delivered > 0 ? new Date().toISOString() : null,
-          last_error: delivered > 0 ? null : failed > 0 ? 'push_delivery_failed' : 'no_live_subscription',
-        })
-        .eq('id', event.eventId);
-      if (eventUpdateError) console.error('notification event status update failed', eventUpdateError.message);
-    }
-    return json({ delivered, failed, pruned, suppressed: delivered === 0 && failed === 0, deduped: false });
   },
 };
