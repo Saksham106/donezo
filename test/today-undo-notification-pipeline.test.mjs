@@ -7,6 +7,7 @@ const notifications = await readFile(new URL('../src/notifications.js', import.m
 const sender = await readFile(new URL('../supabase/functions/send-nudge/index.ts', import.meta.url), 'utf8');
 const worker = await readFile(new URL('../supabase/functions/notification-worker/index.ts', import.meta.url), 'utf8').catch(() => '');
 const migration = await readFile(new URL('../supabase/migrations/20260901_notification_delivery_pipeline.sql', import.meta.url), 'utf8').catch(() => '');
+const workerAuthMigration = await readFile(new URL('../supabase/migrations/20260901_notification_worker_auth.sql', import.meta.url), 'utf8').catch(() => '');
 
 test('Today requires an app-native confirmation before undoing a completed check-in', () => {
   assert.match(app, /let checkInUndoRequest = null/);
@@ -54,6 +55,17 @@ test('notification worker only drains server-owned events and cannot accept arbi
   assert.doesNotMatch(worker, /body\??\.title/i);
   assert.doesNotMatch(worker, /body\??\.message/i);
   assert.doesNotMatch(worker, /body\??\.payload/i);
+});
+
+test('notification worker wakeups require a random Vault token instead of an anonymous public drain', () => {
+  assert.match(workerAuthMigration, /vault\.create_secret/i);
+  assert.match(workerAuthMigration, /donezo_notification_worker_token/);
+  assert.match(workerAuthMigration, /verify_notification_worker_token/i);
+  assert.match(workerAuthMigration, /x-donezo-worker-token/i);
+  assert.match(workerAuthMigration, /vault\.decrypted_secrets/i);
+  assert.match(worker, /x-donezo-worker-token/i);
+  assert.match(worker, /verify_notification_worker_token/i);
+  assert.match(worker, /Unauthorized/);
 });
 
 test('legacy nudge sender does not leave a server event pending when the recipient has no subscription', () => {
