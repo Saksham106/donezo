@@ -1,0 +1,104 @@
+name: Finish flexible weekly and dark mode
+on:
+  push:
+    paths:
+      - '.github/workflows/finish-flexible-weekly-dark.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/flexible-weekly-habits-dark-mode-2026-08-31
+      - name: Apply warm graphite and assertion updates
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          tokens_path = Path('tokens.css')
+          tokens = tokens_path.read_text()
+          replacements = {
+            '--color-paper: oklch(20.5% 0.022 258);': '--color-paper: oklch(18.5% 0.012 65);',
+            '--color-paper-2: oklch(24.5% 0.025 258);': '--color-paper-2: oklch(21.5% 0.013 65);',
+            '--color-paper-3: oklch(29% 0.026 258);': '--color-paper-3: oklch(27% 0.014 65);',
+            '--color-surface: oklch(24% 0.024 258);': '--color-surface: oklch(23% 0.013 65);',
+            '--color-canvas: oklch(15.5% 0.02 258);': '--color-canvas: oklch(14.5% 0.01 65);',
+            '--color-ink-2: oklch(86% 0.018 82);': '--color-ink-2: oklch(86% 0.014 82);',
+            '--color-muted: oklch(74% 0.018 82);': '--color-muted: oklch(74% 0.014 82);',
+            '--color-faint: oklch(61% 0.018 82);': '--color-faint: oklch(60% 0.012 82);',
+            '--color-rule: oklch(36% 0.025 258);': '--color-rule: oklch(34% 0.014 65);',
+            '--color-rule-strong: oklch(49% 0.026 258);': '--color-rule-strong: oklch(47% 0.014 65);',
+            '--color-coral: oklch(62% 0.18 32);': '--color-coral: oklch(64% 0.155 32);',
+            '--color-coral-hover: oklch(68% 0.18 32);': '--color-coral-hover: oklch(69% 0.15 32);',
+            '--color-coral-soft: oklch(31% 0.07 32);': '--color-coral-soft: oklch(29% 0.05 32);',
+            '--color-coral-ink: oklch(83% 0.08 32);': '--color-coral-ink: oklch(84% 0.075 32);',
+            '--color-lime: oklch(78% 0.16 121);': '--color-lime: oklch(78% 0.145 121);',
+            '--color-lime-soft: oklch(31% 0.07 121);': '--color-lime-soft: oklch(29% 0.05 121);',
+            '--color-lime-ink: oklch(84% 0.08 121);': '--color-lime-ink: oklch(84% 0.075 121);',
+            '--color-warning-soft: oklch(31% 0.06 81);': '--color-warning-soft: oklch(29% 0.05 81);',
+            '--color-on-accent: oklch(20.5% 0.022 258);': '--color-on-accent: oklch(18.5% 0.012 65);',
+            '--color-shadow: oklch(5% 0.02 258 / 0.45);': '--color-shadow: oklch(5% 0.01 65 / 0.5);',
+            '--color-status-due-on-strong: oklch(20.5% 0.022 258);': '--color-status-due-on-strong: oklch(18.5% 0.012 65);',
+            '--color-status-due-soon-on-strong: oklch(20.5% 0.022 258);': '--color-status-due-soon-on-strong: oklch(18.5% 0.012 65);',
+            '--color-status-completed-on-strong: oklch(20.5% 0.022 258);': '--color-status-completed-on-strong: oklch(18.5% 0.012 65);',
+            '--color-status-missed-on-strong: oklch(20.5% 0.022 258);': '--color-status-missed-on-strong: oklch(18.5% 0.012 65);',
+            '--color-status-challenged-on-strong: oklch(20.5% 0.022 258);': '--color-status-challenged-on-strong: oklch(18.5% 0.012 65);',
+            '--color-status-recovered-on-strong: oklch(20.5% 0.022 258);': '--color-status-recovered-on-strong: oklch(18.5% 0.012 65);',
+          }
+          for old, new in replacements.items():
+            count = tokens.count(old)
+            if count == 0:
+              raise SystemExit(f'missing token anchor: {old}')
+            tokens = tokens.replace(old, new)
+          tokens_path.write_text(tokens)
+
+          app_path = Path('src/app.js')
+          app = app_path.read_text()
+          old_theme = "dark ? '#1d2433' : '#f7f2e8'"
+          if old_theme not in app:
+            raise SystemExit('missing old dark theme-color')
+          app_path.write_text(app.replace(old_theme, "dark ? '#1e1b18' : '#f7f2e8'", 1))
+
+          flex_path = Path('test/flexible-weekly-ui.test.mjs')
+          flex = flex_path.read_text()
+          old = """  for (let day = 1; day <= 7; day += 1) {\n    assert.match(app, new RegExp(`<option value=\"${day}\"`));\n  }"""
+          new = """  assert.match(app, /\\[1, 2, 3, 4, 5, 6, 7\\]\\.map/);\n  assert.match(app, /<option value=\"\\$\\{day\\}\"/);"""
+          if old not in flex:
+            raise SystemExit('missing flexible option assertion anchor')
+          flex = flex.replace(old, new, 1)
+          old = "  assert.match(app, /\\[name=\"scheduleFrequency\"\\][\\s\\S]{0,500}syncHabitScheduleFields/);"
+          new = "  assert.match(app, /const scheduleSelect = habitForm\\?\\.elements\\.scheduleFrequency/);\n  assert.match(app, /scheduleSelect\\?\\.addEventListener\\('change',[\\s\\S]*syncHabitScheduleFields\\(habitForm\\)/);"
+          if old not in flex:
+            raise SystemExit('missing schedule assertion anchor')
+          flex_path.write_text(flex.replace(old, new, 1))
+
+          friends_path = Path('test/friends-ui.test.mjs')
+          friends = friends_path.read_text()
+          old = """test('daily schedule selects all seven days and weekday edits switch to specific days', () => {\n  const source = slice('habitSheet', 'settingsSheet');\n  assert.match(source, /scheduleFrequency === 'daily'/);\n  assert.match(source, /scheduleFrequency === 'daily' \\|\\| scheduleWeekdays\\.has\\(day\\)/);\n  assert.match(app, /scheduleFrequency.*addEventListener\\('change'/s);\n  assert.match(app, /scheduleWeekdays.*scheduleFrequency.*selected_weekdays/s);\n});"""
+          new = """test('daily schedule keeps exact-day controls out of the way and weekday edits switch to specific days', () => {\n  const source = slice('habitSheet', 'settingsSheet');\n  assert.match(source, /data-schedule-weekdays/);\n  assert.match(source, /\\['selected_weekdays', 'weekly'\\]\\.includes\\(scheduleFrequency\\)/);\n  assert.match(app, /scheduleSelect\\?\\.addEventListener\\('change'/);\n  assert.match(app, /scheduleSelect\\.value === 'daily'[\\s\\S]*checkbox\\.checked = true/);\n  assert.match(app, /checkbox\\.checked && scheduleSelect[\\s\\S]*scheduleSelect\\.value = 'selected_weekdays'/);\n});"""
+          if old not in friends:
+            raise SystemExit('missing legacy daily schedule test block')
+          friends = friends.replace(old, new, 1)
+          old = """  assert.match(social, /\\.schedule-pause \\.form-grid\\{[^}]*minmax\\(0,1fr\\)/);\n  assert.match(social, /\\.schedule-pause[^{]*\\{|\\.schedule-pause \\.form-grid/);"""
+          new = """  assert.match(social, /\\.pause-date-grid\\{[^}]*repeat\\(2,minmax\\(0,1fr\\)\\)/);\n  assert.match(social, /\\.pause-date-grid input\\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0/);\n  assert.match(social, /\\.pause-disclosure/);"""
+          if old not in friends:
+            raise SystemExit('missing legacy pause css assertions')
+          friends_path.write_text(friends.replace(old, new, 1))
+          PY
+      - name: Verify patch
+        run: |
+          npm ci
+          npm test
+          npm run check
+          npm run build
+          git diff --check
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tokens.css src/app.js test/flexible-weekly-ui.test.mjs test/friends-ui.test.mjs
+          git commit -m 'feat: redesign dark mode with warm graphite'
+          git push origin HEAD:feat/flexible-weekly-habits-dark-mode-2026-08-31
