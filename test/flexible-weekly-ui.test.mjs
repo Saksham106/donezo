@@ -8,9 +8,8 @@ const css = await readFile(new URL('../social.css', import.meta.url), 'utf8');
 test('habit editor offers a dedicated flexible weekly schedule with a 1–7 day target', () => {
   assert.match(app, /option value="times_per_week"[^>]*>X times per week<\/option>/);
   assert.match(app, /name="weeklyTargetDays"/);
-  for (let day = 1; day <= 7; day += 1) {
-    assert.match(app, new RegExp(`<option value="${day}"`));
-  }
+  assert.match(app, /\[1, 2, 3, 4, 5, 6, 7\]\.map/);
+  assert.match(app, /<option value="\$\{day\}"/);
   assert.match(app, /Any distinct days count Monday–Sunday/);
   assert.match(app, /data-weekly-target/);
   assert.match(app, /data-schedule-weekdays/);
@@ -23,7 +22,8 @@ test('habit form persists weeklyTargetDays and schedule helpers carry it into ev
 
 test('schedule selection toggles weekly and weekday controls without rerendering the form', () => {
   assert.match(app, /function syncHabitScheduleFields\(/);
-  assert.match(app, /\[name="scheduleFrequency"\][\s\S]{0,500}syncHabitScheduleFields/);
+  assert.match(app, /const scheduleSelect = habitForm\?\.elements\.scheduleFrequency/);
+  assert.match(app, /scheduleSelect\?\.addEventListener\('change',[\s\S]*syncHabitScheduleFields\(habitForm\)/);
   assert.match(app, /weeklyTarget\.hidden\s*=\s*frequency\s*!==\s*'times_per_week'/);
   assert.match(app, /weekdays\.hidden\s*=\s*!\['selected_weekdays',\s*'weekly'\]\.includes\(frequency\)/);
 });

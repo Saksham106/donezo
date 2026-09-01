@@ -134,19 +134,21 @@ test('editing a habit exposes a dirty-state floating Save Changes action', () =>
   assert.match(social, /\.habit-save-dock\{[^}]*position:fixed/);
 });
 
-test('daily schedule selects all seven days and weekday edits switch to specific days', () => {
+test('daily schedule keeps exact-day controls out of the way and weekday edits switch to specific days', () => {
   const source = slice('habitSheet', 'settingsSheet');
-  assert.match(source, /scheduleFrequency === 'daily'/);
-  assert.match(source, /scheduleFrequency === 'daily' \|\| scheduleWeekdays\.has\(day\)/);
-  assert.match(app, /scheduleFrequency.*addEventListener\('change'/s);
-  assert.match(app, /scheduleWeekdays.*scheduleFrequency.*selected_weekdays/s);
+  assert.match(source, /data-schedule-weekdays/);
+  assert.match(source, /\['selected_weekdays', 'weekly'\]\.includes\(scheduleFrequency\)/);
+  assert.match(app, /scheduleSelect\?\.addEventListener\('change'/);
+  assert.match(app, /scheduleSelect\.value === 'daily'[\s\S]*checkbox\.checked = true/);
+  assert.match(app, /checkbox\.checked && scheduleSelect[\s\S]*scheduleSelect\.value = 'selected_weekdays'/);
 });
 
 test('pause dates are bounded and overlapping or reversed pauses are rejected in the UI', () => {
   assert.match(app, /startDate.*endDate.*overlap|overlap.*startDate.*endDate/s);
   assert.match(app, /startDate > endDate|startDate\.localeCompare\(endDate\)/);
-  assert.match(social, /\.schedule-pause \.form-grid\{[^}]*minmax\(0,1fr\)/);
-  assert.match(social, /\.schedule-pause[^{]*\{|\.schedule-pause \.form-grid/);
+  assert.match(social, /\.pause-date-grid\{[^}]*repeat\(2,minmax\(0,1fr\)\)/);
+  assert.match(social, /\.pause-date-grid input\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0/);
+  assert.match(social, /\.pause-disclosure/);
 });
 
 test('repeated default proof subtitle is suppressed while authored notes remain visible', () => {

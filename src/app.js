@@ -127,7 +127,7 @@ function applyTheme(choice) {
   else document.documentElement.dataset.theme = next;
   localStorage.setItem(THEME_KEY, next);
   const dark = next === 'dark' || (next === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1d2433' : '#f7f2e8');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1e1b18' : '#f7f2e8');
 }
 
 applyTheme(currentThemeChoice());
