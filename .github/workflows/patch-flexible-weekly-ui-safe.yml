@@ -1,0 +1,49 @@
+name: Patch flexible weekly UI safely
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-flexible-weekly-ui-safe.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/flexible-weekly-habits-dark-mode-2026-08-31
+      - name: Apply tested UI patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, textwrap
+
+          source = Path('.github/workflows/patch-flexible-weekly-ui-v2.yml').read_text()
+          match = re.search(r"          python3 - <<'PY'\n(.*?)\n          PY\n", source, re.S)
+          if not match:
+              raise SystemExit('could not extract UI patch script')
+          script = textwrap.dedent(match.group(1))
+          script = script.replace("replace_once(current_guard, guarded, 'handleHabit weekly guard')", "pass  # patched structurally below")
+          exec(compile(script, 'patch-flexible-weekly-ui-v2', 'exec'))
+
+          app_path = Path('src/app.js')
+          app = app_path.read_text()
+          pattern = re.compile(
+              r"(async function handleHabit\(id\) \{.*?\n  if \(current && !current\.invalid\) \{.*?\n  \}\n)(  if \(habit\.proofMode === 'photo'\) \{)",
+              re.S,
+          )
+          addition = """  const weekly = flexibleWeekProgress(habit, checkInDate);\n  if (weekly?.complete) {\n    notify(`${habit.title} is complete for the week.`);\n    return;\n  }\n  if (weekly?.paused) {\n    notify(`${habit.title} is paused today.`);\n    return;\n  }\n"""
+          app, count = pattern.subn(lambda m: m.group(1) + addition + m.group(2), app, count=1)
+          if count != 1:
+              raise SystemExit(f'handleHabit structural patch count {count}')
+          app_path.write_text(app)
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/app.js social.css
+          git diff --cached --check
+          git commit -m 'feat: add flexible weekly habit and native pause UX'
+          git push origin HEAD:feat/flexible-weekly-habits-dark-mode-2026-08-31
