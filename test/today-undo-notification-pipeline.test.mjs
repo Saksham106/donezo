@@ -68,8 +68,10 @@ test('notification worker wakeups require a random Vault token instead of an ano
   assert.match(worker, /Unauthorized/);
 });
 
-test('legacy nudge sender does not leave a server event pending when the recipient has no subscription', () => {
-  assert.match(sender, /subscriptions[^\n]*length[^\n]*===\s*0|!subscriptions\?\.length|!\(subscriptions\s*\|\|\s*\[\]\)\.length/);
-  assert.match(sender, /status:\s*['"]suppressed['"]/);
-  assert.match(sender, /no_subscription/);
+test('shared worker settles queued events when the recipient has no subscription', () => {
+  assert.match(worker, /activeSubscriptions\.length === 0/);
+  assert.match(worker, /status:\s*['"]suppressed['"]/);
+  assert.match(worker, /no_subscription/);
+  assert.doesNotMatch(sender, /from\('push_subscriptions'\)/);
+  assert.doesNotMatch(sender, /webpush\.sendNotification/);
 });
