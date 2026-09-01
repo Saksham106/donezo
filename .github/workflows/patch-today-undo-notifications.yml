@@ -70,3 +70,4 @@ jobs:
           git add src/app.js
           git commit -m 'feat: confirm Today check-in undo and refresh push subscriptions'
           git push origin HEAD:fix/today-undo-confirm-notifications-2026-08-31
+# rerun after notification contract refresh
