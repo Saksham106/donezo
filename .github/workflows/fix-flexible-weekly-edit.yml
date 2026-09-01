@@ -1,0 +1,40 @@
+name: Fix flexible weekly target edits
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-flexible-weekly-edit.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/flexible-weekly-habits-dark-mode-2026-08-31
+      - name: Patch target-only schedule edits
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/store.js')
+          s = p.read_text()
+          old = "      || (input.scheduleWeekdays || []).join(',') !== (habit.scheduleWeekdays || []).join(',')\n      || Number(input.targetQuantity ?? 1) !== Number(habit.targetQuantity ?? 1)"
+          new = "      || (input.scheduleWeekdays || []).join(',') !== (habit.scheduleWeekdays || []).join(',')\n      || Number(input.weeklyTargetDays ?? 1) !== Number(habit.weeklyTargetDays ?? 1)\n      || Number(input.targetQuantity ?? 1) !== Number(habit.targetQuantity ?? 1)"
+          if old not in s:
+            raise SystemExit('scheduleChanged anchor missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Verify regression and full suite
+        run: |
+          npm ci
+          npm test
+          npm run check
+          VITE_SUPABASE_URL=https://example.supabase.co VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ci_only npm run build
+          git diff --check
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/store.js
+          git commit -m 'fix: persist flexible weekly target-only edits'
+          git push origin HEAD:feat/flexible-weekly-habits-dark-mode-2026-08-31
