@@ -680,7 +680,7 @@ function proofReplyPreview(checkInId) {
     return `<div class="proof-reply-row"><button class="proof-reply-author" type="button" data-friend-profile="${comment.authorId}" aria-label="Open ${esc(author?.name || 'friend')} profile">${esc(label)}</button><span>${esc(comment.body)}</span></div>`;
   }).join('');
   const more = comments.length > 2
-    ? `<button class="proof-reply-all" type="button" data-comment-open="${checkInId}">View all ${comments.length} replies</button>`
+    ? `<button class="proof-reply-all" type="button" data-comment-open="${checkInId}" aria-label="View all ${comments.length} replies">More</button>`
     : '';
   return `<div class="proof-reply-preview">${rows}${more}</div>`;
 }
