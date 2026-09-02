@@ -33,7 +33,7 @@ Because Donezo is a web/PWA app, camera-only behavior cannot be treated as tampe
 
 Donezo stores one final composite proof file, not two independent proof objects.
 
-The rear/main capture remains the full background image. The front/selfie capture is rendered as a small square inset in the top-right, BeReal-style. The composite preserves the main capture’s aspect ratio rather than forcing a crop. It is encoded as JPEG and passed through the existing proof upload pipeline and 4 MB limit.
+The rear/main capture remains the full background image. The front/selfie capture is rendered as a square inset in the top-right, BeReal-style. The composite preserves the main capture’s aspect ratio rather than forcing a crop. It is encoded as JPEG and passed through the existing proof upload pipeline and 4 MB limit.
 
 This deliberately avoids adding `front_proof_path` / `rear_proof_path` to `check_ins`. Existing reactions, rejection votes, signed URLs, storage RLS, cleanup, proof history, undo, and re-upload all continue to operate against one `proof_path`.
 
@@ -54,7 +54,7 @@ Items are sorted newest first. Nudge rows remain visually distinct. Non-proof ac
 
 The top-right badge represents all unseen Updates, not only unread nudges.
 
-Opening Updates marks the currently loaded update set as seen: existing unread incoming nudges are marked read, and the user’s activity high-water mark advances using server time. This makes the badge clear coherently instead of leaving a mixed “some nudges unread, activity seen” state.
+Opening Updates uses one server cutoff timestamp. The server marks every incoming nudge created at or before that cutoff as read and advances the user’s non-proof activity high-water mark to the same cutoff. Updates arriving after that cutoff remain unseen. The UI clears the badge optimistically and reconciles to the server result.
 
 No new push-notification categories are introduced by this feature. Existing nudge and social notification delivery behavior remains unchanged.
 
@@ -62,7 +62,7 @@ No new push-notification categories are introduced by this feature. Existing nud
 
 ### 1. Dual-photo capture module
 
-Create a focused client module (for example `src/dual-proof.js`) responsible for:
+Create `src/dual-proof.js`, responsible for:
 
 - dual-capture state transitions;
 - camera capability checks;
@@ -71,7 +71,7 @@ Create a focused client module (for example `src/dual-proof.js`) responsible for
 - composition geometry;
 - producing the final uploadable `File`.
 
-`src/app.js` coordinates sheets and user actions but should not contain the low-level camera/composition logic.
+`src/app.js` coordinates sheets and user actions but does not contain the low-level camera/composition logic.
 
 The existing `src/proof.js` remains responsible for generic proof validation/compression. Shared image decode/encode helpers may be factored so both single-photo compression and dual composition use the same safe image primitives.
 
@@ -103,9 +103,9 @@ A dual-photo habit must never silently downgrade to a proof-less/simple check-in
 
 ### 4. Composition
 
-The final canvas uses the main capture’s aspect ratio and scales to a bounded maximum dimension before encoding. The full main image is preserved.
+The final canvas uses the main capture’s aspect ratio. The main image is scaled down only when its long edge exceeds 2048 px; it is never cropped.
 
-The selfie inset is approximately 30% of the composite width, square, top-right, with rounded corners and a small contrasting border/shadow. The selfie may use a centered square crop inside its inset; the main proof must not be cropped.
+The selfie inset is exactly 30% of the composite width, square, positioned 3% from the top and right edges, with rounded corners and a small contrasting border/shadow. The selfie uses a centered square crop inside its inset; the main proof remains uncropped.
 
 The output is encoded as JPEG, then validated/compressed to the existing maximum proof size before upload.
 
@@ -117,33 +117,37 @@ Composition errors retain the already captured source images in local state so t
 
 Add `dual_photo` to the `habits.proof_mode` constraint.
 
-All current server-side validation/policies that distinguish `none` from `photo` must be updated so both `photo` and `dual_photo` are proof-bearing. Prefer future-proof logic equivalent to:
+All current server-side validation/policies that distinguish `none` from `photo` must be updated so both `photo` and `dual_photo` are proof-bearing. Use the business rule:
 
 - `proof_mode = 'none'` -> `proof_path` must be null;
 - `proof_mode <> 'none'` -> a valid proof object/path is required.
 
 No new proof-path columns are added to `check_ins`.
 
-The frontend/store must likewise stop using checks such as `proofMode === 'photo'` when the real business rule is “this habit requires proof.” Use a helper such as `requiresPhotoProof(proofMode)` or equivalent so `photo` and `dual_photo` cannot accidentally fall through to simple check-in behavior.
+The frontend/store must likewise stop using checks such as `proofMode === 'photo'` when the real business rule is “this habit requires proof.” Add one shared helper named `requiresPhotoProof(proofMode)` so `photo` and `dual_photo` cannot accidentally fall through to simple check-in behavior.
 
 ### Updates read state
 
-Add a self-owned table such as:
+Add:
 
-`user_update_state(user_id uuid primary key, last_seen_at timestamptz not null)`
+`public.user_update_state(user_id uuid primary key references public.profiles(id) on delete cascade, last_seen_at timestamptz not null)`
 
-with RLS allowing only the authenticated user to read/write their row.
+RLS allows only the authenticated user to select/insert/update their own row.
 
-Expose a server-authoritative RPC such as `mark_updates_seen()` that:
+Existing users are backfilled with `last_seen_at = now()` at migration time so deployment does not create a badge containing months of historical activity. New users receive `last_seen_at = now()` when their update-state row is first created.
 
-1. captures `now()` once;
-2. marks the caller’s currently unread incoming nudges read at that timestamp;
-3. upserts `user_update_state.last_seen_at` to that timestamp;
-4. returns the timestamp.
+Add a server-authoritative RPC named `public.mark_updates_seen()` that:
 
-The repository loads `last_seen_at` with the user’s social state. Unseen non-proof activity is any currently authorized activity item whose event timestamp is later than `last_seen_at`. The badge count is unseen non-proof activity plus unread incoming nudges, deduplicated by category rather than by database row identity.
+1. captures server `now()` once as `seen_through`;
+2. marks the caller’s unread incoming nudges with `created_at <= seen_through` as read at `seen_through`;
+3. upserts `user_update_state.last_seen_at = seen_through`;
+4. returns `seen_through`.
 
-Opening Updates optimistically clears the badge, then persists via the RPC. If persistence fails, authoritative refresh restores the correct unread state and a non-blocking error is shown.
+The repository loads `last_seen_at` with the user’s social state. Unseen non-proof activity is any currently authorized activity item whose event timestamp is later than `last_seen_at`.
+
+The badge count is the number of normalized unseen update items: each unread nudge counts once and each unseen non-proof activity item counts once. Nudges and non-proof activity are separate update kinds, so they are not double-counted.
+
+Opening Updates optimistically clears the badge, then persists via `mark_updates_seen()`. If persistence fails, authoritative refresh restores the correct unread state and a non-blocking error is shown.
 
 This read state does not change visibility. Activity continues to be filtered by the same existing friend/audience rules as the current Activity tab.
 
@@ -158,13 +162,13 @@ Proof cards keep lazy signed-URL loading, but the image is rendered directly in 
 - no “Open proof” action;
 - no click-to-open proof viewer requirement.
 
-The full image should occupy the available card width where its aspect allows, using `height: auto` / contain-style behavior so the entire proof remains visible. The surrounding card may use a neutral surface behind unusually shaped images, but the image itself is not cropped.
+The inline proof image uses the full available card width and natural height (`width: 100%; height: auto`). The image itself is never cropped. Very tall images are allowed to make a tall post rather than hiding content behind a viewer.
 
 Dual-photo composites naturally render like any other proof because they are a single image object.
 
 ### Viewer removal
 
-Remove the standalone proof-viewer UI/state and its event handlers wherever it exists solely to reveal the uncropped image. Signed-URL caching/lazy loading that still benefits the inline feed may remain, renamed if needed so it no longer models “thumbnail vs viewer.”
+Remove the standalone proof-viewer UI/state and its event handlers wherever it exists solely to reveal the uncropped image. Signed-URL caching/lazy loading that still benefits the inline feed remains, renamed if needed so it no longer models “thumbnail vs viewer.”
 
 Profile Proof history follows the same rule: show the complete proof image inline in the history carousel/list without requiring a second viewer.
 
@@ -192,7 +196,7 @@ Remove:
 
 Rename the nudge inbox presentation to **Updates** while reusing the existing top-right entry point and badge location.
 
-The sheet contains one chronological list. Each normalized row has a stable shape such as:
+Normalize every row to this shape before rendering:
 
 - `kind`: `nudge` or `activity`;
 - `id`;
@@ -200,11 +204,13 @@ The sheet contains one chronological list. Each normalized row has a stable shap
 - actor identity;
 - compact message/detail;
 - optional profile/action target;
-- whether it was unseen at the time the sheet opened.
+- `unseenAtOpen`.
 
-Nudges can keep their existing action semantics. Activity rows must not introduce reactions/comments there; social interaction remains centered on proof cards.
+The sheet shows 20 normalized items initially, newest first, with a compact **More** control for additional loaded items. The badge count still considers the full currently loaded authorized update set rather than only the first 20 rendered rows.
 
-The former Activity tab is removed only after Updates proves it contains every activity type that tab previously rendered.
+Nudges keep their existing action semantics. Activity rows do not introduce reactions/comments there; social interaction remains centered on proof cards.
+
+The former Activity tab is removed only after regression coverage proves Updates contains every activity type that tab previously rendered.
 
 ## Error handling
 
@@ -252,7 +258,7 @@ Old proof rows remain unchanged and render inline using their existing single `p
 - `dual_photo` is recognized as proof-required everywhere `photo` currently is.
 - dual-capture state transitions preserve captures across retakes/errors.
 - camera stream cleanup always stops tracks.
-- composition preserves main-image aspect ratio and expected selfie geometry.
+- composition preserves main-image aspect ratio and exact selfie geometry.
 - composite output obeys supported MIME/size rules.
 - fallback capture feeds the same review/composition path.
 - update unseen-count logic uses `last_seen_at` and unread nudges correctly.
@@ -261,7 +267,8 @@ Old proof rows remain unchanged and render inline using their existing single `p
 
 - migration accepts `dual_photo` and rejects invalid proof modes;
 - proof-required RLS/check-in constraints cover both photo modes;
-- `mark_updates_seen()` can affect only the authenticated user and their incoming nudges;
+- existing update-state rows are backfilled without historical unread inflation;
+- `mark_updates_seen()` can affect only the authenticated user and their incoming nudges at/before its server cutoff;
 - activity visibility remains unchanged;
 - dual-photo upload still creates exactly one storage object and one `proof_path`;
 - undo/rejected-proof replacement cleans up the composite exactly once.
@@ -276,6 +283,7 @@ Old proof rows remain unchanged and render inline using their existing single `p
 - standalone proof viewer is removed;
 - Friends has no Proofs / Activity tabs and always renders proofs;
 - Updates contains nudges plus every former non-proof Activity type;
+- Updates renders 20 items initially and can reveal more;
 - badge represents all unseen Updates;
 - reactions, replies, rejection counts, exact timestamps, and profile navigation remain intact.
 
