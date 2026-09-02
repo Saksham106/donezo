@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
-const migration = readFileSync(new URL('../supabase/migrations/20260902_fix_selected_friend_proof_snapshot.sql', import.meta.url), 'utf8');
+const migrationUrl = new URL('../supabase/migrations/20260902_fix_selected_friend_proof_snapshot.sql', import.meta.url);
+const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, 'utf8') : '';
 
 function section(source, start, end) {
   const from = source.indexOf(start);
