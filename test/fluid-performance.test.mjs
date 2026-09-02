@@ -207,11 +207,12 @@ test('Friends list primes a fresh invite before the tap so native share keeps us
   assert.ok(shareCall >= 0 && firstAwait === shareCall - 'await '.length, 'navigator.share must be the first awaited operation');
 });
 
-test('optimistic reply success refreshes server ids and undo contains no dead event scaffolding', () => {
+test('optimistic reply success refreshes server ids without rebuilding the proof feed', () => {
   const submit = section(app, 'async function handleCommentSubmit(', 'async function handleUndoCommentDelete(');
   const replace = submit.indexOf('repo.replaceOptimisticComment(temp.id, saved)');
-  const rerender = submit.indexOf('renderPreservingScroll()', replace);
-  assert.ok(replace >= 0 && rerender > replace);
+  const overlayRefresh = submit.indexOf('refreshCommentSheet()', replace);
+  assert.ok(replace >= 0 && overlayRefresh > replace);
+  assert.doesNotMatch(submit, /renderPreservingScroll\(\)/);
   const undo = section(app, 'async function handleUndoCommentDelete(', 'async function handleDeleteComment(');
   assert.doesNotMatch(undo, /fakeEvent/);
 });

@@ -839,7 +839,7 @@ function friendsScreen() {
   const refreshButton = `<button class="refresh-btn ${manualRefreshLoading ? 'loading' : ''}" type="button" data-manual-refresh aria-label="Refresh Friends" title="Refresh" ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span></button>`;
   const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View friends" title="Friends">${icon('people')}</button>`;
   const empty = '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>';
-  return `<section class="friends-heading"><p class="eyebrow">YOUR PEOPLE</p><div class="friends-heading-row"><h1>Friends</h1><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div></section><div class="activity-list">${activities || empty}${loadMore}</div>`;
+  return `<section class="friends-heading"><div class="friends-heading-row"><h1>Friends</h1><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div></section><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
 function challengeProgress(challenge) {
@@ -1189,6 +1189,45 @@ function commentSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet comment-sheet" role="dialog" aria-modal="true" aria-label="Replies" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">QUICK REPLIES</p><h2>${esc(activity?.emoji || '✓')} ${esc(activity?.habitTitle || 'Check-in')}</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><div class="comment-list">${comments.length ? comments.map((comment) => `<article class="comment-row"><button class="comment-profile" type="button" data-friend-profile="${comment.authorId}" aria-label="Open ${esc(member(comment.authorId)?.name || 'friend')} profile"><div class="avatar">${esc(member(comment.authorId)?.avatar || '?')}</div><span><strong>${comment.authorId === state.currentUserId ? 'You' : esc(member(comment.authorId)?.name || 'Friend')}</strong><small>${esc(formatWhen(comment.createdAt))}</small></span></button><p>${esc(comment.body)}</p>${comment.authorId === state.currentUserId ? `<button class="comment-delete" type="button" data-delete-comment="${comment.id}" aria-label="Delete reply">×</button>` : ''}</article>`).join('') : '<div class="empty compact-empty"><b>No replies yet.</b><p>Keep it short. This is hype, not group chat.</p></div>'}</div><form id="comment-form" class="comment-form"><input name="body" maxlength="180" required autocomplete="off" placeholder="Say something useful…" value="${commentRetryDraft?.checkInId === commentCheckInId ? esc(commentRetryDraft.body) : ''}"><button class="btn primary" ${busy ? 'disabled' : ''}>Send</button></form></section></div>`;
 }
 
+
+function closeCommentSheet() {
+  commentCheckInId = null;
+  app.querySelector('.comment-sheet')?.closest('.sheet-backdrop')?.remove();
+}
+
+function bindCommentSheetActions() {
+  const sheet = app.querySelector('.comment-sheet');
+  if (!sheet) return;
+  const backdrop = sheet.closest('.sheet-backdrop');
+  backdrop?.addEventListener('click', (event) => {
+    if (event.target === backdrop) closeCommentSheet();
+  });
+  sheet.querySelector('[data-close-social-sheet]')?.addEventListener('click', closeCommentSheet);
+  sheet.querySelector('#comment-form')?.addEventListener('submit', handleCommentSubmit);
+  sheet.querySelectorAll('[data-delete-comment]').forEach((element) => {
+    element.onclick = () => handleDeleteComment(element.dataset.deleteComment);
+  });
+  sheet.querySelectorAll('[data-friend-profile]').forEach((element) => {
+    element.onclick = () => openFriendProfile(element.dataset.friendProfile);
+  });
+  bindSheetSwipeDismiss();
+}
+
+function refreshCommentSheet() {
+  if (!commentCheckInId) return;
+  app.querySelector('.comment-sheet')?.closest('.sheet-backdrop')?.remove();
+  app.querySelector('.app-shell')?.insertAdjacentHTML('beforeend', commentSheet());
+  bindCommentSheetActions();
+}
+
+function openCommentSheet(checkInId) {
+  if (!checkInId) return;
+  commentCheckInId = checkInId;
+  app.querySelector('.comment-sheet')?.closest('.sheet-backdrop')?.remove();
+  app.querySelector('.app-shell')?.insertAdjacentHTML('beforeend', commentSheet());
+  bindCommentSheetActions();
+}
+
 function batonSheet() {
   if (!batonSheetOpen) return '';
   const state = getState();
@@ -1298,7 +1337,7 @@ function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
   if (!habit) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take a photo, pick one from your library, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take a photo, pick one from your library, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-donezo-camera>Use Donezo camera</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
 }
 
 function proofReviewSheet() {
@@ -1307,13 +1346,13 @@ function proofReviewSheet() {
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
   const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
-  const cameraSession = dualProof?.habitId === habit.id;
+  const cameraSession = dualProof?.habitId === habit.id && (dualProof?.mode === 'single' || Boolean(dualProof?.selfieFile));
   const dual = cameraSession && dualProof?.mode === 'dual';
   const replaceActions = dual
     ? `<div class="proof-review-actions"><button class="btn" type="button" data-dual-retake-main ${uploading ? 'disabled' : ''}>Retake proof</button><button class="btn" type="button" data-dual-retake-selfie ${uploading ? 'disabled' : ''}>Retake selfie</button></div>`
     : cameraSession
       ? `<div class="proof-review-actions"><button class="btn" type="button" data-camera-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose from library</button></div>`
-      : `<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div>`;
+      : `<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div><button class="btn full proof-add-selfie-btn" type="button" data-proof-add-selfie ${uploading ? 'disabled' : ''}>Add selfie · make it Dual</button>`;
   return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}${replaceActions}<div class="upload-status" aria-live="polite" data-upload-status>${uploading ? 'Uploading proof. Keep Donezo open.' : proofReview.status === 'error' ? 'Upload failed. Your photo is saved for retry.' : 'Ready to submit.'}</div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
 }
 
@@ -1389,6 +1428,7 @@ async function finishDualSelection(file, side) {
         : dualProof.mainFile;
       if (!output) throw new Error('Take a proof photo first');
       const previewUrl = URL.createObjectURL(output);
+      if (proofReview?.previewUrl) URL.revokeObjectURL(proofReview.previewUrl);
       proofReview = createProofReviewState({ file: output, habitId: dualProof.habitId, previewUrl });
     } catch (error) {
       dualProof = transitionDualProof(dualProof, { type: 'failed', error: readableError(error) });
@@ -1568,7 +1608,8 @@ function bindProofThumbnails() {
 }
 
 function bindProofActions() {
-  app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => {
+  app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
+  app.querySelectorAll('[data-proof-donezo-camera]').forEach((element) => { element.onclick = () => {
     if (!proofHabit) return;
     dualProof = createDualProofState(proofHabit, 'single');
     proofHabit = null;
@@ -1577,13 +1618,13 @@ function bindProofActions() {
   app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
   app.querySelectorAll('[data-proof-paste]').forEach((element) => { element.onclick = handlePasteProof; });
   app.querySelectorAll('[data-proof-source-close]').forEach((element) => { element.onclick = () => { proofHabit = null; render(); }; });
-  app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => {
+  app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => replaceProofSelection(proofInput); });
+  app.querySelectorAll('[data-proof-add-selfie]').forEach((element) => { element.onclick = () => {
     if (!proofReview) return;
     const habitId = proofReview.habitId;
-    clearProofReview();
-    clearDualProof();
-    dualProof = createDualProofState(habitId, 'single');
-    render();
+    const mainFile = proofReview.file;
+    dualProof = { ...createDualProofState(habitId, 'dual'), phase: 'selfie', mainFile };
+    proofSelfieInput?.click();
   }; });
   app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => {
     if (dualProof?.habitId === proofReview?.habitId) clearDualProof();
@@ -1690,7 +1731,7 @@ function render() {
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
   app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { dualProof = createDualProofState(element.dataset.quickProof, 'single'); proofHabit = null; render(); }; });
   app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.reactionEmoji); });
-  app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => { commentCheckInId = element.dataset.commentOpen; render(); }; });
+  app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => openCommentSheet(element.dataset.commentOpen); });
   app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
   app.querySelectorAll('[data-baton-open], [data-pass-baton]').forEach((element) => { element.onclick = () => { challengeInfoOpen = false; batonSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-baton-checkin], [data-empty-checkin]').forEach((element) => { element.onclick = openCheckInAction; });
@@ -1964,6 +2005,10 @@ function bindSheetSwipeDismiss() {
       tracking = false;
       if (shouldClose) {
         resetVisuals();
+        if (sheet.classList.contains('comment-sheet')) {
+          closeCommentSheet();
+          return;
+        }
         closeSheets();
         render();
         return;
@@ -2540,20 +2585,20 @@ async function handleCommentSubmit(event) {
   const temp = repo.applyOptimisticComment(checkInId, body);
   optimisticPatches.set(key, () => repo.applyOptimisticComment(checkInId, body, temp));
   commentRetryDraft = null;
-  renderPreservingScroll();
+  refreshCommentSheet();
   await yieldToPaint();
   try {
     const saved = await repo.addComment(checkInId, body);
     repo.replaceOptimisticComment(temp.id, saved);
     optimisticPatches.delete(key);
-    renderPreservingScroll();
+    refreshCommentSheet();
     scheduleReconciliation();
     notify('Reply sent');
   } catch (error) {
     optimisticPatches.delete(key);
     repo.removeOptimisticComment(temp.id);
     commentRetryDraft = { checkInId, body };
-    renderPreservingScroll();
+    refreshCommentSheet();
     notify(readableError(error), 3600);
   }
 }
@@ -2571,11 +2616,11 @@ async function handleUndoCommentDelete(comment) {
     repo.replaceOptimisticComment(restored.id, saved);
     commentRetryDraft = null;
     scheduleReconciliation();
-    renderPreservingScroll();
+    refreshCommentSheet();
     notify('Reply restored');
   } catch (error) {
     repo.removeOptimisticComment(restored.id);
-    renderPreservingScroll();
+    refreshCommentSheet();
     notify(readableError(error), 3600);
   }
 }
@@ -2591,7 +2636,7 @@ async function handleDeleteComment(commentId) {
   if (optimisticPatches.has(key)) return;
   const removed = repo.removeOptimisticComment(commentId);
   optimisticPatches.set(key, () => repo.removeOptimisticComment(commentId));
-  renderPreservingScroll();
+  refreshCommentSheet();
   await yieldToPaint();
   try {
     await repo.deleteComment(commentId);
@@ -2601,7 +2646,7 @@ async function handleDeleteComment(commentId) {
   } catch (error) {
     optimisticPatches.delete(key);
     if (removed) repo.applyOptimisticComment(removed.checkInId, removed.body, removed);
-    renderPreservingScroll();
+    refreshCommentSheet();
     notify(readableError(error), 3600);
   }
 }
