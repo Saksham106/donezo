@@ -33,41 +33,38 @@ jobs:
               p.write_text(text.replace(old, new, 1))
 
           store = 'src/store.js'
-          replace_once(store, '''    return {
-              ...checkIn,
-              invalid: rejectedIds.has(checkIn.id),
-              downvotes: downvoteUsers.size,
-              userDownvoted: downvoteUsers.has(user.id),
-            };''', '''    return {
-              ...checkIn,
-              audienceSize: audienceSizeByCheckIn.get(checkIn.id)
-                ?? checkIn.authorizedViewerIds?.length
-                ?? memberRows.length,
-              invalid: rejectedIds.has(checkIn.id),
-              downvotes: downvoteUsers.size,
-              userDownvoted: downvoteUsers.has(user.id),
-            };''')
-          replace_once(store, '''        proofPath: checkIn.proofPath,
-                invalid: checkIn.invalid,
-                downvotes: checkIn.downvotes,''', '''        proofPath: checkIn.proofPath,
-                audienceSize: checkIn.audienceSize,
-                invalid: checkIn.invalid,
-                downvotes: checkIn.downvotes,''')
+          replace_once(
+              store,
+              '    return {\n      ...checkIn,\n      invalid: rejectedIds.has(checkIn.id),\n      downvotes: downvoteUsers.size,\n      userDownvoted: downvoteUsers.has(user.id),\n    };',
+              '    return {\n      ...checkIn,\n      audienceSize: audienceSizeByCheckIn.get(checkIn.id)\n        ?? checkIn.authorizedViewerIds?.length\n        ?? memberRows.length,\n      invalid: rejectedIds.has(checkIn.id),\n      downvotes: downvoteUsers.size,\n      userDownvoted: downvoteUsers.has(user.id),\n    };',
+          )
+          replace_once(
+              store,
+              '        proofPath: checkIn.proofPath,\n        invalid: checkIn.invalid,\n        downvotes: checkIn.downvotes,',
+              '        proofPath: checkIn.proofPath,\n        audienceSize: checkIn.audienceSize,\n        invalid: checkIn.invalid,\n        downvotes: checkIn.downvotes,',
+          )
 
           app = 'src/app.js'
-          replace_once(app, '''function displayDate() {''', '''function formatExactTime(value) {
-            if (!value) return '';
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) return '';
-            return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
-          }
-
-          function displayDate() {''')
-          replace_once(app, '''  const threshold = proofRejectionThreshold(friendList(getState()).length);''', '''  const threshold = proofRejectionThreshold(activity.audienceSize);
-            const rejectionLabel = `${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}`;
-            const rejectionStatus = `<span class="vote-btn proof-rejection-status ${activity.invalid ? 'active' : ''}" aria-label="${activity.invalid ? 'Proof rejected' : `${activity.downvotes || 0} proof rejection${activity.downvotes === 1 ? '' : 's'} so far`}">👎 <span>${rejectionLabel}</span></span>`;''')
-          replace_once(app, '''mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') :''', '''mine ? `${rejectionStatus}${activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : ''}` :''')
-          replace_once(app, '''<span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span>''', '''<span>${rejectionLabel}</span>''')
+          replace_once(
+              app,
+              'function displayDate() {',
+              "function formatExactTime(value) {\n  if (!value) return '';\n  const date = new Date(value);\n  if (Number.isNaN(date.getTime())) return '';\n  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);\n}\n\nfunction displayDate() {",
+          )
+          replace_once(
+              app,
+              '  const threshold = proofRejectionThreshold(friendList(getState()).length);',
+              "  const threshold = proofRejectionThreshold(activity.audienceSize);\n  const rejectionLabel = `${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}`;\n  const rejectionStatus = `<span class=\"vote-btn proof-rejection-status ${activity.invalid ? 'active' : ''}\" aria-label=\"${activity.invalid ? 'Proof rejected' : `${activity.downvotes || 0} proof rejection${activity.downvotes === 1 ? '' : 's'} so far`}\">👎 <span>${rejectionLabel}</span></span>`;",
+          )
+          replace_once(
+              app,
+              'mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : \'\') :',
+              'mine ? `${rejectionStatus}${activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : \'\'}` :',
+          )
+          replace_once(
+              app,
+              '<span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : \'\'}</span>',
+              '<span>${rejectionLabel}</span>',
+          )
 
           p = Path(app)
           text = p.read_text()
