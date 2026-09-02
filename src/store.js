@@ -47,7 +47,7 @@ export function validateHabitInput(input = {}) {
   const targetTime = input.targetTime == null ? '' : String(input.targetTime).trim();
   if (targetTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(targetTime)) throw new Error('Enter a valid target time');
   const proofMode = String(input.proofMode || '');
-  if (!['photo', 'dual_photo', 'none'].includes(proofMode)) throw new Error('Choose a valid proof mode');
+  if (!['photo', 'none'].includes(proofMode)) throw new Error('Choose a valid proof mode');
   return { title, emoji, targetTime, proofMode };
 }
 

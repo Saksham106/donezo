@@ -6,11 +6,12 @@ import { mapDatabaseState, validateHabitInput } from '../src/store.js';
 
 const storeSource = readFileSync(new URL('../src/store.js', import.meta.url), 'utf8');
 
-test('dual photo is a first-class proof-required habit mode', () => {
+test('photo is the only proof-required habit mode', () => {
   assert.equal(requiresPhotoProof('none'), false);
   assert.equal(requiresPhotoProof('photo'), true);
-  assert.equal(requiresPhotoProof('dual_photo'), true);
-  assert.equal(validateHabitInput({ title: 'Gym', emoji: '🏋️', targetTime: '18:00', proofMode: 'dual_photo' }).proofMode, 'dual_photo');
+  assert.equal(requiresPhotoProof('dual_photo'), false);
+  assert.equal(validateHabitInput({ title: 'Gym', emoji: '🏋️', targetTime: '18:00', proofMode: 'photo' }).proofMode, 'photo');
+  assert.throws(() => validateHabitInput({ title: 'Gym', emoji: '🏋️', targetTime: '18:00', proofMode: 'dual_photo' }), /valid proof mode/);
 });
 
 test('simple check-in paths reject every proof-required habit mode', () => {

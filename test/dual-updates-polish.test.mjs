@@ -14,18 +14,20 @@ function section(source, start, end) {
   return source.slice(from, to);
 }
 
-test('every normal photo-proof picker offers Dual photo', () => {
+test('Dual photo lives inside the Take photo camera rather than the source picker', () => {
   const picker = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
+  const camera = section(app, 'function dualProofSheet()', 'function proofSourceSheet()');
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
-  assert.match(picker, /data-proof-dual/);
-  assert.match(picker, />Dual photo</);
-  assert.match(bindings, /\[data-proof-dual\]/);
-  assert.match(bindings, /createDualProofState\(proofHabit\)/);
+  assert.doesNotMatch(picker, /data-proof-dual/);
+  assert.match(camera, /data-camera-mode="single"/);
+  assert.match(camera, /data-camera-mode="dual"/);
+  assert.match(bindings, /createDualProofState\(proofHabit, 'single'\)/);
 });
 
-test('optional Dual photo keeps the dual retake review controls', () => {
+test('Dual camera mode keeps independent retake controls', () => {
   const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
-  assert.match(review, /const dual = dualProof\?\.habitId === habit\.id/);
+  assert.match(review, /cameraSession/);
+  assert.match(review, /dualProof\?\.mode === 'dual'/);
   assert.match(review, /data-dual-retake-main/);
   assert.match(review, /data-dual-retake-selfie/);
 });

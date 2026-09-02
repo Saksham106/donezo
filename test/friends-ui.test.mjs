@@ -19,7 +19,7 @@ test('primary navigation and topbar speak in Friends, not squad switching', () =
 
 test('Friends renders one authorized proof feed with compact heading actions', () => {
   const source = slice('friendsScreen', 'challengeProgress');
-  assert.match(source, /pageHeading\('Friends'/);
+  assert.match(source, /friends-heading-row/);
   assert.match(source, /data-people-open/);
   assert.match(source, /data-manual-refresh/);
   assert.match(source, /activityList\(state\)\.filter\(\(activity\) => activity\.proofPath\)/);
@@ -29,7 +29,7 @@ test('Friends renders one authorized proof feed with compact heading actions', (
   assert.doesNotMatch(source, /groupSquadActivity/);
   assert.doesNotMatch(source, /One feed for the people you choose to show up with/);
   assert.doesNotMatch(source, /Hype your people|See what happened/);
-  assert.match(social, /\.squad-refresh-row/);
+  assert.match(social, /\.friends-heading-row/);
 });
 
 test('Friends and League prefer new state while preserving member fallbacks', () => {
