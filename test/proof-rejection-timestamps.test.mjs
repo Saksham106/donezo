@@ -40,8 +40,8 @@ test('proof state exposes immutable audience size to the proof card', () => {
 
 test('proof cards use the immutable audience for rejection threshold and show owner rejection status', () => {
   assert.match(app, /proofRejectionThreshold\(activity\.audienceSize\)/);
-  assert.match(app, /const rejectionStatus =/);
-  assert.match(app, /mine[\s\S]*rejectionStatus/);
+  assert.match(app, /const rejectionControl =/);
+  assert.match(app, /mine[\s\S]*proof-rejection-status/);
 });
 
 test('proof activity metadata includes relative and exact local time', () => {
