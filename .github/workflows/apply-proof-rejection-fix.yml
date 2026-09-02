@@ -1,0 +1,96 @@
+name: Apply proof rejection fix
+
+on:
+  push:
+    branches:
+      - fix/proof-rejections-timestamps-2026-09-02
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Patch approved proof behavior
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          store = 'src/store.js'
+          replace_once(store, '''    return {
+              ...checkIn,
+              invalid: rejectedIds.has(checkIn.id),
+              downvotes: downvoteUsers.size,
+              userDownvoted: downvoteUsers.has(user.id),
+            };''', '''    return {
+              ...checkIn,
+              audienceSize: audienceSizeByCheckIn.get(checkIn.id)
+                ?? checkIn.authorizedViewerIds?.length
+                ?? memberRows.length,
+              invalid: rejectedIds.has(checkIn.id),
+              downvotes: downvoteUsers.size,
+              userDownvoted: downvoteUsers.has(user.id),
+            };''')
+          replace_once(store, '''        proofPath: checkIn.proofPath,
+                invalid: checkIn.invalid,
+                downvotes: checkIn.downvotes,''', '''        proofPath: checkIn.proofPath,
+                audienceSize: checkIn.audienceSize,
+                invalid: checkIn.invalid,
+                downvotes: checkIn.downvotes,''')
+
+          app = 'src/app.js'
+          replace_once(app, '''function displayDate() {''', '''function formatExactTime(value) {
+            if (!value) return '';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return '';
+            return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
+          }
+
+          function displayDate() {''')
+          replace_once(app, '''  const threshold = proofRejectionThreshold(friendList(getState()).length);''', '''  const threshold = proofRejectionThreshold(activity.audienceSize);
+            const rejectionLabel = `${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}`;
+            const rejectionStatus = `<span class="vote-btn proof-rejection-status ${activity.invalid ? 'active' : ''}" aria-label="${activity.invalid ? 'Proof rejected' : `${activity.downvotes || 0} proof rejection${activity.downvotes === 1 ? '' : 's'} so far`}">👎 <span>${rejectionLabel}</span></span>`;''')
+          replace_once(app, '''mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') :''', '''mine ? `${rejectionStatus}${activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : ''}` :''')
+          replace_once(app, '''<span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span>''', '''<span>${rejectionLabel}</span>''')
+
+          p = Path(app)
+          text = p.read_text()
+          old = 'esc(formatWhen(activity.when))'
+          count = text.count(old)
+          if count < 1:
+              raise SystemExit(f'{app}: expected activity timestamps, found {count}')
+          text = text.replace(old, 'esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)')
+          p.write_text(text)
+          PY
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_only
+      - name: Commit verified fix and remove patch workflow
+        run: |
+          git config user.name "Saksham Goel"
+          git config user.email "67731724+Saksham106@users.noreply.github.com"
+          git rm .github/workflows/apply-proof-rejection-fix.yml
+          git add src/app.js src/store.js test/proof-rejection-timestamps.test.mjs
+          git diff --cached --check
+          git commit -m "fix: expose proof rejections and exact timestamps"
+          git push origin HEAD:fix/proof-rejections-timestamps-2026-09-02
