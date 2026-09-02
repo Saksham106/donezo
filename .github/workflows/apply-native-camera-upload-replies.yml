@@ -21,6 +21,7 @@ jobs:
           cache: npm
       - run: python3 scripts/patch_native_camera_upload_replies.py
       - run: python3 scripts/patch_native_camera_edge_cases.py
+      - run: python3 scripts/restore_fluid_performance_test.py
       - run: npm ci
       - run: node --test test/native-camera-upload-replies.test.mjs
       - run: npm test
@@ -33,7 +34,7 @@ jobs:
         run: |
           git config user.name "Saksham Goel"
           git config user.email "67731724+Saksham106@users.noreply.github.com"
-          git rm -f scripts/patch_native_camera_upload_replies.py scripts/patch_native_camera_edge_cases.py .github/workflows/apply-native-camera-upload-replies.yml
-          git add src/app.js supabase/migrations/20260902_fix_selected_friend_proof_snapshot.sql test/native-camera-upload-replies.test.mjs
+          git rm -f scripts/patch_native_camera_upload_replies.py scripts/patch_native_camera_edge_cases.py scripts/restore_fluid_performance_test.py .github/workflows/apply-native-camera-upload-replies.yml
+          git add src/app.js supabase/migrations/20260902_fix_selected_friend_proof_snapshot.sql test/native-camera-upload-replies.test.mjs test/fluid-performance.test.mjs
           git commit -m "fix: native camera upload and reply stability"
           git push origin HEAD
