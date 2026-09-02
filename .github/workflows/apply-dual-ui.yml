@@ -19,6 +19,18 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Correct known Updates-section anchor
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/patch_dual_ui.py')
+          text = path.read_text()
+          old = '    "function settingsSheet() {",\n'
+          new = '    "function inviteSheet() {",\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one stale Updates end anchor, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - run: python3 scripts/patch_dual_ui.py
       - run: npm ci
       - run: node --test test/dual-proof-ui.test.mjs test/full-proof-feed.test.mjs test/updates-center.test.mjs
