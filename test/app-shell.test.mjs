@@ -86,20 +86,24 @@ test('photo proof can be pasted from the clipboard without automatic clipboard a
   assert.match(app, /addEventListener\('paste',[\s\S]*prepareProofFile\(file\)/);
 });
 
-test('proof viewing stays inside the app and preserves context', () => {
+test('proof images stay inline and preserve context', () => {
   assert.doesNotMatch(app, /window\.open\(/);
-  assert.match(app, /proofViewerSheet/);
+  assert.match(app, /data-proof-image/);
+  assert.match(app, /async function loadProofThumbnail/);
   assert.match(app, /getProofUrl/);
-  assert.match(app, /data-proof-viewer-retry/);
-  assert.match(app, /View proof/);
+  assert.doesNotMatch(app, /function proofViewerSheet/);
+  assert.doesNotMatch(app, />Open proof<\/button>/);
   assert.match(app, /activity\.habitTitle/);
   assert.match(app, /formatWhen\(activity\.when\)/);
 });
 
-test('proof viewer ignores stale signed-link and image failures', () => {
-  assert.match(app, /proofViewerRequestId/);
-  assert.match(app, /requestId !== proofViewerRequestId/);
-  assert.match(app, /proofViewer\?\.url !== expectedUrl/);
+test('inline proof loader handles expired image URLs without a viewer', () => {
+  const loader = app.slice(app.indexOf('async function loadProofThumbnail'), app.indexOf('function bindProofThumbnails'));
+  assert.match(loader, /proofThumbnailUrls\.get\(path\)/);
+  assert.match(loader, /repo\.getProofUrl/);
+  assert.match(loader, /proofThumbnailUrls\.delete\(path\)/);
+  assert.match(loader, /element\.isConnected/);
+  assert.doesNotMatch(app, /proofViewerRequestId/);
 });
 
 test('social stylesheet and service worker additions ship in production', () => {

@@ -11,17 +11,18 @@ test('installed app requests portrait orientation', () => {
   assert.match(app, /orientation\?\.lock\?\.\(['"]portrait['"]\)/);
 });
 
-test('Squad defaults to Proofs and presents Proofs first', () => {
-  assert.match(app, /\|\| ['"]proofs['"]/);
-  const proofTab = app.indexOf('data-squad-feed="proofs"');
-  const activityTab = app.indexOf('data-squad-feed="activity"');
-  assert.ok(proofTab >= 0 && activityTab >= 0 && proofTab < activityTab);
+test('Friends is a proof-only feed without persisted feed-tab state', () => {
+  const friends = app.slice(app.indexOf('function friendsScreen()'), app.indexOf('function challengeProgress'));
+  assert.match(friends, /filter\(\(activity\) => activity\.proofPath\)/);
+  assert.doesNotMatch(app, /donezo\.squadFeed/);
+  assert.doesNotMatch(app, /data-squad-feed/);
 });
 
-test('proof cards include lazy thumbnail affordances', () => {
-  assert.match(app, /data-proof-thumbnail/);
+test('proof cards lazy-load full inline media', () => {
+  assert.match(app, /data-proof-image/);
   assert.match(app, /IntersectionObserver/);
-  assert.match(css, /\.proof-thumbnail/);
+  assert.match(css, /\.proof-media/);
+  assert.match(css, /\.proof-media img\{[^}]*width:100%[^}]*height:auto[^}]*object-fit:contain/);
 });
 
 test('Squad Baton uses a compact one-row treatment', () => {

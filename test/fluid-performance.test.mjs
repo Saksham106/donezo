@@ -228,11 +228,12 @@ test('Friends list uses one action row and Invite friends goes straight to share
   assert.doesNotMatch(bind, /inviteSheetOpen\s*=\s*true/);
 });
 
-test('proof viewer reuses a cached signed thumbnail URL before signing again', () => {
-  const viewer = section(app, 'async function loadProofViewerUrl()', 'async function loadProofThumbnail(');
-  assert.match(viewer, /proofThumbnailUrls\.get\(/);
-  assert.match(viewer, /repo\.getProofUrl/);
-  assert.ok(viewer.indexOf('proofThumbnailUrls.get(') < viewer.indexOf('repo.getProofUrl'));
+test('inline proof image loader reuses a cached signed URL before signing again', () => {
+  const loader = section(app, 'async function loadProofThumbnail(', 'function bindProofThumbnails(');
+  assert.match(loader, /proofThumbnailUrls\.get\(/);
+  assert.match(loader, /repo\.getProofUrl/);
+  assert.ok(loader.indexOf('proofThumbnailUrls.get(') < loader.indexOf('repo.getProofUrl'));
+  assert.match(loader, /proofThumbnailUrls\.set\(/);
 });
 
 test('new performance modules are syntax-checked and shell cache advances to v27', () => {

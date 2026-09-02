@@ -87,16 +87,15 @@ test('League clearly displays its Monday through Sunday date range and point rul
   assert.match(info, /New habits unlock volume points after 2 separate days/);
 });
 
-test('proof, activity, grouped check-ins, comments, and proof viewer identities open profiles', () => {
+test('proofs, Updates activity, and comments keep profile drill-downs', () => {
   const activity = app.slice(app.indexOf('function activityCard('), app.indexOf('function personProofCarousel('));
-  const friends = app.slice(app.indexOf('function friendsScreen()'), app.indexOf('function challengeProgress('));
+  const updates = app.slice(app.indexOf('function nudgeInboxSheet()'), app.indexOf('function inviteSheet()'));
   const comments = app.slice(app.indexOf('function commentSheet()'), app.indexOf('function batonSheet()'));
-  const proofViewer = app.slice(app.indexOf('function proofViewerSheet()'), app.indexOf('function clearProofReview()'));
   assert.match(activity, /activityProfileButton/);
   assert.match(app, /function activityProfileButton[^]*data-friend-profile/);
-  assert.match(friends, /activity\.items\.map[^]*data-friend-profile/);
+  assert.match(updates, /update-activity-row[^]*data-friend-profile/);
   assert.match(comments, /data-friend-profile/);
-  assert.match(proofViewer, /data-friend-profile/);
+  assert.doesNotMatch(app, /function proofViewerSheet/);
 });
 
 test('profile shows a collapsed friend count and expands the list on demand', () => {

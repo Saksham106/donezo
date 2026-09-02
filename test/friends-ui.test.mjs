@@ -17,22 +17,19 @@ test('primary navigation and topbar speak in Friends, not squad switching', () =
   assert.doesNotMatch(app.slice(app.indexOf('function topbar()'), app.indexOf('function offlineIndicator')), /squad-switcher/);
 });
 
-test('Friends renders authorized Proofs and Activity feeds with compact heading actions', () => {
+test('Friends renders one authorized proof feed with compact heading actions', () => {
   const source = slice('friendsScreen', 'challengeProgress');
-  assert.match(source, /friends-heading-row/);
+  assert.match(source, /pageHeading\('Friends'/);
   assert.match(source, /data-people-open/);
   assert.match(source, /data-manual-refresh/);
-  assert.match(source, /activityList\(state\)/);
-  assert.match(source, /data-squad-feed="proofs"/);
-  assert.match(source, /data-squad-feed="activity"/);
-  assert.match(source, /squadFeed === 'proofs'/);
-  assert.match(source, /groupSquadActivity/);
-  assert.match(source, /activity\.type === 'grouped_checkin'/);
-  assert.match(source, /activity\.items\.length/);
+  assert.match(source, /activityList\(state\)\.filter\(\(activity\) => activity\.proofPath\)/);
+  assert.match(source, /activityCard\(activity, \{ showProofActions: true \}\)/);
+  assert.doesNotMatch(source, /squad-feed-tabs/);
+  assert.doesNotMatch(source, /data-squad-feed/);
+  assert.doesNotMatch(source, /groupSquadActivity/);
   assert.doesNotMatch(source, /One feed for the people you choose to show up with/);
   assert.doesNotMatch(source, /Hype your people|See what happened/);
-  assert.match(social, /\.friends-heading-row\{[^}]*align-items:center/);
-  assert.match(social, /\.friends-heading-actions\{[^}]*padding-bottom:0/);
+  assert.match(social, /\.squad-refresh-row/);
 });
 
 test('Friends and League prefer new state while preserving member fallbacks', () => {

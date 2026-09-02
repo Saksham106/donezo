@@ -15,16 +15,16 @@ test('Today is reduced to one progress summary and the habit list', () => {
   assert.doesNotMatch(source, /rankMembersByWeeklyScore/);
 });
 
-test('Squad uses a People sheet and truly separates activity from proofs', () => {
-  const source = app.slice(app.indexOf('function squadScreen()'), app.indexOf('function challengeProgress'));
-  assert.match(source, /data-people-open/);
-  assert.match(source, /squad-feed-tabs/);
-  assert.match(source, /data-squad-feed="activity"/);
-  assert.match(source, /data-squad-feed="proofs"/);
-  assert.match(source, /filter\(\(activity\) => !activity\.proofPath\)/);
-  assert.doesNotMatch(source, /<div class="friends-list">/);
-  assert.match(source, /aria-label="Refresh squad"/);
-  assert.doesNotMatch(source, />Refresh<\/button>/);
+test('Friends keeps proofs in-feed while activity moves to Updates', () => {
+  const friends = app.slice(app.indexOf('function friendsScreen()'), app.indexOf('function challengeProgress'));
+  const updates = app.slice(app.indexOf('function updatesList('), app.indexOf('function unseenUpdatesCount('));
+  assert.match(friends, /data-people-open/);
+  assert.match(friends, /filter\(\(activity\) => activity\.proofPath\)/);
+  assert.doesNotMatch(friends, /squad-feed-tabs/);
+  assert.doesNotMatch(friends, /data-squad-feed/);
+  assert.match(updates, /filter\(\(activity\) => !activity\.proofPath\)/);
+  assert.match(friends, /aria-label="Refresh Friends"/);
+  assert.doesNotMatch(friends, />Refresh<\/button>/);
   assert.match(app, /function peopleSheet\(\)/);
   assert.match(app, /data-invite-from-people/);
   assert.match(app, /No habits today/);
