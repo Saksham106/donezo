@@ -57,6 +57,16 @@ test('background refresh does not rebuild a scrolled Friends feed', () => {
   assert.match(coordinator, /!shouldDeferFriendsRefreshRender\(\)[^]*renderPreservingScroll\(\)/);
 });
 
+test('manual refresh clears its spinner without rebuilding a scrolled Friends feed', () => {
+  const manual = section(app, 'async function handleManualRefresh()', 'async function handleNotifications');
+  assert.match(manual, /manualRefreshLoading = false;/);
+  assert.match(manual, /syncManualRefreshButton\(\)/);
+  const sync = section(app, 'function syncManualRefreshButton()', 'async function handleManualRefresh()');
+  assert.match(sync, /querySelector\('\[data-manual-refresh\]'\)/);
+  assert.match(sync, /classList\.toggle\('loading', manualRefreshLoading\)/);
+  assert.match(sync, /disabled = manualRefreshLoading/);
+});
+
 test('reaction strip scrolls horizontally only', () => {
   assert.match(social, /\.reaction-row\{[^}]*overflow-x:auto[^}]*overflow-y:hidden/);
 });
