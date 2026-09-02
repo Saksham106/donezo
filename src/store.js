@@ -470,6 +470,17 @@ export function mapDatabaseState(user, rows) {
     batonHandoffs,
     batonOptedOut: Boolean(rows.batonPreference?.opted_out),
     notificationPreferences,
+    notificationEvents: (rows.notificationEvents || []).map((event) => ({
+      id: event.id,
+      sourceUserId: event.source_user_id || null,
+      category: event.category,
+      title: event.title || 'Notification',
+      body: event.body || '',
+      deepLink: event.deep_link || null,
+      status: event.status,
+      createdAt: event.created_at,
+      metadata: event.metadata || {},
+    })),
     updatesLastSeenAt: rows.userUpdateState?.last_seen_at || null,
   };
 }
@@ -495,8 +506,9 @@ export function createSupabaseRepository(client, user) {
 
   async function load(requestedCircleId = state.circleId) {
     const profile = await ensureProfile();
-    const [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult] = await Promise.all([
+    const [notificationPreferencesResult, notificationEventsResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult] = await Promise.all([
       client.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle(),
+      client.from('notification_events').select('id,source_user_id,category,title,body,deep_link,status,created_at,metadata').eq('recipient_user_id', user.id).order('created_at', { ascending: false }).limit(100),
       client.from('circle_members')
         .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
         .eq('user_id', user.id)
@@ -505,7 +517,7 @@ export function createSupabaseRepository(client, user) {
       client.from('friend_requests').select('*').order('created_at', { ascending: false }),
       client.from('user_update_state').select('last_seen_at').eq('user_id', user.id).maybeSingle(),
     ]);
-    const firstError = [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult].find((result) => result.error);
+    const firstError = [notificationPreferencesResult, notificationEventsResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult].find((result) => result.error);
     if (firstError) throw appError(firstError.error, 'Could not load Donezo data');
     const notificationPreferences = notificationPreferencesResult.data;
     const friendships = friendshipsResult.data || [];
@@ -614,6 +626,7 @@ export function createSupabaseRepository(client, user) {
       batonHandoffs: batonHandoffsResult.data || [],
       batonPreference: batonPreferenceResult.data,
       notificationPreferences,
+      notificationEvents: notificationEventsResult.data || [],
       userUpdateState: userUpdateStateResult.data,
     });
     return getState();
