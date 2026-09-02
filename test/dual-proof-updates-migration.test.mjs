@@ -14,9 +14,9 @@ test('updates high-water state is private to its owner', () => {
   assert.match(migration, /create table[^;]*user_update_state/i);
   assert.match(migration, /last_seen_at\s+timestamptz\s+not\s+null/i);
   assert.match(migration, /enable row level security/i);
-  assert.match(migration, /user_update_state[^;]*for select[^;]*auth\.uid\(\)\s*=\s*user_id/is);
-  assert.match(migration, /user_update_state[^;]*for insert[^;]*auth\.uid\(\)\s*=\s*user_id/is);
-  assert.match(migration, /user_update_state[^;]*for update[^;]*auth\.uid\(\)\s*=\s*user_id/is);
+  assert.match(migration, /user_update_state[^;]*for select[^;]*auth\.uid\(\)[^;]*=\s*user_id/is);
+  assert.match(migration, /user_update_state[^;]*for insert[^;]*auth\.uid\(\)[^;]*=\s*user_id/is);
+  assert.match(migration, /user_update_state[^;]*for update[^;]*auth\.uid\(\)[^;]*=\s*user_id/is);
 });
 
 test('mark_updates_seen uses one server timestamp for nudges and activity high-water state', () => {
