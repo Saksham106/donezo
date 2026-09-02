@@ -6,7 +6,7 @@ import {
 } from './domain.js';
 import { getScheduleOccurrence, normalizeSchedule } from './schedule.js';
 import { normalizeInviteInput } from './invite.js';
-import { proofMimeType } from './proof.js';
+import { proofMimeType, requiresPhotoProof } from './proof.js';
 import { validateStake } from './stakes.js';
 import { validateCommentBody } from './social-domain.js';
 import { computeEarnedBadges } from './badges-domain.js';
@@ -47,7 +47,7 @@ export function validateHabitInput(input = {}) {
   const targetTime = input.targetTime == null ? '' : String(input.targetTime).trim();
   if (targetTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(targetTime)) throw new Error('Enter a valid target time');
   const proofMode = String(input.proofMode || '');
-  if (!['photo', 'none'].includes(proofMode)) throw new Error('Choose a valid proof mode');
+  if (!['photo', 'dual_photo', 'none'].includes(proofMode)) throw new Error('Choose a valid proof mode');
   return { title, emoji, targetTime, proofMode };
 }
 
@@ -470,6 +470,7 @@ export function mapDatabaseState(user, rows) {
     batonHandoffs,
     batonOptedOut: Boolean(rows.batonPreference?.opted_out),
     notificationPreferences,
+    updatesLastSeenAt: rows.userUpdateState?.last_seen_at || null,
   };
 }
 
@@ -494,7 +495,7 @@ export function createSupabaseRepository(client, user) {
 
   async function load(requestedCircleId = state.circleId) {
     const profile = await ensureProfile();
-    const [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult] = await Promise.all([
+    const [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult] = await Promise.all([
       client.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle(),
       client.from('circle_members')
         .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
@@ -502,8 +503,9 @@ export function createSupabaseRepository(client, user) {
         .order('joined_at', { ascending: true }),
       client.from('friendships').select('*'),
       client.from('friend_requests').select('*').order('created_at', { ascending: false }),
+      client.from('user_update_state').select('last_seen_at').eq('user_id', user.id).maybeSingle(),
     ]);
-    const firstError = [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult].find((result) => result.error);
+    const firstError = [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult].find((result) => result.error);
     if (firstError) throw appError(firstError.error, 'Could not load Donezo data');
     const notificationPreferences = notificationPreferencesResult.data;
     const friendships = friendshipsResult.data || [];
@@ -612,6 +614,7 @@ export function createSupabaseRepository(client, user) {
       batonHandoffs: batonHandoffsResult.data || [],
       batonPreference: batonPreferenceResult.data,
       notificationPreferences,
+      userUpdateState: userUpdateStateResult.data,
     });
     return getState();
   }
@@ -760,7 +763,7 @@ export function createSupabaseRepository(client, user) {
 
   function applySimpleCheckIn(habitId, date, checked, suppliedCheckIn = null) {
     const habit = ownedHabit(habitId);
-    if (habit.proofMode === 'photo') throw new Error('Photo habits use the proof flow');
+    if (requiresPhotoProof(habit.proofMode)) throw new Error('Photo habits use the proof flow');
     const index = (state.checkIns || []).findIndex((item) => item.habitId === habitId && item.userId === user.id && item.date === date);
     const previous = index >= 0 ? clone(state.checkIns[index]) : null;
     if (!checked) {
@@ -834,6 +837,15 @@ export function createSupabaseRepository(client, user) {
     const previous = nudge.readAt || null;
     nudge.readAt = readAt;
     return previous;
+  }
+
+  function applyUpdatesSeen(markedAt = new Date().toISOString()) {
+    const value = String(markedAt || new Date().toISOString());
+    state.updatesLastSeenAt = value;
+    state.nudges = (state.nudges || []).map((nudge) => (
+      nudge.toUserId === user.id && !nudge.readAt ? { ...nudge, readAt: value } : nudge
+    ));
+    return value;
   }
 
   async function createCircle(name) {
@@ -1096,7 +1108,7 @@ export function createSupabaseRepository(client, user) {
 
   async function toggleSimpleCheckIn(habitId, date, shouldBeChecked, existingId = null) {
     const habit = ownedHabit(habitId);
-    if (habit.proofMode === 'photo') throw new Error('Photo habits use the proof flow');
+    if (requiresPhotoProof(habit.proofMode)) throw new Error('Photo habits use the proof flow');
     if (shouldBeChecked) {
       const { data, error } = await client.from('check_ins').insert({
         habit_id: habitId,
@@ -1309,6 +1321,12 @@ export function createSupabaseRepository(client, user) {
     const { error } = await client.from('nudges').update({ read_at: readAt }).eq('id', nudgeId).eq('to_user_id', user.id);
     if (error) throw appError(error, 'Could not mark nudge read');
     return { id: nudgeId, readAt };
+  }
+
+  async function markUpdatesSeen() {
+    const { data, error } = await client.rpc('mark_updates_seen');
+    if (error) throw appError(error, 'Could not mark Updates seen');
+    return applyUpdatesSeen(data || new Date().toISOString());
   }
 
   async function startBaton(recipientUserId, sourceCheckInId) {
@@ -1538,6 +1556,7 @@ export function createSupabaseRepository(client, user) {
     replaceOptimisticComment,
     removeOptimisticComment,
     applyNudgeRead,
+    applyUpdatesSeen,
     load,
     selectCircle,
     createCircle,
@@ -1565,6 +1584,7 @@ export function createSupabaseRepository(client, user) {
     resolveStake: resolveGroupStake,
     sendNudge,
     markNudgeRead,
+    markUpdatesSeen,
     startBaton,
     passBaton,
     setBatonEnabled,
