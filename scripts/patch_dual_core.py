@@ -28,8 +28,8 @@ rep(
     "const firstError = [notificationPreferencesResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult].find((result) => result.error);",
 )
 rep(
-    "      notificationPreferences: notificationPreferencesResult.data,\n    });",
-    "      notificationPreferences: notificationPreferencesResult.data,\n      userUpdateState: userUpdateStateResult.data,\n    });",
+    "      batonPreference: batonPreferenceResult.data,\n      notificationPreferences,\n    });",
+    "      batonPreference: batonPreferenceResult.data,\n      notificationPreferences,\n      userUpdateState: userUpdateStateResult.data,\n    });",
 )
 rep(
     "    notificationPreferences,\n  };",
