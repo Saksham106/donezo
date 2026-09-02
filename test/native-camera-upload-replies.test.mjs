@@ -31,6 +31,11 @@ test('a native single photo can be upgraded to Dual by adding a native selfie', 
   assert.match(bindings, /\[data-proof-add-selfie\][^]*createDualProofState\(habitId, 'dual'\)[^]*phase:\s*'selfie'[^]*mainFile:\s*mainFile[^]*proofSelfieInput\?\.click\(\)/);
 });
 
+test('cancelling the native selfie camera keeps the single-photo review usable', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
+  assert.match(review, /const cameraSession = dualProof\?\.habitId === habit\.id && \(dualProof\?\.mode === 'single' \|\| Boolean\(dualProof\?\.selfieFile\)\)/);
+});
+
 test('Friends heading removes the redundant Your People eyebrow', () => {
   const friends = section(app, 'function friendsScreen()', 'function challengeProgress');
   assert.doesNotMatch(friends, /YOUR PEOPLE/i);
