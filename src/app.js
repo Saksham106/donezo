@@ -792,13 +792,13 @@ function activityCard(activity, { showProofActions = false } = {}) {
     ? `You reacted ${mineReactions[0]} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
     : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : '';
   const reactionButtons = ['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('');
-  const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to or reject this check-in">${reactionButtons}${rejectionControl}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
+  const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${reactionButtons}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
   const activityMessage = activity.message === 'Done. Proof beats promises.' ? '' : activity.message;
   if (activity.proofPath) {
     const actorLabel = mine ? 'You' : esc(actor?.name || 'Friend');
     const actorHandle = !mine && actor?.handle ? ` ${esc(actor.handle)}` : '';
     const invalidLabel = activity.invalid ? ' · cooked 💀' : '';
-    return `<article class="activity proof-activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="proof-card-header"><div class="proof-card-title"><span aria-hidden="true">${esc(activity.emoji)}</span><strong>${esc(activity.habitTitle)}</strong></div><div class="proof-card-byline"><button class="proof-card-author" type="button" data-friend-profile="${activity.userId}" aria-label="Open ${esc(actor?.name || 'friend')} profile">${actorLabel}${actorHandle}${invalidLabel}</button><span>· ${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)}</span><span>· 🔥 ${activity.streak}</span></div></div>${proofPreview}${activityMessage ? `<p class="proof-card-note">${esc(activityMessage)}</p>` : ''}${proofActions}${positiveReactions}${proofReplyPreview(activity.checkInId)}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+    return `<article class="activity proof-activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="proof-card-header"><div class="proof-card-heading-copy"><div class="proof-card-title"><span aria-hidden="true">${esc(activity.emoji)}</span><strong>${esc(activity.habitTitle)}</strong></div><div class="proof-card-byline"><button class="proof-card-author" type="button" data-friend-profile="${activity.userId}" aria-label="Open ${esc(actor?.name || 'friend')} profile">${actorLabel}${actorHandle}${invalidLabel}</button><span>· ${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)}</span><span>· 🔥 ${activity.streak}</span></div></div>${rejectionControl}</div>${proofPreview}${activityMessage ? `<p class="proof-card-note">${esc(activityMessage)}</p>` : ''}${proofActions}${positiveReactions}${proofReplyPreview(activity.checkInId)}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
   }
   return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}`, `${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}`)}</div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
@@ -1288,13 +1288,10 @@ function dualProofSheet() {
   if (!habit) return '';
   const mainStep = dualProof.phase === 'main';
   const mode = dualProof.mode === 'dual' ? 'dual' : 'single';
-  const title = mainStep ? (mode === 'dual' ? 'Show what you did' : 'Take your proof') : 'Now show you';
-  const copy = mainStep
-    ? mode === 'dual' ? 'Take the main proof photo, then Donezo will flip for your selfie.' : 'Take one clear photo that proves the habit.'
-    : 'Flip it around for the selfie.';
+  const title = mainStep ? (mode === 'dual' ? 'Take main photo' : 'Take your proof') : 'Take your selfie';
   const fallbackAttr = mainStep ? 'data-dual-fallback-main' : 'data-dual-fallback-selfie';
   const modeSwitch = mainStep ? `<div class="camera-mode-switch" role="group" aria-label="Photo mode"><button class="${mode === 'single' ? 'active' : ''}" type="button" data-camera-mode="single" aria-pressed="${mode === 'single'}">Single</button><button class="${mode === 'dual' ? 'active' : ''}" type="button" data-camera-mode="dual" aria-pressed="${mode === 'dual'}">Dual</button></div>` : '';
-  return `<div class="sheet-backdrop"><section class="sheet dual-proof-sheet" role="dialog" aria-modal="true" aria-label="Photo proof camera" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${mode === 'dual' ? 'DUAL PHOTO' : 'PHOTO PROOF'}</p><h2>${esc(title)}</h2></div><button class="icon-btn" type="button" data-dual-cancel aria-label="Cancel proof">×</button></div>${modeSwitch}<p class="proof-sheet-copy">${esc(copy)}</p><div class="dual-camera-frame"><video data-dual-camera autoplay playsinline muted></video><div class="dual-camera-loading">Starting camera…</div></div>${dualProof.error ? `<div class="proof-error" role="alert"><p>${esc(dualProof.error)}</p></div>` : ''}<button class="btn primary full" type="button" data-dual-capture>${mainStep ? 'Capture' : 'Capture selfie'}</button><button class="camera-quality-fallback" type="button" ${fallbackAttr}><span class="camera-quality-icon" aria-hidden="true">📷</span><span><strong>Use iPhone camera for better quality</strong><small>Opens the native camera</small></span><span class="camera-quality-chevron" aria-hidden="true">›</span></button></section></div>`;
+  return `<div class="sheet-backdrop"><section class="sheet dual-proof-sheet" role="dialog" aria-modal="true" aria-label="Photo proof camera" data-sheet><div class="sheet-handle"></div><div class="sheet-head camera-sheet-head"><h2>${esc(title)}</h2><button class="icon-btn" type="button" data-dual-cancel aria-label="Cancel proof">×</button></div>${modeSwitch}<div class="dual-camera-frame"><video data-dual-camera autoplay playsinline muted></video><div class="dual-camera-loading">Starting camera…</div></div>${dualProof.error ? `<div class="proof-error" role="alert"><p>${esc(dualProof.error)}</p></div>` : ''}<button class="btn primary full camera-capture-btn" type="button" data-dual-capture>${mainStep ? 'Capture' : 'Capture selfie'}</button><button class="camera-quality-fallback" type="button" ${fallbackAttr}><span class="camera-quality-icon" aria-hidden="true">📷</span><strong>Use iPhone camera for better quality</strong><span class="camera-quality-chevron" aria-hidden="true">›</span></button></section></div>`;
 }
 
 function proofSourceSheet() {
@@ -1327,7 +1324,6 @@ function stopDualCamera() {
 }
 
 function openNativeCameraFallback(input) {
-  stopDualCamera();
   input?.click();
 }
 
@@ -1340,6 +1336,13 @@ async function startDualCameraIfNeeded() {
   if (!dualProof || proofReview || !['main', 'selfie'].includes(dualProof.phase)) return;
   const video = app.querySelector('[data-dual-camera]');
   if (!video || !dualCameraSupported()) return;
+  const liveTrack = dualCameraStream?.getVideoTracks?.().find((track) => track.readyState === 'live');
+  if (liveTrack) {
+    video.srcObject = dualCameraStream;
+    await video.play?.().catch(() => {});
+    video.parentElement?.querySelector('.dual-camera-loading')?.remove();
+    return;
+  }
   const requestId = ++dualCameraRequestId;
   stopMediaStream(dualCameraStream);
   dualCameraStream = null;
@@ -1855,9 +1858,7 @@ function render() {
     if (!dualProof || dualProof.phase !== 'main') return;
     const mode = element.dataset.cameraMode === 'dual' ? 'dual' : 'single';
     if (dualProof.mode === mode) return;
-    const habitId = dualProof.habitId;
-    clearDualProof();
-    dualProof = createDualProofState(habitId, mode);
+    dualProof = { ...dualProof, mode };
     render();
   }; });
   app.querySelector('[data-dual-capture]')?.addEventListener('click', () => { void captureDualCamera(); });
@@ -2023,7 +2024,13 @@ function hasUnsavedDraft() {
     || stakeSheetOpen
     || Boolean(commentCheckInId)
     || batonSheetOpen
+    || Boolean(dualProof)
     || Boolean(proofReview);
+}
+
+function shouldDeferFriendsRefreshRender() {
+  const scrollTop = app.querySelector('#content-scroll')?.scrollTop ?? screenScroll.friends ?? 0;
+  return tab === 'friends' && scrollTop > 4;
 }
 
 async function refreshRepositoryData(activeRepo) {
@@ -2032,7 +2039,7 @@ async function refreshRepositoryData(activeRepo) {
   authoritativeReady = true;
   reapplyOptimisticPatches();
   lastRefreshAt = new Date().toISOString();
-  if (!hasUnsavedDraft()) renderPreservingScroll();
+  if (!hasUnsavedDraft() && !shouldDeferFriendsRefreshRender()) renderPreservingScroll();
   scheduleStateCacheWrite(activeRepo);
 }
 
@@ -2047,7 +2054,7 @@ function startRefreshCoordinator(activeRepo) {
     onNetworkChange: (value) => {
       if (repo !== activeRepo || !session) return;
       online = value;
-      if (!hasUnsavedDraft()) renderPreservingScroll();
+      if (!hasUnsavedDraft() && !shouldDeferFriendsRefreshRender()) renderPreservingScroll();
     },
     documentTarget: document,
     windowTarget: window,
