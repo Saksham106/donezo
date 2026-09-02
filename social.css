@@ -155,3 +155,10 @@ button.proof-viewer-context{width:100%;min-height:var(--size-target-min);border:
 .dual-camera-frame video{display:block;width:100%;max-height:62vh;object-fit:contain;background:#111}
 .dual-camera-loading{position:absolute;inset:0;display:grid;place-items:center;color:#fff;font-size:var(--text-sm)}
 .dual-proof-sheet .proof-sheet-copy{margin-top:0}
+
+
+/* Compact proof moderation + unified in-app notification rows. */
+.proof-rejection-inline{margin-left:auto;flex:0 0 auto}
+.update-notification-row{display:grid;grid-template-columns:2.5rem minmax(0,1fr);align-items:center;gap:var(--space-3);padding:var(--space-3);border:var(--rule-hairline) solid var(--color-rule);border-radius:var(--radius-md);background:var(--color-surface)}
+.update-notification-mark{display:grid;place-items:center;width:2.5rem;height:2.5rem;border-radius:var(--radius-round);background:var(--color-paper-2);font-size:1.1rem}
+.update-notification-row strong,.update-notification-row p,.update-notification-row small{display:block}.update-notification-row p{margin:.15rem 0 0;color:var(--color-muted);font-size:var(--text-xs);line-height:1.35}.update-notification-row small{margin-top:.2rem;color:var(--color-muted);font-size:var(--text-2xs)}

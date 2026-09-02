@@ -359,14 +359,28 @@ function updatesList(state = getState()) {
     message: activity.message || `${activity.emoji || '✓'} ${activity.habitTitle || 'Habit'}`,
     activity,
   }));
-  return [...nudges, ...activities].sort((a, b) => new Date(b.when) - new Date(a.when));
+  const notifications = (state?.notificationEvents || [])
+    .filter((event) => !['nudge', 'friend_activity'].includes(event.category))
+    .map((event) => ({
+      kind: 'notification',
+      id: `notification:${event.id}`,
+      sourceId: event.id,
+      userId: event.sourceUserId || null,
+      when: event.createdAt,
+      title: event.title || 'Notification',
+      message: event.body || '',
+      category: event.category,
+      deepLink: event.deepLink || null,
+    }));
+  return [...nudges, ...activities, ...notifications].sort((a, b) => new Date(b.when) - new Date(a.when));
 }
 
 function unseenUpdatesCount(state = getState()) {
   const lastSeen = new Date(state?.updatesLastSeenAt || 0).getTime();
   const activityCount = activityList(state).filter((activity) => !activity.proofPath && new Date(activity.when).getTime() > lastSeen).length;
   const nudgeCount = incomingNudges().filter((nudge) => !nudge.readAt).length;
-  return activityCount + nudgeCount;
+  const notificationCount = (state?.notificationEvents || []).filter((event) => !['nudge', 'friend_activity'].includes(event.category) && new Date(event.createdAt).getTime() > lastSeen).length;
+  return activityCount + nudgeCount + notificationCount;
 }
 
 async function openUpdatesCenter() {
@@ -386,8 +400,7 @@ async function openUpdatesCenter() {
 
 function topbar() {
   const unread = unseenUpdatesCount();
-  const friendsLink = `<button class="friends-toplink" type="button" data-friends aria-label="Open Friends">Friends</button>`;
-  return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button>${friendsLink}<div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open Updates">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
+  return `<header class="topbar"><button class="brand brand-button" data-home aria-label="Go to Today"><span>ϟ</span><strong>Donezo</strong></button><div class="top-actions"><button class="top-icon-btn" data-nudge-inbox aria-label="Open Updates">${icon('bolt')}${unread ? `<i>${unread > 9 ? '9+' : unread}</i>` : ''}</button><button class="avatar profile-button" data-settings aria-label="Open settings">${esc(me()?.avatar || '?')}</button></div></header>`;
 }
 
 function offlineIndicator() {
@@ -747,9 +760,13 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
   const threshold = proofRejectionThreshold(activity.audienceSize);
   const rejectionLabel = `${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}`;
-  const rejectionStatus = `<span class="vote-btn proof-rejection-status ${activity.invalid ? 'active' : ''}" aria-label="${activity.invalid ? 'Proof rejected' : `${activity.downvotes || 0} proof rejection${activity.downvotes === 1 ? '' : 's'} so far`}">👎 <span>${rejectionLabel}</span></span>`;
+  const rejectionControl = showProofActions && activity.proofPath
+    ? mine
+      ? `<span class="vote-btn proof-rejection-inline proof-rejection-status ${activity.invalid ? 'active' : ''}" aria-label="${activity.invalid ? 'Proof rejected' : `${activity.downvotes || 0} proof rejection${activity.downvotes === 1 ? '' : 's'} so far`}">👎 <span>${rejectionLabel}</span></span>`
+      : `<button type="button" class="vote-btn proof-rejection-inline ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${rejectionLabel}</span></button>`
+    : '';
   const proofPreview = showProofActions && activity.proofPath ? `<div class="proof-media" data-proof-image="${esc(activity.proofPath)}" aria-label="${esc(activity.habitTitle)} proof"><span aria-hidden="true">📷</span><small>Loading proof…</small></div>` : '';
-  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions">${mine ? `${rejectionStatus}${activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : ''}` : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${rejectionLabel}</span></button>`}</div>` : '';
+  const proofActions = showProofActions && activity.proofPath && mine && activity.invalid ? `<div class="proof-actions"><button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button></div>` : '';
   const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
   const mineReactions = (activity.userReactions || []).slice(-1);
   const visibleReactionCounts = { ...(activity.reactionCounts || {}) };
@@ -760,7 +777,8 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const reactionSummary = mineReactions.length
     ? `You reacted ${mineReactions[0]} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
     : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : '';
-  const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('')}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
+  const reactionButtons = ['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('');
+  const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to or reject this check-in">${reactionButtons}${rejectionControl}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
   const activityMessage = activity.message === 'Done. Proof beats promises.' ? '' : activity.message;
   if (activity.proofPath) {
     const actorLabel = mine ? 'You' : esc(actor?.name || 'Friend');
@@ -1093,6 +1111,10 @@ function nudgeInboxSheet() {
   if (!nudgeInboxOpen) return '';
   const updates = updatesList();
   const rows = updates.map((item) => {
+    if (item.kind === 'notification') {
+      const mark = ({ reaction: '👏', comment: '💬', due_soon: '⏱', streak_risk: '🔥', challenge_progress: '🏆' })[item.category] || '🔔';
+      return `<article class="update-notification-row"><span class="update-notification-mark" aria-hidden="true">${mark}</span><span><strong>${esc(item.title)}</strong><p>${esc(item.message)}</p><small>${esc(formatWhen(item.when))}</small></span></article>`;
+    }
     const actor = member(item.userId);
     if (item.kind === 'nudge') {
       return `<article class="inbox-nudge ${item.readAt ? 'read' : ''}"><div><strong>⚡ ${esc(actor?.name || 'Friend')}</strong><p>${esc(item.message)}</p><small>${esc(formatWhen(item.when))}</small></div>${item.readAt ? '<span>Seen</span>' : `<button class="btn small-btn" type="button" data-read-nudge="${item.sourceId}">Got it</button>`}</article>`;
@@ -1101,7 +1123,7 @@ function nudgeInboxSheet() {
     const detail = activity?.habitTitle ? `${activity.emoji || '✓'} ${activity.habitTitle}` : item.message;
     return `<button class="update-activity-row" type="button" data-friend-profile="${item.userId}"><span class="avatar">${esc(actor?.avatar || '?')}</span><span><strong>${esc(actor?.name || 'Friend')}</strong><p>${esc(detail)}</p><small>${esc(formatWhen(item.when))}</small></span></button>`;
   }).join('');
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet updates-sheet" role="dialog" aria-modal="true" aria-label="Updates" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">UPDATES</p><h2>${updates.length ? 'What happened' : 'All caught up'}</h2></div><button class="icon-btn" type="button" data-close-inbox aria-label="Close">×</button></div>${rows ? `<div class="inbox-list updates-list">${rows}</div>` : '<div class="empty compact-empty"><b>Quiet right now.</b><p>Nudges and friend activity will show up here.</p></div>'}</section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet updates-sheet" role="dialog" aria-modal="true" aria-label="Updates" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">UPDATES</p><h2>${updates.length ? 'What happened' : 'All caught up'}</h2></div><button class="icon-btn" type="button" data-close-inbox aria-label="Close">×</button></div>${rows ? `<div class="inbox-list updates-list">${rows}</div>` : '<div class="empty compact-empty"><b>Quiet right now.</b><p>Nudges, activity, and notifications will show up here.</p></div>'}</section></div>`;
 }
 
 function inviteSheet() {
@@ -1262,7 +1284,7 @@ function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
   if (!habit) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Use the camera, pick a saved photo, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take one photo, use Dual photo, pick a saved photo, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-dual>Dual photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
 }
 
 function proofReviewSheet() {
@@ -1271,7 +1293,7 @@ function proofReviewSheet() {
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
   const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
-  const dual = habit.proofMode === 'dual_photo' && dualProof?.habitId === habit.id;
+  const dual = dualProof?.habitId === habit.id;
   const replaceActions = dual
     ? `<div class="proof-review-actions"><button class="btn" type="button" data-dual-retake-main ${uploading ? 'disabled' : ''}>Retake proof</button><button class="btn" type="button" data-dual-retake-selfie ${uploading ? 'disabled' : ''}>Retake selfie</button></div>`
     : `<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div>`;
@@ -1510,6 +1532,12 @@ function bindProofThumbnails() {
 
 function bindProofActions() {
   app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
+  app.querySelectorAll('[data-proof-dual]').forEach((element) => { element.onclick = () => {
+    if (!proofHabit) return;
+    dualProof = createDualProofState(proofHabit);
+    proofHabit = null;
+    render();
+  }; });
   app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
   app.querySelectorAll('[data-proof-paste]').forEach((element) => { element.onclick = handlePasteProof; });
   app.querySelectorAll('[data-proof-source-close]').forEach((element) => { element.onclick = () => { proofHabit = null; render(); }; });
