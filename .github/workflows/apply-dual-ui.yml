@@ -35,7 +35,7 @@ jobs:
           marker = '# Remove stale proof-viewer cleanup/state references.\n'
           if text.count(marker) != 1:
               raise SystemExit(f'expected one viewer cleanup marker, found {text.count(marker)}')
-          cleanup = '''# Remove stale proof-viewer cleanup/state references.
+          cleanup = r'''# Remove stale proof-viewer cleanup/state references.
           viewer_bindings = """  app.querySelectorAll('[data-proof-viewer-close]').forEach((element) => { element.onclick = () => { proofViewerRequestId += 1; proofViewer = null; render(); }; });
           app.querySelectorAll('[data-proof-viewer-retry]').forEach((element) => { element.onclick = loadProofViewerUrl; });
           const proofViewerImage = app.querySelector('[data-proof-viewer-image]');
