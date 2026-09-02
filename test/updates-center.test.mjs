@@ -24,7 +24,8 @@ test('Updates mixes incoming nudges and every non-proof activity newest first', 
   const inbox = slice('nudgeInboxSheet', 'inviteSheet');
   assert.match(inbox, /UPDATES/);
   assert.match(inbox, /kind === 'nudge'/);
-  assert.match(inbox, /kind === 'activity'/);
+  assert.match(inbox, /const activity = item\.activity/);
+  assert.match(inbox, /update-activity-row/);
 });
 
 test('Updates badge counts unseen activity plus unread nudges and opening persists seen state', () => {
