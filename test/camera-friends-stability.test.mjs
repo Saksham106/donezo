@@ -63,7 +63,7 @@ test('reaction strip scrolls horizontally only', () => {
 
 test('proof rejection lives in the top-right card header, not the reaction strip', () => {
   const card = section(app, 'function activityCard(', 'function personProofCarousel');
-  assert.match(card, /proof-card-header[^`]*rejectionControl/s);
+  assert.match(card, /proof-card-heading-copy[\s\S]*\$\{rejectionControl\}<\/div>\$\{proofPreview\}/);
   assert.match(card, /class="reaction-row"[^`]*\$\{reactionButtons\}<\/div>/s);
   assert.doesNotMatch(card, /class="reaction-row"[^`]*rejectionControl/s);
   assert.match(social, /\.proof-card-header\{[^}]*grid-template-columns:minmax\(0,1fr\) auto/);
