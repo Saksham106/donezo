@@ -74,14 +74,13 @@ test('navigation state and scroll positions survive rerenders', () => {
   assert.match(app, /function setActiveTab\(nextTab\)/);
   assert.match(app, /if \(!habitId\) setActiveTab\('today'\)/);
   assert.match(app, /else if \(step === 3\) openCheckInAction\(\)/);
-  assert.match(app, /else if \(step === 4\) setActiveTab\('squad'\)/);
   assert.match(app, /createdCircleInvite = null; setActiveTab\('today'\)/);
-  assert.match(app, /donezo\.squadFeed/);
+  assert.doesNotMatch(app, /donezo\.squadFeed/);
   assert.match(app, /screenScroll/);
   assert.match(app, /restoreScreenScroll/);
 });
 
-test('activity grouping and visual signatures avoid grouping proofs or comments', () => {
+test('legacy activity grouping remains domain-safe while Friends no longer groups its proof feed', () => {
   const grouped = groupSquadActivity([
     { checkInId: 'a', type: 'completed', userId: 'u1', habitTitle: 'Run', when: '2026-08-30T10:00:00Z' },
     { checkInId: 'b', type: 'completed', userId: 'u2', habitTitle: 'Run', when: '2026-08-30T09:57:00Z' },
@@ -90,9 +89,10 @@ test('activity grouping and visual signatures avoid grouping proofs or comments'
   assert.equal(grouped[0].type, 'grouped_checkin');
   assert.equal(grouped[0].items.length, 2);
   assert.equal(grouped[1].checkInId, 'c');
-  assert.match(app, /activity-signature/);
-  assert.doesNotMatch(app, /<article class="activity grouped activity-signature/);
-  assert.match(social, /\.activity-signature/);
+  const friends = slice('function friendsScreen()', 'function challengeProgress');
+  const updates = slice('function updatesList(', 'function unseenUpdatesCount(');
+  assert.doesNotMatch(friends, /groupSquadActivity/);
+  assert.match(updates, /filter\(\(activity\) => !activity\.proofPath\)/);
 });
 
 test('contextual habit language handles completed and upcoming commitments', () => {
@@ -116,10 +116,12 @@ test('contextual habit language handles completed and upcoming commitments', () 
   assert.match(contextualHabitStatus({ targetTime: '9:00' }, { now: '2026-08-30T08:00:00', date: '2026-08-30' }), /Due in 60m/);
 });
 
-test('empty states are actionable and loading uses stable skeletons', () => {
+test('new proof and Updates empty states stay actionable and explicit', () => {
   assert.match(app, /empty-action/);
-  assert.match(app, /loading-skeleton/);
-  assert.match(social, /\.loading-skeleton/);
+  assert.match(app, /No proofs yet/);
+  assert.match(app, /Quiet right now/);
+  assert.match(app, /data-empty-checkin/);
+  assert.match(social, /\.proof-media\.is-error/);
 });
 
 test('Settings is a phone-native menu with separate detail views and hidden scrollbars', () => {
