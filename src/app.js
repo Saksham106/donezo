@@ -209,7 +209,9 @@ function requestPortraitLock() {
 
 requestPortraitLock();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') requestPortraitLock();
+  if (document.visibilityState !== 'visible') return;
+  requestPortraitLock();
+  void startDualCameraIfNeeded();
 });
 
 function readableError(error) {
@@ -834,11 +836,10 @@ function friendsScreen() {
   const visibleActivities = feed.slice(0, feedLimit);
   const activities = visibleActivities.map((activity) => activityCard(activity, { showProofActions: true })).join('');
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older proofs</button>` : '';
-  const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
   const refreshButton = `<button class="refresh-btn ${manualRefreshLoading ? 'loading' : ''}" type="button" data-manual-refresh aria-label="Refresh Friends" title="Refresh" ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span></button>`;
   const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View friends" title="Friends">${icon('people')}</button>`;
   const empty = '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>';
-  return `${pageHeading('Friends', 'YOUR PEOPLE')}<div class="squad-refresh-row"><small>${esc(syncText)}</small><div class="squad-actions">${refreshButton}${peopleButton}</div></div><div class="activity-list">${activities || empty}${loadMore}</div>`;
+  return `<section class="friends-heading"><p class="eyebrow">YOUR PEOPLE</p><div class="friends-heading-row"><h1>Friends</h1><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div></section><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
 
 function challengeProgress(challenge) {
@@ -989,7 +990,7 @@ function stakeHistory() {
 }
 
 function habitSettingsRow(habit) {
-  return `<button type="button" class="habit-setting habit-setting-button" data-edit-habit="${habit.id}" aria-label="Edit ${esc(habit.title)}"><span>${esc(habit.emoji)}</span><div><strong>${esc(habit.title)}</strong><small>${esc(formatTime(habit.targetTime))}${habit.proofMode === 'dual_photo' ? ' · Dual photo' : habit.proofMode === 'photo' ? ' · Photo proof' : ' · Truuust mode'}</small></div><span class="setting-chevron" aria-hidden="true">›</span></button>`;
+  return `<button type="button" class="habit-setting habit-setting-button" data-edit-habit="${habit.id}" aria-label="Edit ${esc(habit.title)}"><span>${esc(habit.emoji)}</span><div><strong>${esc(habit.title)}</strong><small>${esc(formatTime(habit.targetTime))}${habit.proofMode === 'photo' ? ' · Photo proof' : ' · Truuust mode'}</small></div><span class="setting-chevron" aria-hidden="true">›</span></button>`;
 }
 
 function previousMonthKey() {
@@ -1079,7 +1080,7 @@ function habitSheet() {
   const archiveArea = editMode
     ? `<button class="btn danger-soft full archive-btn" type="button" data-archive-habit ${busy ? 'disabled' : ''}>Archive habit</button>`
     : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet ${editMode ? 'habit-edit-sheet' : ''}" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="times_per_week" ${scheduleFrequency === 'times_per_week' ? 'selected' : ''}>X times per week</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div data-weekly-target ${scheduleFrequency === 'times_per_week' ? '' : 'hidden'}><label>Days per week<select name="weeklyTargetDays" ${scheduleFrequency === 'times_per_week' ? '' : 'disabled'}>${[1, 2, 3, 4, 5, 6, 7].map((day) => `<option value="${day}" ${weeklyTargetDays === day ? 'selected' : ''}>${day} ${day === 1 ? 'day' : 'days'}</option>`).join('')}</select></label><small>Any distinct days count Monday–Sunday. Your first official week starts next Monday.</small></div><div data-schedule-weekdays ${['selected_weekdays', 'weekly'].includes(scheduleFrequency) ? '' : 'hidden'}><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Pick the exact days. For once-a-week habits, the first picked day is the due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo / screenshot</option><option value="dual_photo" ${proofMode === 'dual_photo' ? 'selected' : ''}>Dual photo</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label>${audienceChoices}${editMode ? '' : `<button class="btn primary full" ${busy ? 'disabled' : ''}>Add habit</button>`}</form>${editMode ? `<div class="habit-save-dock" data-habit-save-dock hidden><button class="btn primary full" type="submit" form="habit-form" ${busy ? 'disabled' : ''}>Save changes</button></div>` : ''}${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet ${editMode ? 'habit-edit-sheet' : ''}" role="dialog" aria-modal="true" aria-label="${editMode ? 'Edit habit' : 'Add habit'}" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">HABIT SETTINGS</p><h2>${editMode ? 'Edit habit' : 'Add a habit'}</h2></div><button class="icon-btn" type="button" data-close-habit aria-label="Close">×</button></div><form id="habit-form" class="form sheet-form">${editMode ? '' : `<div class="starter-templates"><span>Quick start</span>${starterTemplates.map((template, index) => `<button type="button" data-template="${index}">${template.emoji} ${esc(template.title)}</button>`).join('')}</div>`}<label>Habit name<input name="title" maxlength="80" placeholder="Run 1 mile" value="${esc(title)}" required autofocus></label><label>Icon<div class="emoji-row">${emojis.map((emoji) => `<button type="button" data-emoji="${emoji}" aria-pressed="${emoji === selectedEmoji}" class="emoji ${emoji === selectedEmoji ? 'selected' : ''}">${emoji}</button>`).join('')}</div></label><fieldset class="schedule-fields"><legend>When does this count?</legend><label>Schedule<select name="scheduleFrequency"><option value="daily" ${scheduleFrequency === 'daily' ? 'selected' : ''}>Every day</option><option value="selected_weekdays" ${scheduleFrequency === 'selected_weekdays' ? 'selected' : ''}>Specific days</option><option value="times_per_week" ${scheduleFrequency === 'times_per_week' ? 'selected' : ''}>X times per week</option><option value="weekly" ${scheduleFrequency === 'weekly' ? 'selected' : ''}>Once a week</option></select></label><div data-weekly-target ${scheduleFrequency === 'times_per_week' ? '' : 'hidden'}><label>Days per week<select name="weeklyTargetDays" ${scheduleFrequency === 'times_per_week' ? '' : 'disabled'}>${[1, 2, 3, 4, 5, 6, 7].map((day) => `<option value="${day}" ${weeklyTargetDays === day ? 'selected' : ''}>${day} ${day === 1 ? 'day' : 'days'}</option>`).join('')}</select></label><small>Any distinct days count Monday–Sunday. Your first official week starts next Monday.</small></div><div data-schedule-weekdays ${['selected_weekdays', 'weekly'].includes(scheduleFrequency) ? '' : 'hidden'}><span class="field-label">Days</span><div class="weekday-row">${weekdays.map(([label, day]) => `<label title="${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day]}"><input type="checkbox" name="scheduleWeekdays" value="${day}" ${scheduleWeekdays.has(day) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div><small>Pick the exact days. For once-a-week habits, the first picked day is the due day.</small></div><div class="form-grid"><label>Amount<input name="targetQuantity" type="number" min="0.01" step="any" value="${esc(targetQuantity)}" required></label><label>Unit<input name="targetUnit" maxlength="40" value="${esc(targetUnit)}" placeholder="pages, minutes" required></label></div><div class="form-grid"><label>Due time<input name="targetTime" type="time" value="${esc(targetTime)}"></label><label>Grace<select name="graceMinutes"><option value="0" ${graceMinutes === 0 ? 'selected' : ''}>None</option><option value="30" ${graceMinutes === 30 ? 'selected' : ''}>30 min</option><option value="60" ${graceMinutes === 60 ? 'selected' : ''}>1 hour</option><option value="120" ${graceMinutes === 120 ? 'selected' : ''}>2 hours</option></select></label></div><small>Timezone: ${esc(scheduleTimezone)}</small></fieldset><input type="hidden" name="scheduleTimezone" value="${esc(scheduleTimezone)}"><label>Proof<select name="proofMode"><option value="photo" ${proofMode === 'photo' ? 'selected' : ''}>Photo proof</option><option value="none" ${proofMode === 'none' ? 'selected' : ''}>Truuust me</option></select></label>${audienceChoices}${editMode ? '' : `<button class="btn primary full" ${busy ? 'disabled' : ''}>Add habit</button>`}</form>${editMode ? `<div class="habit-save-dock" data-habit-save-dock hidden><button class="btn primary full" type="submit" form="habit-form" ${busy ? 'disabled' : ''}>Save changes</button></div>` : ''}${pauseForm}<div class="habit-sheet-actions">${archiveArea}<button class="text-btn" type="button" data-cancel-habit ${busy ? 'disabled' : ''}>Cancel</button></div></section></div>`;
 }
 
 function settingsSheet() {
@@ -1286,17 +1287,21 @@ function dualProofSheet() {
   const habit = getState()?.habits.find((item) => item.id === dualProof.habitId);
   if (!habit) return '';
   const mainStep = dualProof.phase === 'main';
-  const title = mainStep ? 'Show what you did' : 'Now show you';
-  const copy = mainStep ? 'Take the proof photo with the rear camera.' : 'Flip it around for the selfie.';
+  const mode = dualProof.mode === 'dual' ? 'dual' : 'single';
+  const title = mainStep ? (mode === 'dual' ? 'Show what you did' : 'Take your proof') : 'Now show you';
+  const copy = mainStep
+    ? mode === 'dual' ? 'Take the main proof photo, then Donezo will flip for your selfie.' : 'Take one clear photo that proves the habit.'
+    : 'Flip it around for the selfie.';
   const fallbackAttr = mainStep ? 'data-dual-fallback-main' : 'data-dual-fallback-selfie';
-  return `<div class="sheet-backdrop"><section class="sheet dual-proof-sheet" role="dialog" aria-modal="true" aria-label="Dual photo proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">DUAL PROOF</p><h2>${esc(title)}</h2></div><button class="icon-btn" type="button" data-dual-cancel aria-label="Cancel proof">×</button></div><p class="proof-sheet-copy">${esc(copy)}</p><div class="dual-camera-frame"><video data-dual-camera autoplay playsinline muted></video><div class="dual-camera-loading">Starting camera…</div></div>${dualProof.error ? `<div class="proof-error" role="alert"><p>${esc(dualProof.error)}</p></div>` : ''}<button class="btn primary full" type="button" data-dual-capture>Capture</button><button class="text-btn" type="button" ${fallbackAttr}>Use phone camera instead</button></section></div>`;
+  const modeSwitch = mainStep ? `<div class="camera-mode-switch" role="group" aria-label="Photo mode"><button class="${mode === 'single' ? 'active' : ''}" type="button" data-camera-mode="single" aria-pressed="${mode === 'single'}">Single</button><button class="${mode === 'dual' ? 'active' : ''}" type="button" data-camera-mode="dual" aria-pressed="${mode === 'dual'}">Dual</button></div>` : '';
+  return `<div class="sheet-backdrop"><section class="sheet dual-proof-sheet" role="dialog" aria-modal="true" aria-label="Photo proof camera" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">${mode === 'dual' ? 'DUAL PHOTO' : 'PHOTO PROOF'}</p><h2>${esc(title)}</h2></div><button class="icon-btn" type="button" data-dual-cancel aria-label="Cancel proof">×</button></div>${modeSwitch}<p class="proof-sheet-copy">${esc(copy)}</p><div class="dual-camera-frame"><video data-dual-camera autoplay playsinline muted></video><div class="dual-camera-loading">Starting camera…</div></div>${dualProof.error ? `<div class="proof-error" role="alert"><p>${esc(dualProof.error)}</p></div>` : ''}<button class="btn primary full" type="button" data-dual-capture>${mainStep ? 'Capture' : 'Capture selfie'}</button><button class="camera-quality-fallback" type="button" ${fallbackAttr}><span class="camera-quality-icon" aria-hidden="true">📷</span><span><strong>Use iPhone camera for better quality</strong><small>Opens the native camera</small></span><span class="camera-quality-chevron" aria-hidden="true">›</span></button></section></div>`;
 }
 
 function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
   if (!habit) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take one photo, use Dual photo, pick a saved photo, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-dual>Dual photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take a photo, pick one from your library, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
 }
 
 function proofReviewSheet() {
@@ -1305,19 +1310,25 @@ function proofReviewSheet() {
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
   const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
-  const dual = dualProof?.habitId === habit.id;
+  const cameraSession = dualProof?.habitId === habit.id;
+  const dual = cameraSession && dualProof?.mode === 'dual';
   const replaceActions = dual
     ? `<div class="proof-review-actions"><button class="btn" type="button" data-dual-retake-main ${uploading ? 'disabled' : ''}>Retake proof</button><button class="btn" type="button" data-dual-retake-selfie ${uploading ? 'disabled' : ''}>Retake selfie</button></div>`
-    : `<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div>`;
+    : cameraSession
+      ? `<div class="proof-review-actions"><button class="btn" type="button" data-camera-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose from library</button></div>`
+      : `<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div>`;
   return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}${replaceActions}<div class="upload-status" aria-live="polite" data-upload-status>${uploading ? 'Uploading proof. Keep Donezo open.' : proofReview.status === 'error' ? 'Upload failed. Your photo is saved for retry.' : 'Ready to submit.'}</div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
 }
-
-
 
 function stopDualCamera() {
   dualCameraRequestId += 1;
   stopMediaStream(dualCameraStream);
   dualCameraStream = null;
+}
+
+function openNativeCameraFallback(input) {
+  stopDualCamera();
+  input?.click();
 }
 
 function clearDualProof() {
@@ -1334,7 +1345,15 @@ async function startDualCameraIfNeeded() {
   dualCameraStream = null;
   try {
     const facing = dualProof.phase === 'main' ? 'environment' : 'user';
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: facing },
+        width: { ideal: 1920 },
+        height: { ideal: 1440 },
+        aspectRatio: { ideal: 4 / 3 },
+      },
+      audio: false,
+    });
     if (requestId !== dualCameraRequestId || !dualProof || !video.isConnected) {
       stopMediaStream(stream);
       return;
@@ -1362,9 +1381,12 @@ async function finishDualSelection(file, side) {
   stopDualCamera();
   if (dualProof.phase === 'review') {
     try {
-      const composite = await composeDualProof(dualProof.mainFile, dualProof.selfieFile);
-      const previewUrl = URL.createObjectURL(composite);
-      proofReview = createProofReviewState({ file: composite, habitId: dualProof.habitId, previewUrl });
+      const output = dualProof.mode === 'dual'
+        ? await composeDualProof(dualProof.mainFile, dualProof.selfieFile)
+        : dualProof.mainFile;
+      if (!output) throw new Error('Take a proof photo first');
+      const previewUrl = URL.createObjectURL(output);
+      proofReview = createProofReviewState({ file: output, habitId: dualProof.habitId, previewUrl });
     } catch (error) {
       dualProof = transitionDualProof(dualProof, { type: 'failed', error: readableError(error) });
     }
@@ -1543,18 +1565,27 @@ function bindProofThumbnails() {
 }
 
 function bindProofActions() {
-  app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
-  app.querySelectorAll('[data-proof-dual]').forEach((element) => { element.onclick = () => {
+  app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => {
     if (!proofHabit) return;
-    dualProof = createDualProofState(proofHabit);
+    dualProof = createDualProofState(proofHabit, 'single');
     proofHabit = null;
     render();
   }; });
   app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
   app.querySelectorAll('[data-proof-paste]').forEach((element) => { element.onclick = handlePasteProof; });
   app.querySelectorAll('[data-proof-source-close]').forEach((element) => { element.onclick = () => { proofHabit = null; render(); }; });
-  app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => replaceProofSelection(proofInput); });
-  app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => replaceProofSelection(proofGalleryInput); });
+  app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => {
+    if (!proofReview) return;
+    const habitId = proofReview.habitId;
+    clearProofReview();
+    clearDualProof();
+    dualProof = createDualProofState(habitId, 'single');
+    render();
+  }; });
+  app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => {
+    if (dualProof?.habitId === proofReview?.habitId) clearDualProof();
+    replaceProofSelection(proofGalleryInput);
+  }; });
   app.querySelectorAll('[data-proof-review-close]').forEach((element) => { element.onclick = dismissProofReview; });
   app.querySelectorAll('[data-proof-submit]').forEach((element) => { element.onclick = handleProofSubmit; });
   bindProofThumbnails();
@@ -1654,7 +1685,7 @@ function render() {
   app.querySelectorAll('[data-friends]').forEach((element) => { element.onclick = () => { setActiveTab('friends'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
-  app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { proofHabit = element.dataset.quickProof; chooseProofInput(proofInput); }; });
+  app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { dualProof = createDualProofState(element.dataset.quickProof, 'single'); proofHabit = null; render(); }; });
   app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.reactionEmoji); });
   app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => { commentCheckInId = element.dataset.commentOpen; render(); }; });
   app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
@@ -1820,10 +1851,20 @@ function render() {
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
   app.querySelector('#notification-preferences-form')?.addEventListener('submit', handleNotificationPreferences);
   app.querySelector('#social-preferences-form')?.addEventListener('submit', handleSocialPreferences);
+  app.querySelectorAll('[data-camera-mode]').forEach((element) => { element.onclick = () => {
+    if (!dualProof || dualProof.phase !== 'main') return;
+    const mode = element.dataset.cameraMode === 'dual' ? 'dual' : 'single';
+    if (dualProof.mode === mode) return;
+    const habitId = dualProof.habitId;
+    clearDualProof();
+    dualProof = createDualProofState(habitId, mode);
+    render();
+  }; });
   app.querySelector('[data-dual-capture]')?.addEventListener('click', () => { void captureDualCamera(); });
-  app.querySelector('[data-dual-fallback-main]')?.addEventListener('click', () => dualProofMainInput?.click());
-  app.querySelector('[data-dual-fallback-selfie]')?.addEventListener('click', () => proofSelfieInput?.click());
-  app.querySelector('[data-dual-cancel]')?.addEventListener('click', () => { clearDualProof(); render(); });
+  app.querySelector('[data-dual-fallback-main]')?.addEventListener('click', () => openNativeCameraFallback(dualProofMainInput));
+  app.querySelector('[data-dual-fallback-selfie]')?.addEventListener('click', () => openNativeCameraFallback(proofSelfieInput));
+  app.querySelector('[data-dual-cancel]')?.addEventListener('click', () => { const habitId = dualProof?.habitId; clearDualProof(); proofHabit = habitId || null; render(); });
+  app.querySelector('[data-camera-retake]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_main' }); render(); });
   app.querySelector('[data-dual-retake-main]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_main' }); render(); });
   app.querySelector('[data-dual-retake-selfie]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_selfie' }); render(); });
   app.querySelector('[data-retry-mutation]')?.addEventListener('click', () => retryMutation?.());
@@ -2040,7 +2081,7 @@ async function handleManualRefresh() {
   if (coordinator !== refreshCoordinator) return;
   manualRefreshLoading = false;
 
-  if (result.status === 'refreshed') notify('Friends refreshed. Fresh receipts 🧾');
+  if (result.status === 'refreshed') notify('Synced just now');
   else if (result.status === 'failed') notify('Refresh flopped. Keeping your last good data.', 3600);
   else if (result.reason === 'offline') notify('Still offline. Showing your last sync.', 3200);
   else if (result.reason === 'busy') notify('Finish that action first, then refresh.', 2800);
@@ -2241,11 +2282,6 @@ async function handleHabit(id) {
   }
   if (weekly?.paused) {
     notify(`${habit.title} is paused today.`);
-    return;
-  }
-  if (habit.proofMode === 'dual_photo') {
-    dualProof = createDualProofState(id);
-    render();
     return;
   }
   if (habit.proofMode === 'photo') {

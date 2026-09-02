@@ -1,8 +1,9 @@
 import { compressProofFile, validateProofFile } from './proof.js';
 
-export function createDualProofState(habitId) {
+export function createDualProofState(habitId, mode = 'dual') {
   return {
     habitId,
+    mode: mode === 'single' ? 'single' : 'dual',
     phase: 'main',
     mainFile: null,
     selfieFile: null,
@@ -14,7 +15,7 @@ export function transitionDualProof(state, action) {
   if (!state) return state;
   switch (action?.type) {
     case 'main_selected':
-      return { ...state, phase: 'selfie', mainFile: action.file, error: null };
+      return { ...state, phase: state.mode === 'single' ? 'review' : 'selfie', mainFile: action.file, error: null };
     case 'selfie_selected':
       return { ...state, phase: 'review', selfieFile: action.file, error: null };
     case 'retake_main':
@@ -177,7 +178,7 @@ export async function composeDualProof(mainFile, selfieFile, {
 
 export async function captureVideoFrame(video, {
   facing = 'environment',
-  quality = 0.9,
+  quality = 0.92,
   now = Date.now,
 } = {}) {
   const width = Number(video?.videoWidth || 0);

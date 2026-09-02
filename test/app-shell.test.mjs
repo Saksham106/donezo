@@ -59,7 +59,7 @@ test('social UX exposes settings, nudge inbox/composer, proof votes and invite o
 test('habit sheet defaults to photo proof and cannot horizontally overflow', () => {
   assert.match(app, /const proofMode = editing\?\.proofMode \|\| 'photo'/);
   assert.match(app, /const targetTime = editMode \? \(editing\.targetTime \?\? ''\) : '20:00'/);
-  assert.match(app, /value="photo" \$\{proofMode === 'photo' \? 'selected' : ''\}>Photo \/ screenshot/);
+  assert.match(app, /value="photo" \$\{proofMode === 'photo' \? 'selected' : ''\}>Photo proof/);
   assert.match(app, />Truuust me</);
   assert.match(social, /\.sheet[^}]*overflow-x:\s*hidden/);
   assert.match(social, /input\[type="time"\]/);

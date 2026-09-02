@@ -9,8 +9,10 @@ function slice(start, end) {
   return app.slice(app.indexOf(`function ${start}`), app.indexOf(`function ${end}`));
 }
 
-test('habit editor exposes a configured dual-photo proof mode', () => {
-  assert.match(app, /value="dual_photo"[^>]*>[^<]*Dual photo/i);
+test('habit editor exposes photo proof without a separate dual habit mode', () => {
+  assert.match(app, /value="photo"[^>]*>[^<]*Photo proof/i);
+  assert.match(app, /value="none"[^>]*>[^<]*Truuust me/i);
+  assert.doesNotMatch(app, /value="dual_photo"/);
   assert.match(app, /requiresPhotoProof/);
 });
 
