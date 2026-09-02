@@ -209,7 +209,9 @@ function requestPortraitLock() {
 
 requestPortraitLock();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') requestPortraitLock();
+  if (document.visibilityState !== 'visible') return;
+  requestPortraitLock();
+  void startDualCameraIfNeeded();
 });
 
 function readableError(error) {
@@ -1324,6 +1326,11 @@ function stopDualCamera() {
   dualCameraStream = null;
 }
 
+function openNativeCameraFallback(input) {
+  stopDualCamera();
+  input?.click();
+}
+
 function clearDualProof() {
   stopDualCamera();
   dualProof = null;
@@ -1854,8 +1861,8 @@ function render() {
     render();
   }; });
   app.querySelector('[data-dual-capture]')?.addEventListener('click', () => { void captureDualCamera(); });
-  app.querySelector('[data-dual-fallback-main]')?.addEventListener('click', () => dualProofMainInput?.click());
-  app.querySelector('[data-dual-fallback-selfie]')?.addEventListener('click', () => proofSelfieInput?.click());
+  app.querySelector('[data-dual-fallback-main]')?.addEventListener('click', () => openNativeCameraFallback(dualProofMainInput));
+  app.querySelector('[data-dual-fallback-selfie]')?.addEventListener('click', () => openNativeCameraFallback(proofSelfieInput));
   app.querySelector('[data-dual-cancel]')?.addEventListener('click', () => { const habitId = dualProof?.habitId; clearDualProof(); proofHabit = habitId || null; render(); });
   app.querySelector('[data-camera-retake]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_main' }); render(); });
   app.querySelector('[data-dual-retake-main]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_main' }); render(); });
