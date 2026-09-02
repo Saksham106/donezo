@@ -45,6 +45,7 @@ jobs:
           text = text[:viewer_i] + text[viewer_j:]
           text = text.replace("  proofViewer = null;\n", "")
           text = text.replace("  proofViewerRequestId += 1;\n", "")
+          text = re.sub(r"\n\s*app\.querySelectorAll\('\[data-squad-feed\]'\)[^\n]*", "", text)
           '''
           text = text.replace(marker, cleanup, 1)
           path.write_text(text)
