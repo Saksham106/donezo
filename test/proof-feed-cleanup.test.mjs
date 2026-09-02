@@ -26,3 +26,11 @@ test('profiles separate proof history from non-proof activity without duplicatio
   assert.doesNotMatch(profile, /<strong>All activity<\/strong>/);
   assert.match(profile, /otherActivity\.map\(\(item\) => activityCard/);
 });
+
+test('hidden proof replies use a small blue More link', () => {
+  const preview = slice('proofReplyPreview', 'activityCard');
+  assert.match(preview, />More<\/button>/);
+  assert.doesNotMatch(preview, /View all .* replies/);
+  assert.match(social, /\.proof-reply-all\{[^}]*color:var\(--color-cobalt\)/);
+  assert.match(social, /\.proof-reply-all\{[^}]*font-size:var\(--text-2xs\)/);
+});
