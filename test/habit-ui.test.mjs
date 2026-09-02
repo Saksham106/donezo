@@ -34,8 +34,10 @@ test('emoji selection does not rerender and wipe unsaved habit fields', () => {
   assert.doesNotMatch(app, /selectedEmoji = element\.dataset\.emoji;\s*render\(\)/);
 });
 
-test('background refresh keeps unsaved form drafts mounted', () => {
+test('background refresh keeps unsaved drafts and a scrolled Friends feed mounted', () => {
   assert.match(app, /function hasUnsavedDraft\(\)/);
-  assert.match(app, /lastRefreshAt = new Date\(\)\.toISOString\(\);\s*if \(!hasUnsavedDraft\(\)\) renderPreservingScroll\(\);/);
-  assert.match(app, /onNetworkChange:\s*\(value\) => \{[\s\S]{0,180}if \(!hasUnsavedDraft\(\)\) renderPreservingScroll\(\);/);
+  assert.match(app, /Boolean\(dualProof\)/);
+  assert.match(app, /function shouldDeferFriendsRefreshRender\(\)/);
+  assert.match(app, /lastRefreshAt = new Date\(\)\.toISOString\(\);\s*if \(!hasUnsavedDraft\(\) && !shouldDeferFriendsRefreshRender\(\)\) renderPreservingScroll\(\);/);
+  assert.match(app, /onNetworkChange:\s*\(value\) => \{[\s\S]{0,240}if \(!hasUnsavedDraft\(\) && !shouldDeferFriendsRefreshRender\(\)\) renderPreservingScroll\(\);/);
 });

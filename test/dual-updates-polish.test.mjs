@@ -32,12 +32,12 @@ test('Dual camera mode keeps independent retake controls', () => {
   assert.match(review, /data-dual-retake-selfie/);
 });
 
-test('proof rejection shares the reaction row and is right aligned', () => {
+test('proof rejection is visible in the proof header and kept out of the reaction row', () => {
   const card = section(app, 'function activityCard(', 'function personProofCarousel(');
-  assert.match(card, /reaction-row[^`]*\$\{rejectionControl\}/s);
+  assert.match(card, /proof-card-heading-copy[\s\S]*\$\{rejectionControl\}<\/div>\$\{proofPreview\}/);
   assert.match(card, /class="vote-btn proof-rejection-inline/);
-  assert.doesNotMatch(card, /const proofActions[^\n]*data-request-reject/);
-  assert.match(social, /\.proof-rejection-inline\{[^}]*margin-left:auto/);
+  assert.doesNotMatch(card, /reaction-row[^`]*\$\{rejectionControl\}/s);
+  assert.match(social, /\.proof-rejection-inline\{[^}]*align-self:flex-start/);
 });
 
 test('Updates includes recipient notification events and only dedupes matching native rows', () => {

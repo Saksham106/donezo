@@ -71,9 +71,10 @@ test('in-app camera asks for a higher quality stream and makes iPhone quality fa
   assert.match(social, /\.camera-quality-fallback\{/);
 });
 
-test('native iPhone camera handoff releases and restores the Donezo stream', () => {
+test('native iPhone camera handoff keeps the Donezo stream warm when possible', () => {
   assert.match(app, /function openNativeCameraFallback\(input\)/);
-  assert.match(app, /function openNativeCameraFallback\(input\)[^]*stopDualCamera\(\)[^]*input\?\.click\(\)/);
+  assert.doesNotMatch(app, /function openNativeCameraFallback\(input\)[^}]*stopDualCamera\(\)/);
+  assert.match(app, /function openNativeCameraFallback\(input\)[^}]*input\?\.click\(\)/);
   assert.match(app, /visibilitychange[^]*document\.visibilityState !== 'visible'[^]*return;[^]*startDualCameraIfNeeded\(\)/);
   assert.match(app, /data-dual-fallback-main[^]*openNativeCameraFallback\(dualProofMainInput\)/);
   assert.match(app, /data-dual-fallback-selfie[^]*openNativeCameraFallback\(proofSelfieInput\)/);
