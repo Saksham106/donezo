@@ -23,6 +23,13 @@ test('every normal photo-proof picker offers Dual photo', () => {
   assert.match(bindings, /createDualProofState\(proofHabit\)/);
 });
 
+test('optional Dual photo keeps the dual retake review controls', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
+  assert.match(review, /const dual = dualProof\?\.habitId === habit\.id/);
+  assert.match(review, /data-dual-retake-main/);
+  assert.match(review, /data-dual-retake-selfie/);
+});
+
 test('proof rejection shares the reaction row and is right aligned', () => {
   const card = section(app, 'function activityCard(', 'function personProofCarousel(');
   assert.match(card, /reaction-row[^`]*\$\{rejectionControl\}/s);
