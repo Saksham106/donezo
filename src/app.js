@@ -350,7 +350,8 @@ function updatesList(state = getState()) {
     message: nudge.message,
     readAt: nudge.readAt || null,
   }));
-  const activities = activityList(state).filter((activity) => !activity.proofPath).map((activity) => ({
+  const nativeActivities = activityList(state).filter((activity) => !activity.proofPath);
+  const activities = nativeActivities.map((activity) => ({
     kind: 'activity',
     id: `activity:${activity.id}`,
     sourceId: activity.id,
@@ -359,27 +360,38 @@ function updatesList(state = getState()) {
     message: activity.message || `${activity.emoji || '✓'} ${activity.habitTitle || 'Habit'}`,
     activity,
   }));
-  const notifications = (state?.notificationEvents || [])
-    .filter((event) => !['nudge', 'friend_activity'].includes(event.category))
-    .map((event) => ({
-      kind: 'notification',
-      id: `notification:${event.id}`,
-      sourceId: event.id,
-      userId: event.sourceUserId || null,
-      when: event.createdAt,
-      title: event.title || 'Notification',
-      message: event.body || '',
-      category: event.category,
-      deepLink: event.deepLink || null,
-    }));
+  const nativeActivityCheckInIds = new Set(nativeActivities.map((activity) => activity.checkInId).filter(Boolean));
+  const visibleNotificationEvents = (state?.notificationEvents || []).filter((event) => {
+    if (event.category === 'nudge') return false;
+    if (event.category === 'friend_activity' && nativeActivityCheckInIds.has(event.metadata?.checkInId)) return false;
+    return true;
+  });
+  const notifications = visibleNotificationEvents.map((event) => ({
+    kind: 'notification',
+    id: `notification:${event.id}`,
+    sourceId: event.id,
+    userId: event.sourceUserId || null,
+    when: event.createdAt,
+    title: event.title || 'Notification',
+    message: event.body || '',
+    category: event.category,
+    deepLink: event.deepLink || null,
+  }));
   return [...nudges, ...activities, ...notifications].sort((a, b) => new Date(b.when) - new Date(a.when));
 }
 
 function unseenUpdatesCount(state = getState()) {
   const lastSeen = new Date(state?.updatesLastSeenAt || 0).getTime();
-  const activityCount = activityList(state).filter((activity) => !activity.proofPath && new Date(activity.when).getTime() > lastSeen).length;
+  const nativeActivities = activityList(state).filter((activity) => !activity.proofPath);
+  const activityCount = nativeActivities.filter((activity) => new Date(activity.when).getTime() > lastSeen).length;
   const nudgeCount = incomingNudges().filter((nudge) => !nudge.readAt).length;
-  const notificationCount = (state?.notificationEvents || []).filter((event) => !['nudge', 'friend_activity'].includes(event.category) && new Date(event.createdAt).getTime() > lastSeen).length;
+  const nativeActivityCheckInIds = new Set(nativeActivities.map((activity) => activity.checkInId).filter(Boolean));
+  const visibleNotificationEvents = (state?.notificationEvents || []).filter((event) => {
+    if (event.category === 'nudge') return false;
+    if (event.category === 'friend_activity' && nativeActivityCheckInIds.has(event.metadata?.checkInId)) return false;
+    return true;
+  });
+  const notificationCount = visibleNotificationEvents.filter((event) => new Date(event.createdAt).getTime() > lastSeen).length;
   return activityCount + nudgeCount + notificationCount;
 }
 

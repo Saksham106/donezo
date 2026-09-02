@@ -479,6 +479,7 @@ export function mapDatabaseState(user, rows) {
       deepLink: event.deep_link || null,
       status: event.status,
       createdAt: event.created_at,
+      metadata: event.metadata || {},
     })),
     updatesLastSeenAt: rows.userUpdateState?.last_seen_at || null,
   };
@@ -507,7 +508,7 @@ export function createSupabaseRepository(client, user) {
     const profile = await ensureProfile();
     const [notificationPreferencesResult, notificationEventsResult, membershipsResult, friendshipsResult, requestsResult, userUpdateStateResult] = await Promise.all([
       client.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle(),
-      client.from('notification_events').select('id,source_user_id,category,title,body,deep_link,status,created_at').eq('recipient_user_id', user.id).order('created_at', { ascending: false }).limit(100),
+      client.from('notification_events').select('id,source_user_id,category,title,body,deep_link,status,created_at,metadata').eq('recipient_user_id', user.id).order('created_at', { ascending: false }).limit(100),
       client.from('circle_members')
         .select('circle_id, role, joined_at, circles!circle_members_circle_id_fkey(id,name,invite_code,owner_id)')
         .eq('user_id', user.id)
