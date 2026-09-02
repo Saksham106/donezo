@@ -279,6 +279,13 @@ function formatWhen(value) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function formatExactTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
+}
+
 function displayDate() {
   return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date());
 }
@@ -683,18 +690,20 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const mine = activity.userId === me().id;
   if (activity.type === 'callout') {
     const target = member(activity.toUserId);
-    return `<article class="activity callout"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')} called out ${esc(target?.name || 'a friend')}`, `${esc(formatWhen(activity.when))} · visible to this group`)}</div><div class="callout-message"><span>⚡</span><p>${esc(activity.message)}</p></div></article>`;
+    return `<article class="activity callout"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')} called out ${esc(target?.name || 'a friend')}`, `${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)} · visible to this group`)}</div><div class="callout-message"><span>⚡</span><p>${esc(activity.message)}</p></div></article>`;
   }
   if (['missed', 'recovered', 'recovery'].includes(activity.type)) {
     const recovered = activity.type === 'recovered';
     const missed = activity.type === 'missed';
     const verb = missed ? 'missed one' : recovered ? 'came back' : 'made a recovery move';
-    return `<article class="activity ${activity.type}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')} ${verb}`, esc(formatWhen(activity.when)))}</div><div class="activity-body"><span>${missed ? '○' : '↩'}</span><div><strong>${esc(activity.emoji)} ${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${!mine && !missed ? `<button class="btn small-btn" data-nudge="${activity.userId}">Send support</button>` : ''}</article>`;
+    return `<article class="activity ${activity.type}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')} ${verb}`, esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`))}</div><div class="activity-body"><span>${missed ? '○' : '↩'}</span><div><strong>${esc(activity.emoji)} ${esc(activity.habitTitle)}</strong><p>${esc(activity.message)}</p></div></div>${!mine && !missed ? `<button class="btn small-btn" data-nudge="${activity.userId}">Send support</button>` : ''}</article>`;
   }
   const checkIn = getState().checkIns.find((item) => item.id === activity.checkInId);
-  const threshold = proofRejectionThreshold(friendList(getState()).length);
+  const threshold = proofRejectionThreshold(activity.audienceSize);
+  const rejectionLabel = `${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}`;
+  const rejectionStatus = `<span class="vote-btn proof-rejection-status ${activity.invalid ? 'active' : ''}" aria-label="${activity.invalid ? 'Proof rejected' : `${activity.downvotes || 0} proof rejection${activity.downvotes === 1 ? '' : 's'} so far`}">👎 <span>${rejectionLabel}</span></span>`;
   const proofPreview = showProofActions && activity.proofPath ? `<button class="proof-thumbnail" type="button" data-proof="${esc(activity.proofPath)}" data-proof-thumbnail="${esc(activity.proofPath)}" aria-label="Open ${esc(activity.habitTitle)} proof"><span aria-hidden="true">📷</span><small>Loading proof…</small></button>` : '';
-  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? (activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : '') : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${activity.downvotes || 0}${Number.isFinite(threshold) ? `/${threshold}` : ''}</span></button>`}</div>` : '';
+  const proofActions = showProofActions && activity.proofPath ? `<div class="proof-actions"><button class="btn proof-btn" data-proof="${esc(activity.proofPath)}">Open proof</button>${mine ? `${rejectionStatus}${activity.invalid ? `<button class="btn danger-soft" data-redo-checkin="${activity.checkInId}">Run it back</button>` : ''}` : `<button class="vote-btn ${activity.userDownvoted ? 'active' : ''}" data-request-reject="${activity.checkInId}" aria-label="${activity.userDownvoted ? 'Remove proof rejection' : 'Reject proof'}">👎 <span>${rejectionLabel}</span></button>`}</div>` : '';
   const commentCount = (getState().comments || []).filter((comment) => comment.checkInId === activity.checkInId).length;
   const mineReactions = (activity.userReactions || []).slice(-1);
   const visibleReactionCounts = { ...(activity.reactionCounts || {}) };
@@ -711,9 +720,9 @@ function activityCard(activity, { showProofActions = false } = {}) {
     const actorLabel = mine ? 'You' : esc(actor?.name || 'Friend');
     const actorHandle = !mine && actor?.handle ? ` ${esc(actor.handle)}` : '';
     const invalidLabel = activity.invalid ? ' · cooked 💀' : '';
-    return `<article class="activity proof-activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="proof-card-header"><div class="proof-card-title"><span aria-hidden="true">${esc(activity.emoji)}</span><strong>${esc(activity.habitTitle)}</strong></div><div class="proof-card-byline"><button class="proof-card-author" type="button" data-friend-profile="${activity.userId}" aria-label="Open ${esc(actor?.name || 'friend')} profile">${actorLabel}${actorHandle}${invalidLabel}</button><span>· ${esc(formatWhen(activity.when))}</span><span>· 🔥 ${activity.streak}</span></div></div>${proofPreview}${activityMessage ? `<p class="proof-card-note">${esc(activityMessage)}</p>` : ''}${proofActions}${positiveReactions}${proofReplyPreview(activity.checkInId)}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+    return `<article class="activity proof-activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="proof-card-header"><div class="proof-card-title"><span aria-hidden="true">${esc(activity.emoji)}</span><strong>${esc(activity.habitTitle)}</strong></div><div class="proof-card-byline"><button class="proof-card-author" type="button" data-friend-profile="${activity.userId}" aria-label="Open ${esc(actor?.name || 'friend')} profile">${actorLabel}${actorHandle}${invalidLabel}</button><span>· ${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)}</span><span>· 🔥 ${activity.streak}</span></div></div>${proofPreview}${activityMessage ? `<p class="proof-card-note">${esc(activityMessage)}</p>` : ''}${proofActions}${positiveReactions}${proofReplyPreview(activity.checkInId)}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
   }
-  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}`, `${esc(formatWhen(activity.when))} · 🔥 ${activity.streak}`)}</div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
+  return `<article class="activity ${activity.invalid ? 'invalid' : ''}" data-check-in="${activity.checkInId}"><div class="activity-head">${activityProfileButton(activity.userId, `${mine ? 'You' : esc(actor?.name || 'Friend')}${activity.invalid ? ' · cooked 💀' : ''}`, `${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)} · 🔥 ${activity.streak}`)}</div><div class="activity-body"><span>${esc(activity.emoji)}</span><div><strong>${esc(activity.habitTitle)}</strong>${activityMessage ? `<p>${esc(activityMessage)}</p>` : ''}</div></div>${proofPreview}${proofActions}${positiveReactions}${checkIn?.invalid ? '<p class="proof-verdict">Does not count toward streaks or League.</p>' : ''}</article>`;
 }
 
 function personProofCarousel(userId, activities) {
@@ -747,7 +756,7 @@ function squadScreen() {
   const visibleActivities = feed.slice(0, feedLimit);
   const groupedActivities = squadFeed === 'activity' ? groupSquadActivity(visibleActivities, state.comments || []) : visibleActivities;
   const activities = groupedActivities.map((activity) => activity.type === 'grouped_checkin'
-    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><div class="activity-people">${activity.items.map((item) => `<button type="button" data-friend-profile="${item.userId}">${esc(member(item.userId)?.name || 'Friend')}</button>`).join('')}</div></article>`
+    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)}</small></div></div><div class="activity-people">${activity.items.map((item) => `<button type="button" data-friend-profile="${item.userId}">${esc(member(item.userId)?.name || 'Friend')}</button>`).join('')}</div></article>`
     : activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older updates</button>` : '';
   const syncText = lastRefreshAt ? `Synced ${formatWhen(lastRefreshAt)}` : 'Ready to sync';
@@ -770,7 +779,7 @@ function friendsScreen() {
     ? groupSquadActivity(visibleActivities, state.comments || [])
     : visibleActivities;
   const activities = displayActivities.map((activity) => activity.type === 'grouped_checkin'
-    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(formatWhen(activity.when))}</small></div></div><div class="activity-people">${activity.items.map((item) => `<button type="button" data-friend-profile="${item.userId}">${esc(member(item.userId)?.name || 'Friend')}</button>`).join('')}</div></article>`
+    ? `<article class="activity grouped checkin"><div class="activity-head"><span class="activity-signature" aria-hidden="true">✓</span><div><strong>${activity.items.length} people checked in</strong><small>${esc(activity.emoji || '✓')} ${esc(activity.habitTitle)} · ${esc(`${formatWhen(activity.when)} · ${formatExactTime(activity.when)}`)}</small></div></div><div class="activity-people">${activity.items.map((item) => `<button type="button" data-friend-profile="${item.userId}">${esc(member(item.userId)?.name || 'Friend')}</button>`).join('')}</div></article>`
     : activityCard(activity, { showProofActions: squadFeed === 'proofs' })).join('');
   const feedName = squadFeed === 'proofs' ? 'proofs' : 'activity';
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older ${feedName}</button>` : '';
