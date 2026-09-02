@@ -21,7 +21,7 @@ test('Updates mixes incoming nudges and every non-proof activity newest first', 
   assert.match(app, /incomingNudges\(\)/);
   assert.match(app, /filter\(\(activity\) => !activity\.proofPath\)/);
   assert.match(app, /sort\(\(a, b\) => new Date\(b\.when\).*new Date\(a\.when\)/s);
-  const inbox = slice('nudgeInboxSheet', 'settingsSheet');
+  const inbox = slice('nudgeInboxSheet', 'inviteSheet');
   assert.match(inbox, /UPDATES/);
   assert.match(inbox, /kind === 'nudge'/);
   assert.match(inbox, /kind === 'activity'/);
