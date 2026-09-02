@@ -1,6 +1,10 @@
 export const MAX_PROOF_BYTES = 4 * 1024 * 1024;
 export const ALLOWED_PROOF_TYPES = Object.freeze(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 
+export function requiresPhotoProof(mode) {
+  return mode === 'photo' || mode === 'dual_photo';
+}
+
 const PROOF_TYPE_ALIASES = Object.freeze({
   'image/jpeg': 'image/jpeg',
   'image/jpg': 'image/jpeg',
