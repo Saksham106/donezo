@@ -71,6 +71,14 @@ test('in-app camera asks for a higher quality stream and makes iPhone quality fa
   assert.match(social, /\.camera-quality-fallback\{/);
 });
 
+test('native iPhone camera handoff releases and restores the Donezo stream', () => {
+  assert.match(app, /function openNativeCameraFallback\(input\)/);
+  assert.match(app, /function openNativeCameraFallback\(input\)[^]*stopDualCamera\(\)[^]*input\?\.click\(\)/);
+  assert.match(app, /visibilitychange[^]*document\.visibilityState === 'visible'[^]*startDualCameraIfNeeded\(\)/);
+  assert.match(app, /data-dual-fallback-main[^]*openNativeCameraFallback\(dualProofMainInput\)/);
+  assert.match(app, /data-dual-fallback-selfie[^]*openNativeCameraFallback\(proofSelfieInput\)/);
+});
+
 test('Friends heading keeps refresh and people actions on one compact row', () => {
   const friends = section(app, 'function friendsScreen()', 'function challengeProgress');
   assert.match(friends, /friends-heading-row/);
