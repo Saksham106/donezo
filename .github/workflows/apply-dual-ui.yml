@@ -64,7 +64,7 @@ jobs:
         run: |
           git config user.name "Saksham Goel"
           git config user.email "67731724+Saksham106@users.noreply.github.com"
-          git rm .github/workflows/apply-dual-ui.yml scripts/patch_dual_ui.py scripts/patch_dual_legacy_tests.py
+          git rm -f .github/workflows/apply-dual-ui.yml scripts/patch_dual_ui.py scripts/patch_dual_legacy_tests.py
           git add src/app.js index.html social.css test/dual-proof-ui.test.mjs test/full-proof-feed.test.mjs test/updates-center.test.mjs test/app-shell.test.mjs test/fluid-performance.test.mjs test/friends-ui.test.mjs test/league-friends-ux.test.mjs test/mobile-polish-v2.test.mjs test/mobile-social-v2.test.mjs test/polish-batch.test.mjs
           git diff --cached --check
           git commit -m "feat: add dual proof feed and Updates UI"
