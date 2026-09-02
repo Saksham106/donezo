@@ -38,8 +38,8 @@ jobs:
               ": reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : '';"
           )
           replace_once(app,
-              '<small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small>',
-              '${reactionSummary ? `<small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small>` : \'\'}'
+              ": total ? `${total} ${total === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';",
+              ": total ? `${total} ${total === 1 ? 'reaction' : 'reactions'}` : '';"
           )
           replace_once(app,
               '  const recent = activityList(state).filter((item) => item.userId === person.id);\n  const score = weeklyCompletionScore(person.id, state.habits, state.checkIns, today());',
@@ -59,6 +59,19 @@ jobs:
               '.proof-reply-author,.proof-reply-all{min-height:0;border:0;',
               '.proof-reply-author,.proof-reply-all{min-height:0!important;border:0;'
           )
+          replace_once(css,
+              '.reaction-summary{display:block;margin-top:.35rem;color:var(--color-muted);font-size:var(--text-2xs)}',
+              '.reaction-summary{display:block;margin-top:.35rem;color:var(--color-muted);font-size:var(--text-2xs)}.reaction-summary:empty{display:none}'
+          )
+
+          replace_once('test/proof-feed-cleanup.test.mjs',
+              '  assert.match(app, /reactionSummary \\? `<small class="reaction-summary"/);',
+              '  assert.match(social, /\\.reaction-summary:empty\\{display:none\\}/);'
+          )
+          replace_once('test/friends-ui.test.mjs',
+              '  assert.match(profile, /All activity/);',
+              '  assert.match(profile, /Other activity/);'
+          )
           PY
       - run: npm ci
       - run: npm test
@@ -72,7 +85,7 @@ jobs:
           git config user.name "Saksham Goel"
           git config user.email "67731724+Saksham106@users.noreply.github.com"
           git rm .github/workflows/apply-proof-feed-cleanup.yml
-          git add src/app.js social.css test/proof-feed-cleanup.test.mjs
+          git add src/app.js social.css test/proof-feed-cleanup.test.mjs test/friends-ui.test.mjs
           git diff --cached --check
           git commit -m "fix: tighten proof replies and profile activity"
           git push origin HEAD:fix/proof-comment-profile-cleanup-2026-09-02
