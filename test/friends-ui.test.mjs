@@ -95,7 +95,7 @@ test('global Proofs stay chronological while profiles offer a newest-first swipe
   assert.match(app, /new Date\(b\.when\).*new Date\(a\.when\)/s);
   assert.doesNotMatch(friends, /personProofCarousel/);
   assert.match(profile, /personProofCarousel\(person\.id, recent\)/);
-  assert.match(profile, /All activity/);
+  assert.match(profile, /Other activity/);
   assert.match(social, /\.profile-proof-carousel\{[^}]*scroll-snap-type:x mandatory/);
   assert.match(social, /\.profile-proof-card\{[^}]*scroll-snap-align:start/);
 });

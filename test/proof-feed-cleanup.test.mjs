@@ -16,7 +16,7 @@ test('proof reply previews stay compact despite the global button touch target',
 
 test('zero-reaction proof cards do not render hype helper copy', () => {
   assert.doesNotMatch(app, /Be the first to hype this/);
-  assert.match(app, /reactionSummary \? `<small class="reaction-summary"/);
+  assert.match(social, /\.reaction-summary:empty\{display:none\}/);
 });
 
 test('profiles separate proof history from non-proof activity without duplication', () => {

@@ -713,7 +713,7 @@ function activityCard(activity, { showProofActions = false } = {}) {
   const reactionTotal = Object.values(visibleReactionCounts).reduce((sum, count) => sum + Number(count || 0), 0);
   const reactionSummary = mineReactions.length
     ? `You reacted ${mineReactions[0]} · ${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`
-    : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
+    : reactionTotal ? `${reactionTotal} ${reactionTotal === 1 ? 'reaction' : 'reactions'}` : '';
   const positiveReactions = `<div class="activity-social-actions"><div><div class="reaction-row" aria-label="React to this check-in">${['👏', '🔥', '💪', '😂'].map((emoji) => { const active = mineReactions.includes(emoji); return `<button type="button" class="reaction-btn ${active ? 'active' : ''}" data-reaction="${activity.checkInId}" data-reaction-emoji="${emoji}" aria-label="React ${emoji}" aria-pressed="${active}">${emoji}<span>${visibleReactionCounts[emoji] || 0}</span></button>`; }).join('')}</div><small class="reaction-summary" aria-live="polite">${esc(reactionSummary)}</small></div><button type="button" class="comment-open" data-comment-open="${activity.checkInId}">${commentCount ? `${commentCount} ${commentCount === 1 ? 'reply' : 'replies'}` : 'Reply'}</button></div>`;
   const activityMessage = activity.message === 'Done. Proof beats promises.' ? '' : activity.message;
   if (activity.proofPath) {
@@ -1169,6 +1169,7 @@ function friendProfileSheet() {
   const state = getState();
   const habits = state.habits.filter((habit) => habit.ownerId === person.id && habit.active);
   const recent = activityList(state).filter((item) => item.userId === person.id);
+  const otherActivity = recent.filter((item) => !item.proofPath);
   const score = weeklyCompletionScore(person.id, state.habits, state.checkIns, today());
   const memberDate = accountabilityDateForMember(person);
   const daily = dailyAccountabilitySummary(person.id, state.habits, state.checkIns, memberDate);
@@ -1197,7 +1198,7 @@ function friendProfileSheet() {
   const connectionCount = (friendConnections || []).length + 1;
   const connections = person.id === me().id ? '' : `<details class="profile-connections"><summary><span><strong>${friendConnectionsLoading ? 'Friends' : `${connectionCount} ${connectionCount === 1 ? 'friend' : 'friends'}`}</strong><small>${friendConnectionsLoading ? 'Loading…' : 'Tap to view mutuals and add people'}</small></span><b aria-hidden="true">›</b></summary><div class="profile-connections-list">${friendConnectionsLoading ? '<p class="profile-connection-state">Loading friends…</p>' : connectionRows || '<p class="profile-connection-state">No other friends to show yet.</p>'}</div></details>`;
   const socialActions = person.id === me().id ? '' : `<div class="friend-profile-actions"><button class="btn primary full" data-nudge="${person.id}">Send a nudge</button>${typeof repo?.removeFriend === 'function' ? `<button class="text-btn danger" type="button" data-remove-friend="${person.id}" data-remove-friend-name="${esc(person.name)}">Remove friend</button>` : ''}</div>`;
-  return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Close profile">×</button></div>${connections}<div class="profile-daily"><article><strong>Today · ${daily.today.completed}/${daily.today.total}</strong><p>${esc(todayReceipts)}</p></article><article class="${daily.yesterday.missed.length ? 'missed' : ''}"><strong>Yesterday · ${daily.yesterday.completed}/${daily.yesterday.total}</strong><p>${esc(yesterdayReceipts)}</p></article></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><section class="profile-proofs"><strong>Proof history</strong>${personProofCarousel(person.id, recent)}</section><section class="profile-recent"><strong>All activity</strong><div class="profile-activity-list">${recent.length ? recent.map((item) => activityCard(item, { showProofActions: Boolean(item.proofPath) })).join('') : '<p>No updates yet.</p>'}</div></section>${socialActions}</section></div>`;
+  return `<div class="sheet-backdrop" data-close-friend-profile-backdrop><section class="sheet compact-sheet friend-profile-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="${esc(person.name)} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div class="friend-profile-title"><div class="avatar">${esc(person.avatar)}</div><div><h2>${esc(person.name)}</h2><p>${score.percent}% this week · 🔥 ${person.currentStreak}</p></div></div><button class="icon-btn" type="button" data-close-friend-profile aria-label="Close profile">×</button></div>${connections}<div class="profile-daily"><article><strong>Today · ${daily.today.completed}/${daily.today.total}</strong><p>${esc(todayReceipts)}</p></article><article class="${daily.yesterday.missed.length ? 'missed' : ''}"><strong>Yesterday · ${daily.yesterday.completed}/${daily.yesterday.total}</strong><p>${esc(yesterdayReceipts)}</p></article></div><div class="profile-habits"><strong>Active habits</strong>${habits.length ? habits.map((habit) => `<span>${esc(habit.emoji)} ${esc(habit.title)}</span>`).join('') : '<p>No shared habits right now.</p>'}</div><section class="profile-proofs"><strong>Proof history</strong>${personProofCarousel(person.id, recent)}</section><section class="profile-recent"><strong>Other activity</strong><div class="profile-activity-list">${otherActivity.length ? otherActivity.map((item) => activityCard(item)).join('') : '<p>No other activity yet.</p>'}</div></section>${socialActions}</section></div>`;
 }
 
 function recoverySheet() {
@@ -2303,7 +2304,7 @@ function patchReactionDom(checkInId) {
   const total = Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0);
   const summary = mine.length
     ? `You reacted ${mine[0]} · ${total} ${total === 1 ? 'reaction' : 'reactions'}`
-    : total ? `${total} ${total === 1 ? 'reaction' : 'reactions'}` : 'Be the first to hype this';
+    : total ? `${total} ${total === 1 ? 'reaction' : 'reactions'}` : '';
   const summaryNode = buttons[0]?.closest('.activity-social-actions')?.querySelector('.reaction-summary');
   if (summaryNode) summaryNode.textContent = summary;
 }
