@@ -38,19 +38,24 @@ test('proof rejection shares the reaction row and is right aligned', () => {
   assert.match(social, /\.proof-rejection-inline\{[^}]*margin-left:auto/);
 });
 
-test('Updates includes recipient notification events without duplicating native nudge or friend activity rows', () => {
-  assert.match(store, /from\('notification_events'\)\.select\(/);
+test('Updates includes recipient notification events and only dedupes matching native rows', () => {
+  assert.match(store, /from\('notification_events'\)\.select\([^\n]*metadata/);
   assert.match(store, /eq\('recipient_user_id', user\.id\)/);
   assert.match(store, /notificationEvents:/);
+  assert.match(store, /metadata: event\.metadata/);
 
   const updates = section(app, 'function updatesList(', 'function unseenUpdatesCount(');
   assert.match(updates, /state\?\.notificationEvents/);
   assert.match(updates, /kind: 'notification'/);
-  assert.match(updates, /!\['nudge', 'friend_activity'\]\.includes\(event\.category\)/);
+  assert.match(updates, /nativeActivityCheckInIds/);
+  assert.match(updates, /event\.category === 'nudge'/);
+  assert.match(updates, /event\.category === 'friend_activity'[\s\S]*nativeActivityCheckInIds\.has\(event\.metadata\?\.checkInId\)/);
+  assert.doesNotMatch(updates, /!\['nudge', 'friend_activity'\]\.includes\(event\.category\)/);
 
   const unseen = section(app, 'function unseenUpdatesCount(', 'async function openUpdatesCenter(');
   assert.match(unseen, /notificationCount/);
   assert.match(unseen, /notificationEvents/);
+  assert.match(unseen, /visibleNotificationEvents/);
 
   const sheet = section(app, 'function nudgeInboxSheet()', 'function inviteSheet()');
   assert.match(sheet, /item\.kind === 'notification'/);
