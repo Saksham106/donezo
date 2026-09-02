@@ -16,7 +16,7 @@ function section(source, start, end) {
 
 test('every normal photo-proof picker offers Dual photo', () => {
   const picker = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
-  const bindings = section(app, 'function bindProofActions()', 'async function handleProofSubmit()');
+  const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
   assert.match(picker, /data-proof-dual/);
   assert.match(picker, />Dual photo</);
   assert.match(bindings, /\[data-proof-dual\]/);
