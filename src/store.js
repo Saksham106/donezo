@@ -238,6 +238,9 @@ export function mapDatabaseState(user, rows) {
       .map((reaction) => reaction.userId));
     return {
       ...checkIn,
+      audienceSize: audienceSizeByCheckIn.get(checkIn.id)
+        ?? checkIn.authorizedViewerIds?.length
+        ?? memberRows.length,
       invalid: rejectedIds.has(checkIn.id),
       downvotes: downvoteUsers.size,
       userDownvoted: downvoteUsers.has(user.id),
@@ -292,6 +295,7 @@ export function mapDatabaseState(user, rows) {
         streak: actor?.currentStreak || 0,
         message: checkIn.invalid ? 'Proof got cooked 💀 — run it back.' : (checkIn.note || 'Done. Proof beats promises.'),
         proofPath: checkIn.proofPath,
+        audienceSize: checkIn.audienceSize,
         invalid: checkIn.invalid,
         downvotes: checkIn.downvotes,
         userDownvoted: checkIn.userDownvoted,
