@@ -16,7 +16,7 @@ This design deliberately does **not** add a fifth bottom-navigation tab. Friend 
 2. Existing profiles are backfilled with generated usernames. At design time the production database has 8 profiles and all 8 currently have `username = null`.
 3. A user can change their username later from **Profile & app**.
 4. People search matches **username** and **display name** only. Email addresses and phone numbers are never searchable.
-5. Search is server-side through restricted RPCs. We do not make the `profiles` table globally selectable and do not weaken the existing profile RLS policy.
+5. Search is server-side through restricted RPCs. We do not make the `profiles` table globally selectable. The migration repairs the existing pending-request profile-policy qualification bug while keeping the intended self/friend/request-participant RLS boundary.
 6. The existing Friends People button opens a full-height People surface. No permanent navigation item is added.
 7. Existing invite links and invite-code entry remain supported as fallback acquisition paths.
 8. Searching for someone exposes only public discovery metadata. Habits, proofs, streaks, activity, and friend-only profile data remain unavailable until existing authorization permits them.
@@ -109,7 +109,7 @@ Usernames are normalized to lowercase and are 3–30 characters. Allowed charact
 
 The first character must be alphanumeric. Usernames are stored normalized, so the existing uniqueness rule can remain deterministic rather than depending on case-insensitive comparisons.
 
-Reserved names include at minimum `admin`, `administrator`, `donezo`, `support`, and `system`.
+Reserved names include at minimum `admin`, `administrator`, `donezo`, `support`, and `system`. Format and reserved-name rules are enforced at the database layer for every write, not only inside the UI RPC.
 
 ### Automatic generation
 
@@ -118,10 +118,10 @@ A database-owned helper derives a base from `display_name`:
 1. lowercase;
 2. replace unsupported runs with `_`;
 3. trim punctuation from the ends;
-4. fall back to `user` if no usable characters remain;
+4. fall back to `user` when the sanitized base is empty or too short to satisfy the 3-character minimum;
 5. trim to leave room for a collision suffix.
 
-Try the readable base first. On collision, append a short deterministic/random-safe suffix and retry under the database uniqueness constraint. Generation happens server-side so all profile creation paths receive the same guarantee.
+Try the readable base first. On collision, append a short collision-safe suffix and retry under the database uniqueness constraint. Generation happens server-side so all profile creation paths receive the same guarantee.
 
 Existing null usernames are backfilled in the migration before adding a NOT NULL requirement.
 
@@ -148,14 +148,15 @@ No username-change cooldown is added in V1.
 Add one migration after the current schema that:
 
 1. backfills every existing null username;
-2. adds/updates username format constraints;
+2. adds/updates username format and reserved-name constraints;
 3. makes `profiles.username` non-null after backfill;
 4. keeps/enforces uniqueness;
 5. creates a server-side username assignment trigger/helper for future profile inserts;
 6. creates the authenticated `set_my_username` RPC;
 7. creates `search_people`;
 8. creates `suggest_people`;
-9. preserves existing profile RLS and direct-friend authorization.
+9. repairs `profiles_select_friends_or_requests` so the pending-request subquery explicitly compares request participants against the outer `profiles.id` rather than accidentally resolving `id` to `friend_requests.id`;
+10. preserves the intended self/direct-friend/pending-request-participant profile RLS boundary and all existing direct-friend authorization.
 
 Do not grant authenticated users global `SELECT` on `profiles` as part of discovery.
 
@@ -182,7 +183,7 @@ request_id uuid
 mutual_count bigint
 ```
 
-The function is `SECURITY DEFINER`, has `SET search_path = ''`, requires `auth.uid()`, clamps `result_limit` to 1–20, rejects/returns no results for normalized queries shorter than 2 characters, and never accepts an empty query as a list-all endpoint.
+The function is `SECURITY DEFINER`, has `SET search_path = ''`, requires `auth.uid()`, clamps `result_limit` to 1–20, returns zero rows for normalized queries shorter than 2 characters, and never accepts an empty query as a list-all endpoint.
 
 It computes relationship state from the existing `friendships` and pending `friend_requests` tables. It exposes no email, timezone, notification state, activity, habit, or proof columns.
 
@@ -221,7 +222,7 @@ acceptFriend(requestId)
 
 Search and suggestion calls do not trigger a full `repo.load()` and do not add all discovered strangers to `peopleDirectory`. Results live only in the People discovery UI state.
 
-The normal repository load still retrieves the current user's own profile, direct friends, relevant request participants, and other already-authorized data as it does today.
+The normal repository load still retrieves the current user's own profile, direct friends, and pending request participants through the corrected restrictive profile policy, plus other already-authorized data as it does today.
 
 ## People UI state
 
@@ -262,12 +263,12 @@ No new push-notification category is required for V1. Incoming requests are surf
 2. Email and phone are never searchable or returned.
 3. Empty-query enumeration is disallowed.
 4. Query length and result count are bounded.
-5. Direct `profiles` RLS remains restrictive.
+5. Direct `profiles` RLS remains restrictive; the migration only corrects its broken pending-request participant reference.
 6. Search visibility alone never authorizes social content.
 7. Mutual count is aggregate-only; search results do not return the identities of mutual friends.
 8. Existing friend-of-friend APIs retain their current authorization boundaries.
 9. Username setters operate only on the authenticated user's row.
-10. Reserved usernames prevent impersonation of Donezo/system identities.
+10. Reserved usernames prevent impersonation of Donezo/system identities and are enforced even if a client bypasses the normal username form.
 
 V1 does not add blocking, private accounts, or opt-out discoverability settings. Those would be separate product features and should not be silently invented as part of search.
 
@@ -296,9 +297,10 @@ V1 does not add blocking, private accounts, or opt-out discoverability settings.
 1. Ship database migration first or atomically with frontend compatibility.
 2. Backfill usernames for the current profile set.
 3. Verify every profile has a valid unique username.
-4. Deploy RPCs while old clients continue functioning; old clients do not depend on username being null.
-5. Deploy repository methods and new People UI.
-6. Verify existing invite links, friend requests, friend-of-friend discovery, proof visibility, and League personalization remain unchanged.
+4. Verify the pending-request profile policy returns only self, direct friends, and actual pending request participants.
+5. Deploy RPCs while old clients continue functioning; old clients do not depend on username being null.
+6. Deploy repository methods and new People UI.
+7. Verify existing invite links, friend requests, friend-of-friend discovery, proof visibility, and League personalization remain unchanged.
 
 No proof/check-in data is rewritten.
 
@@ -309,10 +311,10 @@ No proof/check-in data is rewritten.
 - backfill gives every existing profile a valid unique username;
 - new profile insertion auto-generates username;
 - collision generation remains unique;
-- invalid/reserved/manual usernames are rejected;
+- invalid/reserved/manual usernames are rejected regardless of write path;
 - `set_my_username` can update self only;
 - `search_people` requires authentication;
-- queries shorter than 2 characters cannot enumerate users;
+- queries shorter than 2 characters return no rows and cannot enumerate users;
 - search by exact/prefix username works;
 - search by display name works case-insensitively;
 - result limit is capped at 20;
@@ -320,7 +322,8 @@ No proof/check-in data is rewritten.
 - relationship status is correct for available/outgoing/incoming/friend;
 - mutual count is correct without exposing identities;
 - `suggest_people` returns mutual-based non-friends only;
-- existing profile RLS remains restrictive.
+- profile RLS still rejects unrelated profile reads;
+- corrected pending-request RLS allows the two request participants to identify each other without exposing unrelated profiles.
 
 ### Repository/domain
 
