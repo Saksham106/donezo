@@ -2079,21 +2079,27 @@ async function handleApplyPwaUpdate() {
   }
 }
 
+function syncManualRefreshButton() {
+  const refreshButton = app.querySelector('[data-manual-refresh]');
+  if (!refreshButton) return;
+  refreshButton.classList.toggle('loading', manualRefreshLoading);
+  refreshButton.disabled = manualRefreshLoading;
+}
+
 async function handleManualRefresh() {
   const coordinator = refreshCoordinator;
   if (!coordinator || manualRefreshLoading) return;
   manualRefreshLoading = true;
-  renderPreservingScroll();
+  syncManualRefreshButton();
   const result = await coordinator.request('manual');
   if (coordinator !== refreshCoordinator) return;
   manualRefreshLoading = false;
+  syncManualRefreshButton();
 
   if (result.status === 'refreshed') notify('Synced just now');
   else if (result.status === 'failed') notify('Refresh flopped. Keeping your last good data.', 3600);
   else if (result.reason === 'offline') notify('Still offline. Showing your last sync.', 3200);
   else if (result.reason === 'busy') notify('Finish that action first, then refresh.', 2800);
-
-  renderPreservingScroll();
 }
 
 async function runMutation(action, successMessage, { preserveDraft = false } = {}) {
