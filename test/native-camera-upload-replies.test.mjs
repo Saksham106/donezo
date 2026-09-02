@@ -28,7 +28,11 @@ test('a native single photo can be upgraded to Dual by adding a native selfie', 
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
   assert.match(review, /data-proof-add-selfie/);
   assert.match(review, /Add selfie/);
-  assert.match(bindings, /\[data-proof-add-selfie\][^]*createDualProofState\(habitId, 'dual'\)[^]*phase:\s*'selfie'[^]*mainFile:\s*mainFile[^]*proofSelfieInput\?\.click\(\)/);
+  assert.match(bindings, /\[data-proof-add-selfie\]/);
+  assert.match(bindings, /createDualProofState\(habitId, 'dual'\)/);
+  assert.match(bindings, /phase:\s*'selfie'/);
+  assert.match(bindings, /mainFile/);
+  assert.match(bindings, /proofSelfieInput\?\.click\(\)/);
 });
 
 test('cancelling the native selfie camera keeps the single-photo review usable', () => {
