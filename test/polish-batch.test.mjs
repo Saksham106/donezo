@@ -58,7 +58,9 @@ test('mutations expose status, haptics, safe retry and date-stable reversible Un
   assert.doesNotMatch(ambiguousFailure, /retryMutation\s*=\s*\(\)/);
   assert.match(ambiguousFailure, /retryMutation\s*=\s*null/);
   assert.match(app, /const checkInDate = today\(\)/);
-  assert.match(app, /completeWithProof\(review\.habitId, checkInDate, review\.file\)/);
+  assert.match(app, /async function uploadProofArtifact\(review, artifact\)/);
+  assert.match(app, /completeWithProof\(review\.habitId, checkInDate, artifact\)/);
+  assert.match(app, /artifactFinalized:\s*true/);
   assert.match(app, /handleUndoCheckIn\(review\.habitId, checkInDate\)/);
   assert.match(app, /handleUndoCheckIn\(habit\.id, date\)/);
 });
