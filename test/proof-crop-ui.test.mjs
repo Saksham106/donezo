@@ -35,7 +35,7 @@ test('crop drag stays local and updates normalized vertical position', () => {
   assert.doesNotMatch(bind, /completeWithProof/);
 });
 
-test('submit inspects the main proof and pauses tall images before centralized upload', () => {
+test('fresh submit inspects the main proof and pauses tall images before centralized upload', () => {
   const submit = section(app, 'async function handleProofSubmit()', 'async function loadProofThumbnail');
   assert.match(submit, /dualProof\?\.habitId === review\.habitId[^]*dualProof\.mainFile/);
   assert.match(submit, /inspectProofFile\(cropSource\)/);
@@ -43,7 +43,8 @@ test('submit inspects the main proof and pauses tall images before centralized u
   assert.match(submit, /openProofCrop\(/);
   assert.match(submit, /uploadProofArtifact\(review, review\.file\)/);
   assert.doesNotMatch(submit, /completeWithProof/);
-  assert.ok(submit.indexOf('inspection.needsCrop') < submit.indexOf('uploadProofArtifact(review, review.file)'));
+  const freshUpload = submit.lastIndexOf('uploadProofArtifact(review, review.file)');
+  assert.ok(freshUpload > submit.indexOf('inspection.needsCrop'));
 });
 
 test('crop confirmation passes only the final cropped or recomposed artifact to upload', () => {
