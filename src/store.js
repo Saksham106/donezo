@@ -1543,6 +1543,21 @@ export function createSupabaseRepository(client, user) {
     return data || true;
   }
 
+  async function cancelFriendRequest(requestId) {
+    if (!requestId) throw new Error('Friend request is required');
+    const { data, error } = await client.rpc('cancel_friend_request', { target_request_id: requestId });
+    if (error) throw appError(error, 'Could not cancel friend request');
+    const respondedAt = data?.responded_at || data?.respondedAt || new Date().toISOString();
+    state.friendRequests = (state.friendRequests || []).map((request) => request.id === requestId
+      ? { ...request, status: 'cancelled', respondedAt }
+      : request);
+    return state.friendRequests.find((request) => request.id === requestId) || {
+      id: requestId,
+      status: 'cancelled',
+      respondedAt,
+    };
+  }
+
   async function acceptFriend(requestId) {
     if (!requestId) throw new Error('Friend request is required');
     const { data, error } = await client.rpc('accept_friend', { target_request_id: requestId });
@@ -1658,6 +1673,7 @@ export function createSupabaseRepository(client, user) {
     acceptFriendInvite,
     inviteFriend,
     sendFriendInvite: inviteFriend,
+    cancelFriendRequest,
     acceptFriend,
     removeFriend,
     setHabitAudience,
@@ -1807,6 +1823,17 @@ export function createMemoryRepository(seed, onChange = () => {}) {
     }
     const request = { id: uid('friend-request'), requesterId: actor, addresseeId: targetUserId, status: 'pending' };
     state.friendRequests.push(request);
+    emit();
+    return clone(request);
+  }
+
+  function cancelFriendRequest(requestId) {
+    const request = (state.friendRequests || []).find((item) => item.id === requestId
+      && item.requesterId === state.currentUserId
+      && item.status === 'pending');
+    if (!request) throw new Error('Friend request is not open');
+    request.status = 'cancelled';
+    request.respondedAt = new Date().toISOString();
     emit();
     return clone(request);
   }
@@ -2138,7 +2165,7 @@ export function createMemoryRepository(seed, onChange = () => {}) {
   }
 
   return {
-    getState, asUser, ensureFriendsWorkspace, getFriends, getFriendIds, loadFriendConnections, searchPeople, suggestPeople, setMyUsername, createFriendInvite, acceptFriendInvite, inviteFriend, acceptFriend, removeFriend, addFriendForTest,
+    getState, asUser, ensureFriendsWorkspace, getFriends, getFriendIds, loadFriendConnections, searchPeople, suggestPeople, setMyUsername, createFriendInvite, acceptFriendInvite, inviteFriend, cancelFriendRequest, acceptFriend, removeFriend, addFriendForTest,
     setHabitAudience, getUnifiedFeed, getPersonalizedLeague,
     toggleHabit, completeWithProof, addHabit, updateHabit, pauseHabit, archiveHabit, restoreHabit,
     sendNudge, startBaton, passBaton, setBatonEnabled, addComment, deleteComment,
