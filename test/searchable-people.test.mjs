@@ -180,3 +180,33 @@ test('People rows expose Add Requested Accept Friends relationship states', () =
   for (const label of ['Add', 'Requested', 'Accept', 'Friends']) assert.match(people, new RegExp(`>${label}<|${label}`));
   assert.match(people, /mutual/i);
 });
+
+test('Profile & app exposes an editable username backed by setMyUsername', () => {
+  const settings = section(app, 'function settingsSheet()', 'function nudgeComposerSheet()');
+  assert.match(settings, /id="username-form"/);
+  assert.match(settings, /name="username"/);
+  assert.match(settings, /People can find you by this/);
+  const handler = section(app, 'async function handleUsernameSubmit(', 'async function handleDisplayName(');
+  assert.match(handler, /repo\.setMyUsername/);
+  assert.doesNotMatch(handler, /render\([^)]*\)/);
+  assert.match(app, /#username-form/);
+});
+
+test('non-friend discovery profile is intentionally minimal', () => {
+  const discovery = section(app, 'function discoveryProfileSheet()', 'function peopleSheet()');
+  assert.match(discovery, /peopleRelationshipAction/);
+  assert.match(discovery, /mutual/i);
+  assert.match(discovery, /username|handle/i);
+  assert.doesNotMatch(discovery, /personProofCarousel|currentStreak|weeklyCompletionScore|activityList|habit/i);
+});
+
+test('People identity opens full profiles only for friends and minimal discovery otherwise', () => {
+  assert.match(app, /let discoveryProfilePerson = null/);
+  const router = section(app, 'function openPeoplePerson(', 'function peopleSheet()');
+  assert.match(router, /relationship === 'friend'/);
+  assert.match(router, /openFriendProfile/);
+  assert.match(router, /discoveryProfilePerson/);
+  assert.match(router, /refreshPeopleSheet/);
+  const binding = section(app, 'function bindPeopleSheetActions()', 'function openPeopleSheet()');
+  assert.match(binding, /openPeoplePerson/);
+});
