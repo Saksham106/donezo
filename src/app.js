@@ -87,6 +87,14 @@ let feedLimit = 12;
 let inviteSheetOpen = false;
 let addFriendSheetOpen = false;
 let peopleSheetOpen = false;
+let peopleSearchQuery = '';
+let peopleSearchResults = [];
+let peopleSearchLoading = false;
+let peopleSuggestions = [];
+let peopleSuggestionsLoading = false;
+let peopleSearchRequestId = 0;
+let peopleSuggestionsRequestId = 0;
+let peopleSearchDebounceTimer = null;
 const proofThumbnailUrls = new Map();
 let commentCheckInId = null;
 let batonSheetOpen = false;
@@ -837,7 +845,8 @@ function friendsScreen() {
   const activities = visibleActivities.map((activity) => activityCard(activity, { showProofActions: true })).join('');
   const loadMore = feed.length > visibleActivities.length ? `<button class="btn full load-more" type="button" data-load-more>Load older proofs</button>` : '';
   const refreshButton = `<button class="refresh-btn ${manualRefreshLoading ? 'loading' : ''}" type="button" data-manual-refresh aria-label="Refresh Friends" title="Refresh" ${manualRefreshLoading ? 'disabled' : ''}><span aria-hidden="true">↻</span></button>`;
-  const peopleButton = `<button class="invite-icon-btn" type="button" data-people-open aria-label="View friends" title="Friends">${icon('people')}</button>`;
+  const incomingRequests = (state.friendRequests || []).filter((request) => request.status === 'pending' && request.addresseeId === state.currentUserId).length;
+  const peopleButton = `<button class="invite-icon-btn people-entry-btn" type="button" data-people-open aria-label="View friends" title="Friends">${icon('people')}${incomingRequests ? `<span class="people-request-badge">${incomingRequests > 9 ? '9+' : incomingRequests}</span>` : ''}</button>`;
   const empty = '<div class="empty compact-empty"><b>No proofs yet.</b><p>Post a photo check-in and give your friends something to react to.</p><button class="btn primary empty-action" type="button" data-empty-checkin>Check in</button></div>';
   return `<section class="friends-heading"><div class="friends-heading-row"><h1>Friends</h1><div class="friends-heading-actions">${refreshButton}${peopleButton}</div></div></section><div class="activity-list">${activities || empty}${loadMore}</div>`;
 }
@@ -1149,23 +1158,265 @@ function addFriendSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet add-friend-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Add a friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD A FRIEND</p><h2>Paste their link.</h2></div><button class="icon-btn" type="button" data-close-add-friend aria-label="Close">×</button></div><p class="sheet-copy">A full Donezo invite link or the raw invite code both work.</p>${inviteMessage ? `<div class="form-message" role="alert">${esc(inviteMessage)}</div>` : ''}<form id="join-friend-form" class="form sheet-form"><label>Invite link or code<input name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="none" placeholder="Paste invite link or code" required autofocus></label><button class="btn primary full" type="submit">Add friend</button></form></section></div>`;
 }
 
+function peopleRelationshipAction(person) {
+  if (person.relationship === 'friend') return '<button class="btn small-btn people-relationship-state" type="button" disabled>Friends</button>';
+  if (person.relationship === 'outgoing') return '<button class="btn small-btn people-relationship-state" type="button" disabled>Requested</button>';
+  if (person.relationship === 'incoming') return `<button class="btn primary small-btn" type="button" data-people-accept="${esc(person.requestId)}" data-people-user="${esc(person.id)}">Accept</button>`;
+  return `<button class="btn primary small-btn" type="button" data-people-add="${esc(person.id)}">Add</button>`;
+}
+
+function peoplePersonRow(person) {
+  const handle = person.handle || (person.username ? `@${person.username}` : '');
+  const mutual = Number(person.mutualCount || 0);
+  const mutualCopy = mutual ? `${mutual} mutual ${mutual === 1 ? 'friend' : 'friends'}` : '';
+  const avatar = person.avatarUrl
+    ? `<img src="${esc(person.avatarUrl)}" alt="">`
+    : esc(person.avatar || String(person.name || '?').slice(0, 1).toUpperCase());
+  return `<article class="people-discovery-row"><button class="people-discovery-identity" type="button" data-people-person="${esc(person.id)}"><span class="avatar">${avatar}</span><span class="people-discovery-meta"><strong>${esc(person.name || 'Donezo user')}</strong>${handle ? `<small>${esc(handle)}</small>` : ''}${mutualCopy ? `<small>${esc(mutualCopy)}</small>` : ''}</span></button>${peopleRelationshipAction(person)}</article>`;
+}
+
 function peopleSheet() {
   if (!peopleSheetOpen || friendProfileUserId || inviteSheetOpen) return '';
   const state = getState();
-  const people = friendList(state);
+  const normalizedQuery = peopleSearchQuery.trim().replace(/^@/, '').toLowerCase();
+  const searching = normalizedQuery.length >= 2;
   const incoming = (state.friendRequests || []).filter((request) => request.status === 'pending' && request.addresseeId === state.currentUserId);
-  const requestRows = incoming.map((request) => {
-    const person = member(request.requesterId);
-    return `<article class="friend-request-row"><div class="avatar">${esc(person?.avatar || '?')}</div><span><strong>${esc(person?.name || 'Donezo user')}</strong><small>Wants to add you</small></span><button class="btn primary small-btn" type="button" data-accept-friend="${request.id}" ${busy ? 'disabled' : ''}>Accept</button></article>`;
-  }).join('');
-  const rows = people.map((person) => {
-    const progress = progressFor(person.id);
-    const isMe = person.id === state.currentUserId;
-    const todayProgress = progress.total ? `${progress.completed}/${progress.total} today` : 'No habits today';
-    return `<article class="people-row"><button class="people-profile" type="button" data-friend-profile="${person.id}" aria-label="Open ${esc(person.name)} profile"><div class="avatar">${esc(person.avatar)}</div><span><strong>${esc(person.name)}${isMe ? ' · You' : ''}</strong><small>${todayProgress} · 🔥 ${person.currentStreak}</small></span><span aria-hidden="true">›</span></button>${isMe ? '' : `<button class="btn small-btn people-nudge" type="button" data-nudge="${person.id}" ${busy ? 'disabled' : ''}>Nudge</button>`}</article>`;
-  }).join('');
-  const requests = incoming.length ? `<section class="friend-requests"><div class="section-head first"><h2>Friend requests</h2><span>${incoming.length}</span></div>${requestRows}</section>` : '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Friends" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>${people.length} ${people.length === 1 ? 'friend' : 'friends'}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div>${requests}<div class="people-list">${rows}</div><div class="people-growth-actions"><button class="btn primary full people-invite" type="button" data-invite-from-people ${friendInvitePreparing ? 'disabled aria-busy="true"' : ''}>${icon('userPlus')} ${friendInvitePreparing ? 'Preparing…' : 'Invite friends'}</button><button class="btn full" type="button" data-add-friend-from-people>Add by link</button></div></section></div>`;
+  const requestPeople = incoming.map((request) => {
+    const profile = member(request.requesterId) || {};
+    return {
+      id: request.requesterId,
+      name: profile.name || 'Donezo user',
+      username: profile.username || String(profile.handle || '').replace(/^@/, ''),
+      handle: profile.handle || (profile.username ? `@${profile.username}` : ''),
+      avatar: profile.avatar || '?',
+      avatarUrl: profile.avatarUrl || null,
+      relationship: 'incoming',
+      requestId: request.id,
+      mutualCount: 0,
+    };
+  });
+  const friends = friendList(state).filter((person) => person.id !== state.currentUserId).map((person) => ({
+    ...person,
+    username: person.username || String(person.handle || '').replace(/^@/, ''),
+    relationship: 'friend',
+    requestId: null,
+    mutualCount: 0,
+  }));
+  const requestsSection = requestPeople.length
+    ? `<section class="people-section"><div class="people-section-head"><h3>Requests</h3><span>${requestPeople.length}</span></div>${requestPeople.map(peoplePersonRow).join('')}</section>`
+    : '';
+  const suggestionsSection = peopleSuggestionsLoading
+    ? '<section class="people-section"><div class="people-section-head"><h3>Suggested for you</h3></div><div class="people-search-loading">Finding people you may know…</div></section>'
+    : peopleSuggestions.length
+      ? `<section class="people-section"><div class="people-section-head"><h3>Suggested for you</h3></div>${peopleSuggestions.map(peoplePersonRow).join('')}</section>`
+      : '';
+  const friendsSection = friends.length
+    ? `<section class="people-section"><div class="people-section-head"><h3>Friends</h3><span>${friends.length}</span></div>${friends.map(peoplePersonRow).join('')}</section>`
+    : '';
+  const defaultContent = `${requestsSection}${suggestionsSection}${friendsSection}<div class="people-growth-actions"><button class="btn full people-invite" type="button" data-invite-from-people ${friendInvitePreparing ? 'disabled aria-busy="true"' : ''}>${icon('userPlus')} ${friendInvitePreparing ? 'Preparing…' : 'Share invite'}</button><button class="text-btn people-invite-fallback" type="button" data-add-friend-from-people>Have an invite code?</button></div>`;
+  const searchContent = peopleSearchLoading
+    ? '<div class="people-search-loading">Searching…</div>'
+    : peopleSearchResults.length
+      ? `<div class="people-search-results">${peopleSearchResults.map(peoplePersonRow).join('')}</div>`
+      : '<div class="empty compact-empty people-search-empty"><b>No people found.</b><p>Try their @username or display name.</p></div>';
+  return `<div class="sheet-backdrop people-layer" data-close-people-backdrop><section class="sheet people-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="People" data-sheet><div class="sheet-handle"></div><div class="sheet-head people-sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>People</h2></div><div class="people-head-actions"><button class="icon-btn" type="button" data-invite-from-people aria-label="Share invite">${icon('userPlus')}</button><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div></div><div class="people-search-shell"><label class="people-search"><span aria-hidden="true">⌕</span><input name="peopleSearch" type="search" placeholder="Search people" value="${esc(peopleSearchQuery)}" autocomplete="off" autocapitalize="none" spellcheck="false"></label></div><div class="people-discovery-body">${searching ? searchContent : defaultContent}</div></section></div>`;
+}
+
+function closePeopleSheet() {
+  peopleSheetOpen = false;
+  peopleSearchQuery = '';
+  peopleSearchResults = [];
+  peopleSearchLoading = false;
+  peopleSuggestions = [];
+  peopleSuggestionsLoading = false;
+  clearTimeout(peopleSearchDebounceTimer);
+  peopleSearchDebounceTimer = null;
+  peopleSearchRequestId += 1;
+  peopleSuggestionsRequestId += 1;
+  app.querySelector('.people-sheet')?.closest('.sheet-backdrop')?.remove();
+}
+
+function preservePeopleSearchFocus(callback) {
+  const input = app.querySelector('.people-sheet [name="peopleSearch"]');
+  const focused = document.activeElement === input;
+  const start = input?.selectionStart ?? null;
+  const end = input?.selectionEnd ?? null;
+  callback();
+  if (!focused) return;
+  const next = app.querySelector('.people-sheet [name="peopleSearch"]');
+  next?.focus({ preventScroll: true });
+  if (start !== null && end !== null) next?.setSelectionRange?.(start, end);
+}
+
+function refreshPeopleSheet() {
+  if (!peopleSheetOpen) return;
+  const current = app.querySelector('.people-sheet')?.closest('.sheet-backdrop');
+  if (!current) return;
+  preservePeopleSearchFocus(() => {
+    current.insertAdjacentHTML('afterend', peopleSheet());
+    current.remove();
+    bindPeopleSheetActions();
+  });
+}
+
+function patchPeopleRequestBadge() {
+  const state = getState();
+  const count = (state.friendRequests || []).filter((request) => request.status === 'pending' && request.addresseeId === state.currentUserId).length;
+  const button = app.querySelector('[data-people-open]');
+  if (!button) return;
+  button.querySelector('.people-request-badge')?.remove();
+  if (!count) return;
+  button.insertAdjacentHTML('beforeend', `<span class="people-request-badge">${count > 9 ? '9+' : count}</span>`);
+}
+
+function syncPeopleRelationship(userId, relationship, requestId = null) {
+  const patch = (person) => person.id === userId ? { ...person, relationship, requestId: requestId ?? person.requestId ?? null } : person;
+  peopleSearchResults = peopleSearchResults.map(patch);
+  peopleSuggestions = peopleSuggestions.map(patch);
+}
+
+async function handlePeopleAdd(userId) {
+  if (!userId) return;
+  const previousSearch = peopleSearchResults;
+  const previousSuggestions = peopleSuggestions;
+  syncPeopleRelationship(userId, 'outgoing');
+  refreshPeopleSheet();
+  try {
+    const request = await repo.inviteFriend(userId);
+    syncPeopleRelationship(userId, 'outgoing', request?.id || null);
+    scheduleStateCacheWrite();
+    notify('Friend request sent.');
+  } catch (error) {
+    peopleSearchResults = previousSearch;
+    peopleSuggestions = previousSuggestions;
+    notify(readableError(error), 3600);
+  }
+  refreshPeopleSheet();
+}
+
+async function handlePeopleAccept(requestId, userId) {
+  if (!requestId) return;
+  const previousSearch = peopleSearchResults;
+  const previousSuggestions = peopleSuggestions;
+  if (userId) syncPeopleRelationship(userId, 'friend', null);
+  refreshPeopleSheet();
+  try {
+    await repo.acceptFriend(requestId);
+    if (userId) syncPeopleRelationship(userId, 'friend', null);
+    scheduleStateCacheWrite();
+    patchPeopleRequestBadge();
+    notify('Friend added.');
+  } catch (error) {
+    peopleSearchResults = previousSearch;
+    peopleSuggestions = previousSuggestions;
+    notify(readableError(error), 3600);
+  }
+  refreshPeopleSheet();
+}
+
+function queuePeopleSearch(rawQuery) {
+  peopleSearchQuery = String(rawQuery || '');
+  clearTimeout(peopleSearchDebounceTimer);
+  const normalized = peopleSearchQuery.trim().replace(/^@/, '').toLowerCase();
+  const requestId = ++peopleSearchRequestId;
+  if (normalized.length < 2) {
+    peopleSearchResults = [];
+    peopleSearchLoading = false;
+    refreshPeopleSheet();
+    return;
+  }
+  peopleSearchLoading = true;
+  refreshPeopleSheet();
+  peopleSearchDebounceTimer = setTimeout(async () => {
+    try {
+      const results = await repo.searchPeople(normalized);
+      if (requestId !== peopleSearchRequestId || !peopleSheetOpen) return;
+      peopleSearchResults = results;
+    } catch (error) {
+      if (requestId !== peopleSearchRequestId) return;
+      notify(readableError(error), 3600);
+    } finally {
+      if (requestId === peopleSearchRequestId && peopleSheetOpen) {
+        peopleSearchLoading = false;
+        refreshPeopleSheet();
+      }
+    }
+  }, 250);
+}
+
+async function loadPeopleSuggestions() {
+  const requestId = ++peopleSuggestionsRequestId;
+  peopleSuggestionsLoading = true;
+  refreshPeopleSheet();
+  try {
+    const suggestions = await repo.suggestPeople(10);
+    if (requestId !== peopleSuggestionsRequestId || !peopleSheetOpen) return;
+    peopleSuggestions = suggestions;
+  } catch (error) {
+    if (requestId !== peopleSuggestionsRequestId) return;
+    peopleSuggestions = [];
+    notify(readableError(error), 3600);
+  } finally {
+    if (requestId === peopleSuggestionsRequestId && peopleSheetOpen) {
+      peopleSuggestionsLoading = false;
+      refreshPeopleSheet();
+    }
+  }
+}
+
+function openAddFriendFromPeople() {
+  closePeopleSheet();
+  inviteMessage = '';
+  addFriendSheetOpen = true;
+  app.querySelector('.app-shell')?.insertAdjacentHTML('beforeend', addFriendSheet());
+  const backdrop = app.querySelector('.add-friend-sheet')?.closest('.sheet-backdrop');
+  backdrop?.addEventListener('click', (event) => {
+    if (event.target !== backdrop) return;
+    addFriendSheetOpen = false;
+    backdrop.remove();
+  });
+  app.querySelector('.add-friend-sheet [data-close-add-friend]')?.addEventListener('click', () => {
+    addFriendSheetOpen = false;
+    backdrop?.remove();
+    openPeopleSheet();
+  });
+  app.querySelector('.add-friend-sheet #join-friend-form')?.addEventListener('submit', handleJoinCircle);
+  bindSheetSwipeDismiss();
+}
+
+function bindPeopleSheetActions() {
+  const sheet = app.querySelector('.people-sheet');
+  if (!sheet) return;
+  const backdrop = sheet.closest('.sheet-backdrop');
+  backdrop?.addEventListener('click', (event) => {
+    if (event.target === backdrop) closePeopleSheet();
+  });
+  sheet.querySelector('[data-close-people]')?.addEventListener('click', closePeopleSheet);
+  sheet.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = handleShareInvite; });
+  sheet.querySelector('[data-add-friend-from-people]')?.addEventListener('click', openAddFriendFromPeople);
+  sheet.querySelector('[name="peopleSearch"]')?.addEventListener('input', (event) => queuePeopleSearch(event.target.value));
+  sheet.querySelectorAll('[data-people-add]').forEach((element) => { element.onclick = () => handlePeopleAdd(element.dataset.peopleAdd); });
+  sheet.querySelectorAll('[data-people-accept]').forEach((element) => { element.onclick = () => handlePeopleAccept(element.dataset.peopleAccept, element.dataset.peopleUser); });
+  sheet.querySelectorAll('[data-people-person]').forEach((element) => { element.onclick = () => {
+    const person = [...peopleSearchResults, ...peopleSuggestions].find((item) => item.id === element.dataset.peoplePerson)
+      || friendList(getState()).find((item) => item.id === element.dataset.peoplePerson);
+    if (person?.relationship === 'friend' || friendList(getState()).some((item) => item.id === element.dataset.peoplePerson)) openFriendProfile(element.dataset.peoplePerson);
+  }; });
+  bindSheetSwipeDismiss();
+}
+
+function openPeopleSheet() {
+  if (peopleSheetOpen && app.querySelector('.people-sheet')) return;
+  peopleSheetOpen = true;
+  peopleSearchQuery = '';
+  peopleSearchResults = [];
+  peopleSearchLoading = false;
+  peopleSuggestions = [];
+  peopleSuggestionsLoading = false;
+  app.querySelector('.app-shell')?.insertAdjacentHTML('beforeend', peopleSheet());
+  bindPeopleSheetActions();
+  void primeFriendInvite();
+  void loadPeopleSuggestions();
 }
 
 function checkInUndoSheet() {
@@ -1741,7 +1992,7 @@ function render() {
   app.querySelectorAll('[data-wrapped-next]').forEach((element) => { element.onclick = () => { wrappedIndex += 1; render(); }; });
   app.querySelectorAll('[data-wrapped-prev]').forEach((element) => { element.onclick = () => { wrappedIndex = Math.max(0, wrappedIndex - 1); render(); }; });
   app.querySelectorAll('[data-wrapped-close]').forEach((element) => { element.onclick = () => { wrappedOpen = false; wrappedIndex = 0; render(); }; });
-  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = () => { peopleSheetOpen = true; void primeFriendInvite(); render(); }; });
+  app.querySelectorAll('[data-people-open]').forEach((element) => { element.onclick = openPeopleSheet; });
   app.querySelectorAll('[data-invite-from-people]').forEach((element) => { element.onclick = handleShareInvite; });
   app.querySelectorAll('[data-add-friend-from-people]').forEach((element) => { element.onclick = () => { peopleSheetOpen = false; inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-add-friend-open]').forEach((element) => { element.onclick = () => { inviteMessage = ''; addFriendSheetOpen = true; render(); }; });
@@ -1823,7 +2074,7 @@ function render() {
   app.querySelectorAll('[data-home]').forEach((element) => { element.onclick = () => { setActiveTab('today'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-open-habit]').forEach((element) => { element.onclick = () => { editingHabitId = null; selectedEmoji = '⚡'; habitSheetOpen = true; render(); }; });
   app.querySelectorAll('[data-edit-habit]').forEach((element) => { element.onclick = () => { const habit = getState().habits.find((item) => item.id === element.dataset.editHabit && item.ownerId === getState().currentUserId && item.active); if (!habit) return; editingHabitId = habit.id; selectedEmoji = habit.emoji; habitSheetOpen = true; render(); }; });
-  app.querySelectorAll('[data-close-habit], [data-close-nudge], [data-close-inbox], [data-close-people], [data-close-add-friend], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
+  app.querySelectorAll('[data-close-habit], [data-close-nudge], [data-close-inbox], [data-close-add-friend], [data-close-social-sheet]').forEach((element) => { element.onclick = () => { closeSheets(); render(); }; });
   app.querySelectorAll('[data-close-settings]').forEach((element) => { element.onclick = () => {
     if (settingsView !== 'menu') settingsView = 'menu';
     else settingsSheetOpen = false;
@@ -1839,6 +2090,7 @@ function render() {
     render();
   }; });
   app.querySelectorAll('[data-close-sheet]').forEach((element) => { element.onclick = (event) => { if (event.target === element) { closeSheets(); render(); } }; });
+  bindPeopleSheetActions();
   bindSheetSwipeDismiss();
   const habitForm = app.querySelector('#habit-form');
   habitForm?.addEventListener('submit', handleHabitSubmit);
@@ -2009,6 +2261,10 @@ function bindSheetSwipeDismiss() {
           closeCommentSheet();
           return;
         }
+        if (sheet.classList.contains('people-sheet')) {
+          closePeopleSheet();
+          return;
+        }
         closeSheets();
         render();
         return;
@@ -2042,6 +2298,15 @@ function closeSheets() {
   inviteSheetOpen = false;
   addFriendSheetOpen = false;
   peopleSheetOpen = false;
+  clearTimeout(peopleSearchDebounceTimer);
+  peopleSearchDebounceTimer = null;
+  peopleSearchRequestId += 1;
+  peopleSuggestionsRequestId += 1;
+  peopleSearchQuery = '';
+  peopleSearchResults = [];
+  peopleSearchLoading = false;
+  peopleSuggestions = [];
+  peopleSuggestionsLoading = false;
   commentCheckInId = null;
   batonSheetOpen = false;
   badgeCabinetOpen = false;

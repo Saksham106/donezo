@@ -44,8 +44,8 @@ test('Friends and League prefer new state while preserving member fallbacks', ()
 test('People and profiles make friend requests and friend-of-friend adds obvious', () => {
   const people = slice('peopleSheet', 'proofRejectSheet');
   const profile = slice('friendProfileSheet', 'recoverySheet');
-  assert.match(people, /Friend requests/);
-  assert.match(people, /data-accept-friend/);
+  assert.match(people, /Requests/);
+  assert.match(people, /data-people-accept/);
   assert.match(profile, /profile-connections/);
   assert.match(profile, /connectionCount/);
   assert.match(profile, /\.length \+ 1/);
@@ -175,5 +175,7 @@ test('active Friends surfaces do not leak obsolete squad or people copy', () => 
   assert.doesNotMatch(app, /Let the squad include your name/i);
   assert.doesNotMatch(app, /<strong>Squad Baton<\/strong>/i);
   assert.doesNotMatch(app, /Your squad showed up/i);
-  assert.match(app, /people\.length === 1 \? 'friend' : 'friends'/);
+  const people = slice('peopleSheet', 'proofRejectSheet');
+  assert.match(people, /Suggested for you/);
+  assert.match(people, /<h3>Friends<\/h3>/);
 });

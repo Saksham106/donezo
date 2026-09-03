@@ -27,7 +27,9 @@ test('Friends keeps proofs in-feed while activity moves to Updates', () => {
   assert.doesNotMatch(friends, />Refresh<\/button>/);
   assert.match(app, /function peopleSheet\(\)/);
   assert.match(app, /data-invite-from-people/);
-  assert.match(app, /No habits today/);
+  const people = app.slice(app.indexOf('function peopleSheet()'), app.indexOf('function proofRejectSheet'));
+  assert.match(people, /Search people/);
+  assert.doesNotMatch(people, /progressFor\(/);
   assert.match(app, /people:/);
 });
 

@@ -193,7 +193,9 @@ test('Friends list primes a fresh invite before the tap so native share keeps us
   assert.match(app, /let prefetchedFriendInvite = null/);
   assert.match(app, /function primeFriendInvite\(/);
   const peopleOpen = section(app, "app.querySelectorAll('[data-people-open]')", "app.querySelectorAll('[data-invite-from-people]')");
-  assert.match(peopleOpen, /primeFriendInvite\(\)/);
+  assert.match(peopleOpen, /openPeopleSheet/);
+  const peopleOpenHelper = section(app, 'function openPeopleSheet()', 'function checkInUndoSheet()');
+  assert.match(peopleOpenHelper, /primeFriendInvite\(\)/);
 
   const share = section(app, 'async function handleShareInvite()', 'function clearPendingInvite()');
   assert.match(share, /prefetchedFriendInvite/);
