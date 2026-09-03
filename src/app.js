@@ -7,6 +7,7 @@ import { clearStateCache, readStateCache, writeStateCache } from './state-cache.
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, redeemInvite, validateInviteCode } from './invite.js';
 import { MAX_PROOF_BYTES, compressProofFile, createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, requiresPhotoProof, transitionProofReview, validateProofFile } from './proof.js';
 import { composeDualProof, createDualProofState, setDualProofFile } from './dual-proof.js';
+import { cropProofFile, inspectProofFile } from './proof-crop.js';
 import {
   BADGE_CATALOG,
   accountabilityDateForMember,
@@ -64,6 +65,7 @@ let proofReview = null;
 let proofPreparationId = 0;
 let dualProof = null;
 let dualRoleChoice = null;
+let proofCrop = null;
 let proofRejectCheckInId = null;
 let checkInUndoRequest = null;
 let selectedEmoji = '⚡';
@@ -1604,6 +1606,53 @@ function stakeSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet stake-sheet" role="dialog" aria-modal="true" aria-label="Propose friendly stake" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><span class="eyebrow">FRIENDLY STAKE</span><h2>Make showing up matter.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Everyone opts in. No money, betting, or retroactive rule changes.</p><form id="stake-form" class="form sheet-form"><label>Rule<select name="rule"><option value="all_succeed">Everyone succeeds</option><option value="winner">Winner gets the reward</option><option value="loser">Lowest score takes the consequence</option></select></label><label>Reward<input name="reward" maxlength="140" placeholder="Pick Friday dinner"></label><label>Consequence<input name="consequence" maxlength="140" placeholder="Post a funny selfie"></label><input type="hidden" name="startsOn" value="${period.start}"><input type="hidden" name="endsOn" value="${period.end}"><button class="btn primary full">Propose to squad</button></form></section></div>`;
 }
 
+function proofCropSheet() {
+  if (!proofCrop) return '';
+  const position = Math.max(0, Math.min(1, Number(proofCrop.position) || 0.5));
+  return `<div class="sheet-backdrop proof-crop-layer"><section class="sheet compact-sheet proof-crop-sheet" role="dialog" aria-modal="true" aria-label="Crop proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">POSITION PROOF</p><h2>Choose what shows.</h2></div><button class="icon-btn" type="button" data-proof-crop-cancel aria-label="Cancel crop">×</button></div><p class="proof-sheet-copy">Drag the photo up or down. This is the only version that will be uploaded.</p><div class="proof-crop-frame" data-proof-crop-frame><img class="proof-crop-image" data-proof-crop-image src="${esc(proofCrop.previewUrl)}" alt="Crop preview" style="object-position:50% ${Math.round(position * 100)}%"></div><div class="proof-crop-actions"><button class="btn primary full" type="button" data-proof-crop-use>Use crop</button><button class="text-btn" type="button" data-proof-crop-cancel>Cancel</button></div></section></div>`;
+}
+
+function openProofCrop(review, sourceFile, { dual = false, selfieFile = null } = {}) {
+  if (!review || !sourceFile) return false;
+  if (proofCrop?.previewUrl) URL.revokeObjectURL(proofCrop.previewUrl);
+  const previewUrl = URL.createObjectURL(sourceFile);
+  proofCrop = {
+    habitId: review.habitId,
+    review,
+    sourceFile,
+    selfieFile,
+    dual,
+    previewUrl,
+    position: 0.5,
+  };
+  render();
+  return true;
+}
+
+function closeProofCrop() {
+  if (proofCrop?.previewUrl) URL.revokeObjectURL(proofCrop.previewUrl);
+  proofCrop = null;
+  render();
+}
+
+async function handleUseProofCrop() {
+  const crop = proofCrop;
+  if (!crop || busy) return;
+  try {
+    const cropped = await cropProofFile(crop.sourceFile, crop.position);
+    const artifact = crop.dual
+      ? await composeDualProof(cropped, crop.selfieFile)
+      : cropped;
+    if (proofCrop?.previewUrl === crop.previewUrl) {
+      URL.revokeObjectURL(crop.previewUrl);
+      proofCrop = null;
+    }
+    await uploadProofArtifact(crop.review, artifact);
+  } catch (error) {
+    notify(readableError(error), 4200);
+  }
+}
+
 function dualRoleChoiceSheet() {
   if (!dualRoleChoice || !proofReview) return '';
   return `<div class="sheet-backdrop proof-role-layer"><section class="sheet compact-sheet proof-role-sheet" role="dialog" aria-modal="true" aria-label="Choose first photo role" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">MAKE DUAL</p><h2>What was this photo?</h2></div><button class="icon-btn" type="button" data-dual-role-cancel aria-label="Cancel">×</button></div><div class="proof-role-options"><button class="btn full" type="button" data-dual-first-role="main">Main proof</button><button class="btn full" type="button" data-dual-first-role="selfie">Selfie</button></div></section></div>`;
@@ -1738,6 +1787,41 @@ async function handlePasteProof() {
   }
 }
 
+async function uploadProofArtifact(review, artifact) {
+  if (!review || !artifact || busy) return false;
+  const habit = getState().habits.find((item) => item.id === review.habitId);
+  if (!habit) return false;
+  const checkInDate = today();
+  let nextReview = review;
+  if (artifact !== review.file) {
+    const previewUrl = URL.createObjectURL(artifact);
+    if (review.previewUrl) URL.revokeObjectURL(review.previewUrl);
+    nextReview = createProofReviewState({ file: artifact, habitId: review.habitId, previewUrl });
+  }
+  nextReview = { ...nextReview, file: artifact, artifactFinalized: true, status: 'uploading', error: null };
+  proofReview = nextReview;
+  busy = true;
+  render();
+  try {
+    await repo.completeWithProof(review.habitId, checkInDate, artifact);
+    if (proofReview?.file === artifact) clearProofReview();
+    proofHabit = null;
+    clearDualProof();
+    notify(`Proof saved · ${habit.title} 🧾`, 5000, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(review.habitId, checkInDate) } });
+    haptic(35);
+    return true;
+  } catch (error) {
+    if (proofReview?.file === artifact) {
+      proofReview = transitionProofReview(proofReview, { type: 'failed', error: readableError(error) });
+      proofReview = { ...proofReview, artifactFinalized: true };
+    }
+    return false;
+  } finally {
+    busy = false;
+    render();
+  }
+}
+
 async function handleProofSubmit() {
   const review = proofReview;
   if (!review || review.status === 'uploading' || busy) return;
@@ -1747,29 +1831,30 @@ async function handleProofSubmit() {
   }
   await refreshCoordinator?.waitForIdle();
   if (busy || proofReview !== review) return;
-  const habit = getState().habits.find((item) => item.id === review.habitId);
-  if (!habit) return;
-  busy = true;
-  proofReview = transitionProofReview(review, { type: 'uploading' });
-  render();
+  if (review.artifactFinalized) {
+    await uploadProofArtifact(review, review.file);
+    return;
+  }
   try {
-    const checkInDate = today();
-    await repo.completeWithProof(review.habitId, checkInDate, review.file);
-    if (proofReview?.previewUrl === review.previewUrl) clearProofReview();
-    proofHabit = null;
-    clearDualProof();
-    notify(`Proof saved · ${habit.title} 🧾`, 5000, { action: { label: 'Undo', onClick: () => handleUndoCheckIn(review.habitId, checkInDate) } });
-    haptic(35);
-  } catch (error) {
-    if (proofReview?.previewUrl === review.previewUrl) {
-      proofReview = transitionProofReview(proofReview, { type: 'failed', error: readableError(error) });
+    const matchingDual = dualProof?.habitId === review.habitId && dualProof.mainFile && dualProof.selfieFile;
+    const cropSource = matchingDual ? dualProof.mainFile : review.file;
+    const inspection = await inspectProofFile(cropSource);
+    if (proofReview !== review) return;
+    if (inspection.needsCrop) {
+      openProofCrop(review, cropSource, {
+        dual: Boolean(matchingDual),
+        selfieFile: matchingDual ? dualProof.selfieFile : null,
+      });
+      return;
     }
-  } finally {
-    busy = false;
-    render();
+    await uploadProofArtifact(review, review.file);
+  } catch (error) {
+    if (proofReview === review) {
+      proofReview = transitionProofReview(review, { type: 'failed', error: readableError(error) });
+      render();
+    }
   }
 }
-
 
 
 async function loadProofThumbnail(element) {
@@ -1812,6 +1897,40 @@ function bindProofThumbnails() {
     });
   }, { rootMargin: '160px 0px' });
   thumbnails.forEach((element) => observer.observe(element));
+}
+
+function bindProofCropActions() {
+  app.querySelectorAll('[data-proof-crop-cancel]').forEach((element) => { element.onclick = closeProofCrop; });
+  app.querySelector('[data-proof-crop-use]')?.addEventListener('click', () => { void handleUseProofCrop(); });
+  const frame = app.querySelector('[data-proof-crop-frame]');
+  const image = app.querySelector('[data-proof-crop-image]');
+  if (!frame || !image || !proofCrop) return;
+  let dragging = false;
+  let startY = 0;
+  let startPosition = proofCrop.position;
+  const updatePosition = (clientY) => {
+    if (!dragging || !proofCrop) return;
+    const deltaY = clientY - startY;
+    const next = Math.max(0, Math.min(1, startPosition - (deltaY / Math.max(1, frame.clientHeight))));
+    proofCrop.position = next;
+    image.style.objectPosition = `50% ${Math.round(next * 100)}%`;
+  };
+  frame.addEventListener('pointerdown', (event) => {
+    dragging = true;
+    startY = event.clientY;
+    startPosition = proofCrop?.position ?? 0.5;
+    frame.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  frame.addEventListener('pointermove', (event) => updatePosition(event.clientY));
+  const finish = (event) => {
+    if (!dragging) return;
+    updatePosition(event.clientY);
+    dragging = false;
+    frame.releasePointerCapture?.(event.pointerId);
+  };
+  frame.addEventListener('pointerup', finish);
+  frame.addEventListener('pointercancel', () => { dragging = false; });
 }
 
 function bindProofActions() {
@@ -1922,7 +2041,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${dualRoleChoiceSheet()}${proofSourceSheet()}${proofReviewSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofCropSheet()}${dualRoleChoiceSheet()}${proofSourceSheet()}${proofReviewSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;
@@ -2108,24 +2227,11 @@ function render() {
   app.querySelector('#username-form')?.addEventListener('submit', handleUsernameSubmit);
   app.querySelector('#notification-preferences-form')?.addEventListener('submit', handleNotificationPreferences);
   app.querySelector('#social-preferences-form')?.addEventListener('submit', handleSocialPreferences);
-  app.querySelectorAll('[data-camera-mode]').forEach((element) => { element.onclick = () => {
-    if (!dualProof || dualProof.phase !== 'main') return;
-    const mode = element.dataset.cameraMode === 'dual' ? 'dual' : 'single';
-    if (dualProof.mode === mode) return;
-    dualProof = { ...dualProof, mode };
-    render();
-  }; });
-  app.querySelector('[data-dual-capture]')?.addEventListener('click', () => { void captureDualCamera(); });
-  app.querySelector('[data-dual-fallback-main]')?.addEventListener('click', () => openNativeCameraFallback(dualProofMainInput));
-  app.querySelector('[data-dual-fallback-selfie]')?.addEventListener('click', () => openNativeCameraFallback(proofSelfieInput));
-  app.querySelector('[data-dual-cancel]')?.addEventListener('click', () => { const habitId = dualProof?.habitId; clearDualProof(); proofHabit = habitId || null; render(); });
-  app.querySelector('[data-camera-retake]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_main' }); render(); });
-  app.querySelector('[data-dual-retake-main]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_main' }); render(); });
-  app.querySelector('[data-dual-retake-selfie]')?.addEventListener('click', () => { clearProofReview(); dualProof = transitionDualProof(dualProof, { type: 'retake_selfie' }); render(); });
   app.querySelector('[data-retry-mutation]')?.addEventListener('click', () => retryMutation?.());
   app.querySelector('#notification-btn')?.addEventListener('click', handleNotifications);
   bindInviteActions();
   bindProofActions();
+  bindProofCropActions();
   app.querySelector('[data-manual-refresh]')?.addEventListener('click', handleManualRefresh);
   app.querySelector('#sign-out')?.addEventListener('click', handleSignOut);
 }
@@ -2274,6 +2380,8 @@ function closeSheets() {
   badgeCabinetOpen = false;
   wrappedOpen = false;
   wrappedIndex = 0;
+  if (proofCrop?.previewUrl) URL.revokeObjectURL(proofCrop.previewUrl);
+  proofCrop = null;
   proofHabit = null;
   clearProofReview();
   proofRejectCheckInId = null;
@@ -2297,6 +2405,7 @@ function hasUnsavedDraft() {
     || Boolean(commentCheckInId)
     || batonSheetOpen
     || Boolean(dualProof)
+    || Boolean(proofCrop)
     || Boolean(proofReview);
 }
 
@@ -3247,6 +3356,8 @@ async function handleSignOut() {
   friendInvitePromise = null;
   friendInvitePreparing = false;
   stopRefreshCoordinator();
+  if (proofCrop?.previewUrl) URL.revokeObjectURL(proofCrop.previewUrl);
+  proofCrop = null;
   clearProofReview();
   proofHabit = null;
   optimisticPatches.clear();
