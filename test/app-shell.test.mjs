@@ -65,12 +65,13 @@ test('habit sheet defaults to photo proof and cannot horizontally overflow', () 
   assert.match(social, /input\[type="time"\]/);
 });
 
-test('photo proof flow is review-first, mobile-camera aware, and compression-race safe', () => {
+test('photo proof flow is review-first, native-camera aware, and compression-race safe', () => {
   assert.match(html, /id="proof-input"[^>]*accept="image\/\*"[^>]*capture="environment"/);
   assert.match(app, /proofReviewSheet/);
   assert.match(app, /Submit proof/);
-  assert.match(app, /Retake/);
+  assert.match(app, /Make Dual/);
   assert.match(app, /Choose another/);
+  assert.doesNotMatch(app, /getUserMedia/);
   assert.match(app, /URL\.createObjectURL/);
   assert.match(app, /URL\.revokeObjectURL/);
   assert.match(app, /const habitId = proofHabit \|\| proofReview\?\.habitId/);
