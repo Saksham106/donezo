@@ -57,6 +57,13 @@ test('crop confirmation passes only the final cropped or recomposed artifact to 
   assert.equal((upload.match(/completeWithProof/g) || []).length, 1);
 });
 
+test('cropped single proofs are compressed and validated before centralized upload', () => {
+  const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceSheet()');
+  assert.match(useCrop, /cropped\.size > MAX_PROOF_BYTES[^]*compressProofFile\(cropped\)/);
+  assert.match(useCrop, /validateProofFile\(artifact\)/);
+  assert.ok(useCrop.indexOf('validateProofFile(artifact)') < useCrop.indexOf('uploadProofArtifact(crop.review, artifact)'));
+});
+
 test('crop cancel returns to review without uploading anything', () => {
   const cancel = section(app, 'function closeProofCrop()', 'async function handleUseProofCrop()');
   assert.match(cancel, /proofCrop = null/);
