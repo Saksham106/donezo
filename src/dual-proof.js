@@ -1,4 +1,5 @@
 import { compressProofFile, validateProofFile } from './proof.js';
+import { decodeProofImage } from './proof-image.js';
 
 export function createDualProofState(habitId, mode = 'dual') {
   return {
@@ -76,26 +77,6 @@ export function compositionGeometry(main, selfie, {
   };
 }
 
-async function decodeImage(file) {
-  if (typeof createImageBitmap === 'function') {
-    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { /* Safari fallback below. */ }
-  }
-  if (typeof Image !== 'function' || typeof URL?.createObjectURL !== 'function') throw new Error('This browser could not read that photo.');
-  const url = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    image.decoding = 'async';
-    image.src = url;
-    await new Promise((resolve, reject) => {
-      image.onload = resolve;
-      image.onerror = () => reject(new Error('This browser could not read that photo.'));
-    });
-    return image;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
 function roundedRect(context, x, y, width, height, radius) {
   const r = Math.min(radius, width / 2, height / 2);
   context.beginPath();
@@ -154,14 +135,14 @@ export async function composeDualProof(mainFile, selfieFile, {
   maxDimension = 2048,
   insetRatio = 0.3,
   marginRatio = 0.03,
-  decodeImage: decode = decodeImage,
+  decodeImage = decodeProofImage,
   encodeComposite: encode = encodeComposite,
   compressFile = compressProofFile,
   now = Date.now,
 } = {}) {
   if (!mainFile || !selfieFile) throw new Error('Take both proof photos first');
-  const mainImage = await decode(mainFile);
-  const selfieImage = await decode(selfieFile);
+  const mainImage = await decodeImage(mainFile);
+  const selfieImage = await decodeImage(selfieFile);
   try {
     const geometry = compositionGeometry(mainImage, selfieImage, { maxDimension, insetRatio, marginRatio });
     const blob = await encode({ mainImage, selfieImage, geometry });
