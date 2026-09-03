@@ -13,38 +13,24 @@ function section(source, start, end) {
   return source.slice(from, to);
 }
 
-test('camera mode switch is visually obvious', () => {
-  assert.match(social, /\.camera-mode-switch button\{[^}]*background:var\(--color-paper-2\)[^}]*color:var\(--color-ink\)/);
-  assert.match(social, /\.camera-mode-switch button\.active\{[^}]*background:var\(--color-coral\)[^}]*color:var\(--color-white\)/);
+test('proof flow has no live Donezo camera lifecycle left to prompt or restart', () => {
+  assert.doesNotMatch(app, /getUserMedia|startDualCameraIfNeeded|dualCameraStream|dualCameraRequestId|data-dual-camera|camera-mode-switch/);
+  assert.doesNotMatch(social, /\.dual-camera-frame|\.camera-mode-switch|\.camera-quality-fallback/);
 });
 
-test('camera sheet fits without vertical scrolling and removes nonessential copy', () => {
-  const camera = section(app, 'function dualProofSheet()', 'function proofSourceSheet()');
-  assert.doesNotMatch(camera, /proof-sheet-copy/);
-  assert.doesNotMatch(camera, /<p class="eyebrow">/);
-  assert.doesNotMatch(camera, /Opens the native camera/);
-  assert.match(camera, /camera-capture-btn/);
-  assert.match(camera, /Use iPhone camera for better quality/);
-  assert.match(social, /\.dual-proof-sheet\{[^}]*overflow:hidden[^}]*display:flex[^}]*flex-direction:column/);
-  assert.match(social, /\.dual-camera-frame\{[^}]*flex:1 1 auto[^}]*min-height:0/);
-  assert.match(social, /\.camera-capture-btn\{[^}]*margin-top:/);
+test('native proof review keeps the compact highlighted Make Dual action', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  assert.match(review, /compact-proof-review-actions/);
+  assert.match(review, /data-proof-choose[^>]*>Choose another/);
+  assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
+  assert.match(social, /\.proof-make-dual\{[^}]*background:var\(--color-coral-soft\)/);
 });
 
-test('camera stream is reused instead of being re-requested on routine rerenders', () => {
-  const draft = section(app, 'function hasUnsavedDraft()', 'async function refreshRepositoryData');
-  assert.match(draft, /Boolean\(dualProof\)/);
-
-  const start = section(app, 'async function startDualCameraIfNeeded()', 'async function finishDualSelection');
-  assert.match(start, /dualCameraStream[^]*readyState === 'live'[^]*video\.srcObject = dualCameraStream[^]*return;/);
-  assert.ok(start.indexOf("readyState === 'live'") < start.indexOf('getUserMedia'));
-
-  const renderBindings = section(app, "app.querySelectorAll('[data-camera-mode]')", "app.querySelector('[data-dual-capture]')");
-  assert.doesNotMatch(renderBindings, /clearDualProof\(\)/);
-  assert.match(renderBindings, /dualProof = \{ \.\.\.dualProof, mode \}/);
-
-  const fallback = section(app, 'function openNativeCameraFallback(input)', 'function clearDualProof()');
-  assert.doesNotMatch(fallback, /stopDualCamera\(\)/);
-  assert.match(fallback, /input\?\.click\(\)/);
+test('Dual role selection uses native front or rear inputs instead of a stream', () => {
+  const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
+  assert.match(bindings, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
+  assert.match(bindings, /input\?\.click\(\)/);
+  assert.doesNotMatch(bindings, /getUserMedia|startDualCameraIfNeeded/);
 });
 
 test('background refresh does not rebuild a scrolled Friends feed', () => {
