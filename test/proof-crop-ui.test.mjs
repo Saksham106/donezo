@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+const social = readFileSync(new URL('../social.css', import.meta.url), 'utf8');
+
+function section(source, start, end) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  assert.ok(from >= 0, `missing start: ${start}`);
+  assert.ok(to > from, `missing end: ${end}`);
+  return source.slice(from, to);
+}
+
+test('tall proofs use a fixed 3:4 crop sheet before upload', () => {
+  assert.match(app, /let proofCrop = null/);
+  assert.match(app, /inspectProofFile/);
+  assert.match(app, /cropProofFile/);
+  const sheet = section(app, 'function proofCropSheet()', 'function dualRoleChoiceSheet()');
+  assert.match(sheet, /data-proof-crop-frame/);
+  assert.match(sheet, /data-proof-crop-image/);
+  assert.match(sheet, /data-proof-crop-use[^>]*>Use crop/);
+  assert.match(sheet, /data-proof-crop-cancel[^>]*>Cancel/);
+  assert.match(social, /\.proof-crop-frame\{[^}]*aspect-ratio:3\/4[^}]*overflow:hidden/);
+  assert.match(social, /\.proof-crop-image\{[^}]*object-fit:cover[^}]*object-position:/);
+});
+
+test('crop drag stays local and updates normalized vertical position', () => {
+  const bind = section(app, 'function bindProofCropActions()', 'function bindProofActions()');
+  assert.match(bind, /pointerdown/);
+  assert.match(bind, /pointermove/);
+  assert.match(bind, /Math\.max\(0, Math\.min\(1,/);
+  assert.match(bind, /objectPosition/);
+  assert.doesNotMatch(bind, /completeWithProof/);
+});
+
+test('submit inspects the main proof and pauses tall images before repository upload', () => {
+  const submit = section(app, 'async function handleProofSubmit()', 'async function loadProofThumbnail');
+  assert.match(submit, /dualProof\?\.habitId === review\.habitId[^]*dualProof\.mainFile/);
+  assert.match(submit, /inspectProofFile\(cropSource\)/);
+  assert.match(submit, /inspection\.needsCrop/);
+  assert.match(submit, /openProofCrop\(/);
+  assert.ok(submit.indexOf('inspection.needsCrop') < submit.indexOf('completeWithProof'));
+});
+
+test('crop confirmation uploads only the final cropped or recomposed artifact', () => {
+  const useCrop = section(app, 'async function handleUseProofCrop()', 'function bindProofCropActions()');
+  assert.match(useCrop, /cropProofFile\(crop\.sourceFile, crop\.position\)/);
+  assert.match(useCrop, /crop\.dual[^]*composeDualProof\(cropped, crop\.selfieFile\)/);
+  assert.match(useCrop, /uploadProofArtifact\(/);
+  assert.equal((useCrop.match(/completeWithProof/g) || []).length, 0);
+  const upload = section(app, 'async function uploadProofArtifact(', 'async function handleProofSubmit()');
+  assert.equal((upload.match(/completeWithProof/g) || []).length, 1);
+});
+
+test('crop cancel returns to review without uploading anything', () => {
+  const cancel = section(app, 'function closeProofCrop()', 'async function handleUseProofCrop()');
+  assert.match(cancel, /proofCrop = null/);
+  assert.match(cancel, /URL\.revokeObjectURL/);
+  assert.doesNotMatch(cancel, /completeWithProof|uploadProofArtifact/);
+});
