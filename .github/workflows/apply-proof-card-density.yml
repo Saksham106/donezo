@@ -1,0 +1,36 @@
+name: Apply proof card density
+on:
+  push:
+    branches: [feat/proof-friends-polish-2026-09-02]
+    paths: [.github/workflows/apply-proof-card-density.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/proof-friends-polish-2026-09-02
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: python3 scripts/patch_proof_card_density.py
+      - run: npm ci
+      - run: node --test test/proof-card-density.test.mjs test/mobile-social-proof-polish.test.mjs test/social-mobile-polish.test.mjs test/friends-ui.test.mjs
+      - run: npm test
+      - run: npm run check
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_only
+      - name: Commit verified compact proof cards
+        run: |
+          git config user.name "Saksham Goel"
+          git config user.email "67731724+Saksham106@users.noreply.github.com"
+          git rm scripts/patch_proof_card_density.py .github/workflows/apply-proof-card-density.yml
+          git add src/app.js social.css test
+          git commit -m "polish: simplify Friends proof cards [proof-card-density-applied]"
+          git push origin HEAD:feat/proof-friends-polish-2026-09-02
