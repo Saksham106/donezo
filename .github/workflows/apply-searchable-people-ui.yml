@@ -22,8 +22,9 @@ jobs:
           cache: npm
       - run: python3 scripts/patch_searchable_people_ui.py
       - run: python3 scripts/patch_searchable_people_ui_fixes.py
+      - run: python3 scripts/patch_searchable_people_legacy_tests.py
       - run: npm ci
-      - run: node --test test/searchable-people.test.mjs test/friends-foundation.test.mjs test/league-friends-ux.test.mjs test/mobile-social-proof-polish.test.mjs test/fluid-performance.test.mjs
+      - run: node --test test/searchable-people.test.mjs test/friends-foundation.test.mjs test/friends-ui.test.mjs test/league-friends-ux.test.mjs test/mobile-social-proof-polish.test.mjs test/mobile-social-v2.test.mjs test/fluid-performance.test.mjs
       - run: npm test
       - run: npm run check
       - run: npm run build
@@ -34,7 +35,7 @@ jobs:
         run: |
           git config user.name "Saksham Goel"
           git config user.email "67731724+Saksham106@users.noreply.github.com"
-          git rm -f scripts/patch_searchable_people_ui.py scripts/patch_searchable_people_ui_fixes.py .github/workflows/apply-searchable-people-ui.yml
-          git add src/app.js social.css test/fluid-performance.test.mjs
+          git rm -f scripts/patch_searchable_people_ui.py scripts/patch_searchable_people_ui_fixes.py scripts/patch_searchable_people_legacy_tests.py .github/workflows/apply-searchable-people-ui.yml
+          git add src/app.js social.css test/fluid-performance.test.mjs test/friends-ui.test.mjs test/mobile-social-v2.test.mjs
           git commit -m "feat: add searchable People experience [people-ui-applied]"
           git push origin HEAD
