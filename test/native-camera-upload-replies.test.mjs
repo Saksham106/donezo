@@ -14,30 +14,32 @@ function section(source, start, end) {
   return source.slice(from, to);
 }
 
-test('native phone camera is the primary Take photo path and Donezo camera is fallback', () => {
+test('native phone camera is the primary Take photo path with no Donezo camera option', () => {
   const picker = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
   assert.match(picker, /data-proof-camera[^>]*>Take photo/);
-  assert.match(picker, /data-proof-donezo-camera[^>]*>Use Donezo camera/);
+  assert.doesNotMatch(picker, /data-proof-donezo-camera|Use Donezo camera/);
   assert.match(bindings, /\[data-proof-camera\][^]*chooseProofInput\(proofInput\)/);
-  assert.match(bindings, /\[data-proof-donezo-camera\][^]*createDualProofState\(proofHabit, 'single'\)/);
+  assert.doesNotMatch(bindings, /data-proof-donezo-camera|getUserMedia/);
 });
 
-test('a native single photo can be upgraded to Dual by adding a native selfie', () => {
-  const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
+test('a native single photo can be upgraded to Dual in either role', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  const role = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
-  assert.match(review, /data-proof-add-selfie/);
-  assert.match(review, /Add selfie/);
-  assert.match(bindings, /\[data-proof-add-selfie\]/);
-  assert.match(bindings, /createDualProofState\(habitId, 'dual'\)/);
-  assert.match(bindings, /phase:\s*'selfie'/);
-  assert.match(bindings, /mainFile/);
-  assert.match(bindings, /proofSelfieInput\?\.click\(\)/);
+  assert.match(review, /data-proof-make-dual/);
+  assert.match(review, /Make Dual/);
+  assert.match(role, /Main proof/);
+  assert.match(role, /Selfie/);
+  assert.match(bindings, /createDualProofState\(habitId, firstFile, role\)/);
+  assert.match(bindings, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
 });
 
-test('cancelling the native selfie camera keeps the single-photo review usable', () => {
-  const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
-  assert.match(review, /const cameraSession = dualProof\?\.habitId === habit\.id && \(dualProof\?\.mode === 'single' \|\| Boolean\(dualProof\?\.selfieFile\)\)/);
+test('cancelling the native second photo keeps the single-photo review usable', () => {
+  const handler = section(app, 'async function handleNativeDualInput(', 'function bindProofActions()');
+  assert.match(handler, /if \(!file\) return false/);
+  assert.doesNotMatch(handler, /if \(!file\)[\s\S]{0,120}clearProofReview/);
+  assert.match(handler, /proofReview/);
 });
 
 test('Friends heading removes the redundant Your People eyebrow', () => {

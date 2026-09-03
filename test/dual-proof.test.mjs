@@ -2,39 +2,45 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createDualProofState,
-  transitionDualProof,
-  stopMediaStream,
+  setDualProofFile,
   compositionGeometry,
   composeDualProof,
 } from '../src/dual-proof.js';
 
-test('dual proof state preserves the opposite capture during retakes and failures', () => {
+test('dual proof state preserves the opposite capture when replacing either role', () => {
   const main = { name: 'main.jpg' };
   const selfie = { name: 'selfie.jpg' };
-  let state = createDualProofState('habit-1');
-  assert.equal(state.phase, 'main');
-  state = transitionDualProof(state, { type: 'main_selected', file: main });
-  assert.equal(state.phase, 'selfie');
-  state = transitionDualProof(state, { type: 'selfie_selected', file: selfie });
-  assert.equal(state.phase, 'review');
+  const nextMain = { name: 'main-2.jpg' };
+  const nextSelfie = { name: 'selfie-2.jpg' };
+
+  let state = createDualProofState('habit-1', main, 'main');
+  assert.equal(state.mainFile, main);
+  assert.equal(state.selfieFile, null);
+  assert.equal(state.firstRole, 'main');
+
+  state = setDualProofFile(state, 'selfie', selfie);
   assert.equal(state.mainFile, main);
   assert.equal(state.selfieFile, selfie);
 
-  const retakeMain = transitionDualProof(state, { type: 'retake_main' });
-  assert.equal(retakeMain.phase, 'main');
-  assert.equal(retakeMain.mainFile, null);
-  assert.equal(retakeMain.selfieFile, selfie);
+  const replaceMain = setDualProofFile(state, 'main', nextMain);
+  assert.equal(replaceMain.mainFile, nextMain);
+  assert.equal(replaceMain.selfieFile, selfie);
 
-  const failed = transitionDualProof(state, { type: 'failed', error: 'camera died' });
-  assert.equal(failed.mainFile, main);
-  assert.equal(failed.selfieFile, selfie);
-  assert.equal(failed.error, 'camera died');
+  const replaceSelfie = setDualProofFile(state, 'selfie', nextSelfie);
+  assert.equal(replaceSelfie.mainFile, main);
+  assert.equal(replaceSelfie.selfieFile, nextSelfie);
 });
 
-test('stopMediaStream stops every active track', () => {
-  const stopped = [];
-  stopMediaStream({ getTracks: () => [{ stop: () => stopped.push(1) }, { stop: () => stopped.push(2) }] });
-  assert.deepEqual(stopped, [1, 2]);
+test('dual proof can start with the selfie and later receive the main proof', () => {
+  const selfie = { name: 'selfie.jpg' };
+  const main = { name: 'main.jpg' };
+  let state = createDualProofState('habit-1', selfie, 'selfie');
+  assert.equal(state.mainFile, null);
+  assert.equal(state.selfieFile, selfie);
+  assert.equal(state.firstRole, 'selfie');
+  state = setDualProofFile(state, 'main', main);
+  assert.equal(state.mainFile, main);
+  assert.equal(state.selfieFile, selfie);
 });
 
 test('composition preserves the full main aspect ratio and uses a square top-right selfie inset', () => {

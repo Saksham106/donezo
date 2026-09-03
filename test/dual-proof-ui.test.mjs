@@ -16,20 +16,20 @@ test('habit editor exposes photo proof without a separate dual habit mode', () =
   assert.match(app, /requiresPhotoProof/);
 });
 
-test('dual photo capture has rear and selfie camera paths with a native fallback', () => {
+test('dual photo capture uses native rear and selfie inputs in either order', () => {
   assert.match(app, /createDualProofState/);
-  assert.match(app, /dualCameraSupported/);
-  assert.match(app, /captureVideoFrame/);
+  assert.match(app, /setDualProofFile/);
   assert.match(app, /composeDualProof/);
-  assert.match(app, /getUserMedia/);
+  assert.doesNotMatch(app, /getUserMedia|dualCameraSupported|captureVideoFrame/);
   assert.match(html, /id="proof-selfie-input"[^>]*capture="user"/);
-  assert.match(html, /id="proof-input"[^>]*capture="environment"/);
+  assert.match(html, /id="dual-proof-main-input"[^>]*capture="environment"/);
 });
 
-test('dual proof review can retake either side without restarting both captures', () => {
-  assert.match(app, /data-dual-retake-main/);
-  assert.match(app, /data-dual-retake-selfie/);
-  assert.match(app, /transitionDualProof/);
+test('dual proof review can replace either side without losing the other role', () => {
+  const review = slice('proofReviewSheet', 'clearDualProof');
+  assert.match(review, /data-dual-replace-main/);
+  assert.match(review, /data-dual-replace-selfie/);
+  assert.match(app, /setDualProofFile/);
 });
 
 test('regular photo habits retain camera library and paste options', () => {

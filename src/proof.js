@@ -1,3 +1,5 @@
+import { decodeProofImage, proofImageSize } from './proof-image.js';
+
 export const MAX_PROOF_BYTES = 4 * 1024 * 1024;
 export const ALLOWED_PROOF_TYPES = Object.freeze(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 
@@ -44,32 +46,6 @@ export function validateProofFile(file) {
   return { valid: true, error: null };
 }
 
-async function decodeProofImage(file) {
-  if (typeof createImageBitmap === 'function') {
-    try {
-      return await createImageBitmap(file, { imageOrientation: 'from-image' });
-    } catch {
-      // Safari can decode camera-roll formats through <img> even when createImageBitmap cannot.
-    }
-  }
-  if (typeof Image !== 'function' || typeof URL?.createObjectURL !== 'function') {
-    throw new Error('This browser could not read that photo. Choose a smaller photo or a screenshot.');
-  }
-  const url = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    image.decoding = 'async';
-    image.src = url;
-    await new Promise((resolve, reject) => {
-      image.onload = resolve;
-      image.onerror = () => reject(new Error('This browser could not read that photo. Choose a smaller photo or a screenshot.'));
-    });
-    return image;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
 async function encodeProofImage(image, width, height, quality) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -99,9 +75,7 @@ export async function compressProofFile(file, {
 
   const image = await decodeImage(file);
   try {
-    const sourceWidth = Number(image?.width || image?.naturalWidth);
-    const sourceHeight = Number(image?.height || image?.naturalHeight);
-    if (!sourceWidth || !sourceHeight) throw new Error('This browser could not read that photo. Choose a smaller photo or a screenshot.');
+    const { width: sourceWidth, height: sourceHeight } = proofImageSize(image);
     const initialScale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
     let width = Math.max(1, Math.round(sourceWidth * initialScale));
     let height = Math.max(1, Math.round(sourceHeight * initialScale));

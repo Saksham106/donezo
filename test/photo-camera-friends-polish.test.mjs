@@ -2,13 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createDualProofState, transitionDualProof } from '../src/dual-proof.js';
+import { createDualProofState, setDualProofFile } from '../src/dual-proof.js';
 
 const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
 const store = readFileSync(new URL('../src/store.js', import.meta.url), 'utf8');
 const proof = readFileSync(new URL('../src/proof.js', import.meta.url), 'utf8');
 const social = readFileSync(new URL('../social.css', import.meta.url), 'utf8');
-const dualProof = readFileSync(new URL('../src/dual-proof.js', import.meta.url), 'utf8');
 
 function section(source, start, end) {
   const from = source.indexOf(start);
@@ -33,51 +32,38 @@ test('habit proof mode is only Photo proof or Truuust me', () => {
   assert.doesNotMatch(requirement, /dual_photo/);
 });
 
-test('single and dual are camera modes inside Take photo', () => {
+test('Dual is a native review upgrade rather than a separate proof source', () => {
   const source = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
   assert.match(source, /data-proof-camera[^>]*>Take photo/);
-  assert.doesNotMatch(source, /data-proof-dual/);
-  assert.doesNotMatch(source, />Dual photo<\/button>/);
+  assert.doesNotMatch(source, /data-proof-dual|Dual photo|Use Donezo camera/);
 
-  const camera = section(app, 'function dualProofSheet()', 'function proofSourceSheet()');
-  assert.match(camera, /data-camera-mode="single"/);
-  assert.match(camera, /data-camera-mode="dual"/);
-  assert.match(camera, />Single</);
-  assert.match(camera, />Dual</);
-
-  const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
-  assert.match(bindings, /\[data-proof-camera\][^]*createDualProofState\(proofHabit, 'single'\)/);
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
+  const role = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
+  assert.match(role, /Main proof/);
+  assert.match(role, /Selfie/);
 });
 
-test('camera state finishes after one photo in single mode and asks for selfie in dual mode', () => {
+test('native Dual state supports either first-photo role', () => {
   const main = { name: 'main.jpg' };
-  let single = createDualProofState('habit-1', 'single');
-  assert.equal(single.mode, 'single');
-  single = transitionDualProof(single, { type: 'main_selected', file: main });
-  assert.equal(single.phase, 'review');
+  const selfie = { name: 'selfie.jpg' };
+  let mainFirst = createDualProofState('habit-1', main, 'main');
+  assert.equal(mainFirst.mainFile, main);
+  assert.equal(mainFirst.selfieFile, null);
+  mainFirst = setDualProofFile(mainFirst, 'selfie', selfie);
+  assert.equal(mainFirst.selfieFile, selfie);
 
-  let dual = createDualProofState('habit-1', 'dual');
-  assert.equal(dual.mode, 'dual');
-  dual = transitionDualProof(dual, { type: 'main_selected', file: main });
-  assert.equal(dual.phase, 'selfie');
+  let selfieFirst = createDualProofState('habit-1', selfie, 'selfie');
+  assert.equal(selfieFirst.selfieFile, selfie);
+  assert.equal(selfieFirst.mainFile, null);
+  selfieFirst = setDualProofFile(selfieFirst, 'main', main);
+  assert.equal(selfieFirst.mainFile, main);
 });
 
-test('in-app camera asks for a higher quality stream and makes iPhone quality fallback prominent', () => {
-  assert.match(app, /width:\s*\{\s*ideal:\s*1920\s*\}/);
-  assert.match(app, /height:\s*\{\s*ideal:\s*1440\s*\}/);
-  assert.match(dualProof, /quality = 0\.92/);
-  assert.match(app, /Use iPhone camera for better quality/);
-  assert.match(app, /camera-quality-fallback/);
-  assert.match(social, /\.camera-quality-fallback\{/);
-});
-
-test('native iPhone camera handoff keeps the Donezo stream warm when possible', () => {
-  assert.match(app, /function openNativeCameraFallback\(input\)/);
-  assert.doesNotMatch(app, /function openNativeCameraFallback\(input\)[^}]*stopDualCamera\(\)/);
-  assert.match(app, /function openNativeCameraFallback\(input\)[^}]*input\?\.click\(\)/);
-  assert.match(app, /visibilitychange[^]*document\.visibilityState !== 'visible'[^]*return;[^]*startDualCameraIfNeeded\(\)/);
-  assert.match(app, /data-dual-fallback-main[^]*openNativeCameraFallback\(dualProofMainInput\)/);
-  assert.match(app, /data-dual-fallback-selfie[^]*openNativeCameraFallback\(proofSelfieInput\)/);
+test('proof capture no longer uses a permission-heavy live camera stream', () => {
+  assert.doesNotMatch(app, /getUserMedia|startDualCameraIfNeeded|captureVideoFrame|Use iPhone camera for better quality/);
+  assert.doesNotMatch(social, /\.camera-quality-fallback|\.dual-camera-frame|\.camera-mode-switch/);
+  assert.match(app, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
 });
 
 test('Friends heading keeps refresh and people actions on one compact row', () => {
