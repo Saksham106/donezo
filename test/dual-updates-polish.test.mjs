@@ -14,22 +14,24 @@ function section(source, start, end) {
   return source.slice(from, to);
 }
 
-test('Dual photo lives inside the Take photo camera rather than the source picker', () => {
+test('Dual is an upgrade from native proof review rather than a source-picker mode', () => {
   const picker = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
-  const camera = section(app, 'function dualProofSheet()', 'function proofSourceSheet()');
-  const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
-  assert.doesNotMatch(picker, /data-proof-dual/);
-  assert.match(camera, /data-camera-mode="single"/);
-  assert.match(camera, /data-camera-mode="dual"/);
-  assert.match(bindings, /createDualProofState\(proofHabit, 'single'\)/);
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  const role = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
+  assert.doesNotMatch(picker, /data-proof-dual|Dual photo/);
+  assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
+  assert.match(role, /data-dual-first-role="main"/);
+  assert.match(role, /data-dual-first-role="selfie"/);
 });
 
-test('Dual camera mode keeps independent retake controls', () => {
-  const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
-  assert.match(review, /cameraSession/);
-  assert.match(review, /dualProof\?\.mode === 'dual'/);
-  assert.match(review, /data-dual-retake-main/);
-  assert.match(review, /data-dual-retake-selfie/);
+test('completed Dual review keeps independent native replacement controls', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  assert.match(review, /dualReady/);
+  assert.match(review, /data-dual-replace-main/);
+  assert.match(review, /data-dual-replace-selfie/);
+  const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
+  assert.match(bindings, /dualProofMainInput\?\.click\(\)/);
+  assert.match(bindings, /proofSelfieInput\?\.click\(\)/);
 });
 
 test('proof rejection is visible in the proof header and kept out of the reaction row', () => {
