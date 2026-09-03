@@ -1,4 +1,5 @@
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 
 const url = process.env.VITE_SUPABASE_URL;
@@ -34,3 +35,22 @@ await Promise.all([
   cp('icon.svg', 'dist/icon.svg'),
   cp('sw.js', 'dist/sw.js'),
 ]);
+
+const shellAssets = [
+  'index.html',
+  'pwa.js',
+  'tokens.css',
+  'styles.css',
+  'components.css',
+  'social.css',
+  'app.js',
+  'manifest.webmanifest',
+  'icon.svg',
+];
+const shellContents = await Promise.all(shellAssets.map((asset) => readFile(`dist/${asset}`)));
+const buildId = shellContents
+  .reduce((hash, content) => hash.update(content), createHash('sha256'))
+  .digest('hex')
+  .slice(0, 12);
+const serviceWorker = (await readFile('sw.js', 'utf8')).replace('__BUILD_ID__', buildId);
+await writeFile('dist/sw.js', serviceWorker);

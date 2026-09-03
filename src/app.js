@@ -1746,7 +1746,7 @@ function proofSourceSheet() {
 }
 
 function proofReviewSheet() {
-  if (!proofReview) return '';
+  if (!proofReview || dualRoleChoice) return '';
   const habit = getState()?.habits.find((item) => item.id === proofReview.habitId);
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';

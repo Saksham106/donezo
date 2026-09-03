@@ -49,6 +49,11 @@ test('Make Dual asks what the first photo was and opens the opposite native came
   assert.match(bindings, /input\?\.click\(\)/);
 });
 
+test('role choice replaces the review sheet instead of rendering behind it', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  assert.match(review, /if \(!proofReview \|\| dualRoleChoice\) return '';/);
+});
+
 test('dual proof state supports Main-first and Selfie-first capture order', async () => {
   const dual = await import('../src/dual-proof.js');
   assert.equal(typeof dual.setDualProofFile, 'function');

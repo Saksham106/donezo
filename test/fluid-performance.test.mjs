@@ -239,9 +239,9 @@ test('inline proof image loader reuses a cached signed URL before signing again'
   assert.match(loader, /proofThumbnailUrls\.set\(/);
 });
 
-test('new performance modules are syntax-checked and shell cache advances to v27', () => {
+test('new performance modules are syntax-checked and shell cache is build-stamped', () => {
   assert.match(pkg.scripts.check, /src\/optimistic\.js/);
   assert.match(pkg.scripts.check, /src\/state-cache\.js/);
-  assert.match(sw, /donezo-shell-v27/);
+  assert.match(sw, /donezo-shell-__BUILD_ID__/);
   assert.doesNotMatch(sw, /donezo-shell-v25/);
 });
