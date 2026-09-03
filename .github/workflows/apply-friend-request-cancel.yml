@@ -34,3 +34,4 @@ jobs:
           git add src/store.js supabase/migrations test
           git commit -m "feat: cancel outgoing friend requests [friend-cancel-applied]"
           git push origin HEAD:feat/proof-friends-polish-2026-09-02
+      # rerun after tightening the memory-method patch guard
