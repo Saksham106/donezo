@@ -97,6 +97,7 @@ let peopleSearchRequestId = 0;
 let peopleSuggestionsRequestId = 0;
 let peopleSearchDebounceTimer = null;
 let discoveryProfilePerson = null;
+let friendRemovalPerson = null;
 const proofThumbnailUrls = new Map();
 let commentCheckInId = null;
 let batonSheetOpen = false;
@@ -1159,9 +1160,41 @@ function addFriendSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet add-friend-sheet people-flow-sheet" role="dialog" aria-modal="true" aria-label="Add a friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD A FRIEND</p><h2>Paste their link.</h2></div><button class="icon-btn" type="button" data-close-add-friend aria-label="Close">×</button></div><p class="sheet-copy">A full Donezo invite link or the raw invite code both work.</p>${inviteMessage ? `<div class="form-message" role="alert">${esc(inviteMessage)}</div>` : ''}<form id="join-friend-form" class="form sheet-form"><label>Invite link or code<input name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="none" placeholder="Paste invite link or code" required autofocus></label><button class="btn primary full" type="submit">Add friend</button></form></section></div>`;
 }
 
+function friendRemovalSheet() {
+  if (!friendRemovalPerson) return '';
+  return `<div class="sheet-backdrop friend-removal-layer"><section class="sheet compact-sheet friend-removal-sheet" role="alertdialog" aria-modal="true" aria-label="Remove friend" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">FRIENDS</p><h2>Remove friend?</h2></div><button class="icon-btn" type="button" data-cancel-friend-removal aria-label="Keep friend">×</button></div><p class="sheet-copy">${esc(friendRemovalPerson.name || 'This friend')} will stop seeing future friend-only proofs. Historical proofs they were already allowed to see stay unchanged.</p><div class="confirm-actions"><button class="btn" type="button" data-cancel-friend-removal>Keep friend</button><button class="btn danger-soft" type="button" data-confirm-friend-removal>Remove friend</button></div></section></div>`;
+}
+
+function closeFriendRemovalSheet() {
+  friendRemovalPerson = null;
+  app.querySelector('.friend-removal-sheet')?.closest('.sheet-backdrop')?.remove();
+}
+
+async function handlePeopleRemoveFriend() {
+  const person = friendRemovalPerson;
+  if (!person?.id) return;
+  const previousSearch = peopleSearchResults;
+  const previousSuggestions = peopleSuggestions;
+  syncPeopleRelationship(person.id, 'available', null);
+  try {
+    await repo.removeFriend(person.id);
+    friendRemovalPerson = null;
+    app.querySelector('.friend-removal-sheet')?.closest('.sheet-backdrop')?.remove();
+    scheduleStateCacheWrite();
+    notify('Friend removed.');
+    refreshPeopleSheet();
+  } catch (error) {
+    peopleSearchResults = previousSearch;
+    peopleSuggestions = previousSuggestions;
+    syncPeopleRelationship(person.id, 'friend', null);
+    notify(readableError(error), 3600);
+    refreshPeopleSheet();
+  }
+}
+
 function peopleRelationshipAction(person) {
-  if (person.relationship === 'friend') return '<button class="btn small-btn people-relationship-state" type="button" disabled>Friends</button>';
-  if (person.relationship === 'outgoing') return '<button class="btn small-btn people-relationship-state" type="button" disabled>Requested</button>';
+  if (person.relationship === 'friend') return `<button class="btn small-btn people-relationship-state" type="button" data-people-remove="${esc(person.id)}">Friends</button>`;
+  if (person.relationship === 'outgoing') return `<button class="btn small-btn people-relationship-state" type="button" data-people-cancel="${esc(person.requestId)}" data-people-user="${esc(person.id)}">Requested</button>`;
   if (person.relationship === 'incoming') return `<button class="btn primary small-btn" type="button" data-people-accept="${esc(person.requestId)}" data-people-user="${esc(person.id)}">Accept</button>`;
   return `<button class="btn primary small-btn" type="button" data-people-add="${esc(person.id)}">Add</button>`;
 }
@@ -1257,6 +1290,8 @@ function closePeopleSheet() {
   peopleSuggestions = [];
   peopleSuggestionsLoading = false;
   discoveryProfilePerson = null;
+  friendRemovalPerson = null;
+  app.querySelector('.friend-removal-sheet')?.closest('.sheet-backdrop')?.remove();
   clearTimeout(peopleSearchDebounceTimer);
   peopleSearchDebounceTimer = null;
   peopleSearchRequestId += 1;
@@ -1297,8 +1332,11 @@ function patchPeopleRequestBadge() {
   button.insertAdjacentHTML('beforeend', `<span class="people-request-badge">${count > 9 ? '9+' : count}</span>`);
 }
 
-function syncPeopleRelationship(userId, relationship, requestId = null) {
-  const patch = (person) => person.id === userId ? { ...person, relationship, requestId: requestId ?? person.requestId ?? null } : person;
+function syncPeopleRelationship(userId, relationship, requestId) {
+  const hasRequestId = arguments.length >= 3;
+  const patch = (person) => person.id === userId
+    ? { ...person, relationship, requestId: hasRequestId ? requestId : (person.requestId ?? null) }
+    : person;
   peopleSearchResults = peopleSearchResults.map(patch);
   peopleSuggestions = peopleSuggestions.map(patch);
   if (discoveryProfilePerson?.id === userId) discoveryProfilePerson = patch(discoveryProfilePerson);
@@ -1315,6 +1353,24 @@ async function handlePeopleAdd(userId) {
     syncPeopleRelationship(userId, 'outgoing', request?.id || null);
     scheduleStateCacheWrite();
     notify('Friend request sent.');
+  } catch (error) {
+    peopleSearchResults = previousSearch;
+    peopleSuggestions = previousSuggestions;
+    notify(readableError(error), 3600);
+  }
+  refreshPeopleSheet();
+}
+
+async function handlePeopleCancel(requestId, userId) {
+  if (!requestId || !userId) return;
+  const previousSearch = peopleSearchResults;
+  const previousSuggestions = peopleSuggestions;
+  syncPeopleRelationship(userId, 'available', null);
+  refreshPeopleSheet();
+  try {
+    await repo.cancelFriendRequest(requestId);
+    scheduleStateCacheWrite();
+    notify('Friend request unsent.');
   } catch (error) {
     peopleSearchResults = previousSearch;
     peopleSuggestions = previousSuggestions;
@@ -1425,7 +1481,22 @@ function bindPeopleSheetActions() {
   sheet.querySelector('[data-add-friend-from-people]')?.addEventListener('click', openAddFriendFromPeople);
   sheet.querySelector('[name="peopleSearch"]')?.addEventListener('input', (event) => queuePeopleSearch(event.target.value));
   sheet.querySelectorAll('[data-people-add]').forEach((element) => { element.onclick = () => handlePeopleAdd(element.dataset.peopleAdd); });
+  sheet.querySelectorAll('[data-people-cancel]').forEach((element) => { element.onclick = () => handlePeopleCancel(element.dataset.peopleCancel, element.dataset.peopleUser); });
   sheet.querySelectorAll('[data-people-accept]').forEach((element) => { element.onclick = () => handlePeopleAccept(element.dataset.peopleAccept, element.dataset.peopleUser); });
+  sheet.querySelectorAll('[data-people-remove]').forEach((element) => { element.onclick = () => {
+    const rawFriend = friendList(getState()).find((item) => item.id === element.dataset.peopleRemove);
+    const person = [...peopleSearchResults, ...peopleSuggestions].find((item) => item.id === element.dataset.peopleRemove)
+      || (rawFriend ? { ...rawFriend, relationship: 'friend' } : null);
+    if (!person) return;
+    friendRemovalPerson = { ...person };
+    app.querySelector('.friend-removal-sheet')?.closest('.sheet-backdrop')?.remove();
+    app.querySelector('.app-shell')?.insertAdjacentHTML('beforeend', friendRemovalSheet());
+    const removalSheet = app.querySelector('.friend-removal-sheet');
+    removalSheet?.querySelectorAll('[data-cancel-friend-removal]').forEach((button) => { button.onclick = closeFriendRemovalSheet; });
+    removalSheet?.querySelector('[data-confirm-friend-removal]')?.addEventListener('click', () => { void handlePeopleRemoveFriend(); });
+    const removalBackdrop = removalSheet?.closest('.sheet-backdrop');
+    removalBackdrop?.addEventListener('click', (event) => { if (event.target === removalBackdrop) closeFriendRemovalSheet(); });
+  }; });
   sheet.querySelector('[data-people-discovery-back]')?.addEventListener('click', () => {
     discoveryProfilePerson = null;
     refreshPeopleSheet();
