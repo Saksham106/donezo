@@ -6,7 +6,7 @@ import { createLatestIntentCoordinator } from './optimistic.js';
 import { clearStateCache, readStateCache, writeStateCache } from './state-cache.js';
 import { buildAuthRedirectUrl, buildInviteLink, clearInviteParam, parseInviteParam, redeemInvite, validateInviteCode } from './invite.js';
 import { MAX_PROOF_BYTES, compressProofFile, createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, requiresPhotoProof, transitionProofReview, validateProofFile } from './proof.js';
-import { captureVideoFrame, composeDualProof, createDualProofState, dualCameraSupported, stopMediaStream, transitionDualProof } from './dual-proof.js';
+import { composeDualProof, createDualProofState, setDualProofFile } from './dual-proof.js';
 import {
   BADGE_CATALOG,
   accountabilityDateForMember,
@@ -63,8 +63,7 @@ let proofHabit = null;
 let proofReview = null;
 let proofPreparationId = 0;
 let dualProof = null;
-let dualCameraStream = null;
-let dualCameraRequestId = 0;
+let dualRoleChoice = null;
 let proofRejectCheckInId = null;
 let checkInUndoRequest = null;
 let selectedEmoji = '⚡';
@@ -220,7 +219,6 @@ requestPortraitLock();
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   requestPortraitLock();
-  void startDualCameraIfNeeded();
 });
 
 function readableError(error) {
@@ -1606,23 +1604,16 @@ function stakeSheet() {
   return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet stake-sheet" role="dialog" aria-modal="true" aria-label="Propose friendly stake" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><span class="eyebrow">FRIENDLY STAKE</span><h2>Make showing up matter.</h2></div><button class="icon-btn" type="button" data-close-social-sheet aria-label="Close">×</button></div><p class="sheet-copy">Everyone opts in. No money, betting, or retroactive rule changes.</p><form id="stake-form" class="form sheet-form"><label>Rule<select name="rule"><option value="all_succeed">Everyone succeeds</option><option value="winner">Winner gets the reward</option><option value="loser">Lowest score takes the consequence</option></select></label><label>Reward<input name="reward" maxlength="140" placeholder="Pick Friday dinner"></label><label>Consequence<input name="consequence" maxlength="140" placeholder="Post a funny selfie"></label><input type="hidden" name="startsOn" value="${period.start}"><input type="hidden" name="endsOn" value="${period.end}"><button class="btn primary full">Propose to squad</button></form></section></div>`;
 }
 
-function dualProofSheet() {
-  if (!dualProof || proofReview) return '';
-  const habit = getState()?.habits.find((item) => item.id === dualProof.habitId);
-  if (!habit) return '';
-  const mainStep = dualProof.phase === 'main';
-  const mode = dualProof.mode === 'dual' ? 'dual' : 'single';
-  const title = mainStep ? (mode === 'dual' ? 'Take main photo' : 'Take your proof') : 'Take your selfie';
-  const fallbackAttr = mainStep ? 'data-dual-fallback-main' : 'data-dual-fallback-selfie';
-  const modeSwitch = mainStep ? `<div class="camera-mode-switch" role="group" aria-label="Photo mode"><button class="${mode === 'single' ? 'active' : ''}" type="button" data-camera-mode="single" aria-pressed="${mode === 'single'}">Single</button><button class="${mode === 'dual' ? 'active' : ''}" type="button" data-camera-mode="dual" aria-pressed="${mode === 'dual'}">Dual</button></div>` : '';
-  return `<div class="sheet-backdrop"><section class="sheet dual-proof-sheet" role="dialog" aria-modal="true" aria-label="Photo proof camera" data-sheet><div class="sheet-handle"></div><div class="sheet-head camera-sheet-head"><h2>${esc(title)}</h2><button class="icon-btn" type="button" data-dual-cancel aria-label="Cancel proof">×</button></div>${modeSwitch}<div class="dual-camera-frame"><video data-dual-camera autoplay playsinline muted></video><div class="dual-camera-loading">Starting camera…</div></div>${dualProof.error ? `<div class="proof-error" role="alert"><p>${esc(dualProof.error)}</p></div>` : ''}<button class="btn primary full camera-capture-btn" type="button" data-dual-capture>${mainStep ? 'Capture' : 'Capture selfie'}</button><button class="camera-quality-fallback" type="button" ${fallbackAttr}><span class="camera-quality-icon" aria-hidden="true">📷</span><strong>Use iPhone camera for better quality</strong><span class="camera-quality-chevron" aria-hidden="true">›</span></button></section></div>`;
+function dualRoleChoiceSheet() {
+  if (!dualRoleChoice || !proofReview) return '';
+  return `<div class="sheet-backdrop proof-role-layer"><section class="sheet compact-sheet proof-role-sheet" role="dialog" aria-modal="true" aria-label="Choose first photo role" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">MAKE DUAL</p><h2>What was this photo?</h2></div><button class="icon-btn" type="button" data-dual-role-cancel aria-label="Cancel">×</button></div><div class="proof-role-options"><button class="btn full" type="button" data-dual-first-role="main">Main proof</button><button class="btn full" type="button" data-dual-first-role="selfie">Selfie</button></div></section></div>`;
 }
 
 function proofSourceSheet() {
   if (!proofHabit || proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofHabit);
   if (!habit) return '';
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take a photo, pick one from your library, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-donezo-camera>Use Donezo camera</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet proof-source-sheet" role="dialog" aria-modal="true" aria-label="Add proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">ADD PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-source-close aria-label="Close">×</button></div><p class="proof-sheet-copy">Take a photo, choose one, or paste a screenshot. Large photos are compressed automatically.</p><button class="btn primary full" type="button" data-proof-camera>Take photo</button><button class="btn full" type="button" data-proof-gallery>Choose from library</button><button class="btn full" type="button" data-proof-paste>Paste copied photo</button></section></div>`;
 }
 
 function proofReviewSheet() {
@@ -1631,111 +1622,42 @@ function proofReviewSheet() {
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
   const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
-  const cameraSession = dualProof?.habitId === habit.id && (dualProof?.mode === 'single' || Boolean(dualProof?.selfieFile));
-  const dual = cameraSession && dualProof?.mode === 'dual';
-  const replaceActions = dual
-    ? `<div class="proof-review-actions"><button class="btn" type="button" data-dual-retake-main ${uploading ? 'disabled' : ''}>Retake proof</button><button class="btn" type="button" data-dual-retake-selfie ${uploading ? 'disabled' : ''}>Retake selfie</button></div>`
-    : cameraSession
-      ? `<div class="proof-review-actions"><button class="btn" type="button" data-camera-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose from library</button></div>`
-      : `<div class="proof-review-actions"><button class="btn" type="button" data-proof-retake ${uploading ? 'disabled' : ''}>Retake</button><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button></div><button class="btn full proof-add-selfie-btn" type="button" data-proof-add-selfie ${uploading ? 'disabled' : ''}>Add selfie · make it Dual</button>`;
+  const dualReady = dualProof?.habitId === habit.id && Boolean(dualProof?.mainFile) && Boolean(dualProof?.selfieFile);
+  const replaceActions = dualReady
+    ? `<div class="proof-review-actions compact-proof-review-actions"><button class="btn" type="button" data-dual-replace-main ${uploading ? 'disabled' : ''}>Replace main</button><button class="btn" type="button" data-dual-replace-selfie ${uploading ? 'disabled' : ''}>Replace selfie</button></div>`
+    : `<div class="proof-review-actions compact-proof-review-actions"><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button><button class="btn proof-make-dual" type="button" data-proof-make-dual ${uploading ? 'disabled' : ''}>Make Dual</button></div>`;
   return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}${replaceActions}<div class="upload-status" aria-live="polite" data-upload-status>${uploading ? 'Uploading proof. Keep Donezo open.' : proofReview.status === 'error' ? 'Upload failed. Your photo is saved for retry.' : 'Ready to submit.'}</div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
 }
 
-function stopDualCamera() {
-  dualCameraRequestId += 1;
-  stopMediaStream(dualCameraStream);
-  dualCameraStream = null;
-}
-
-function openNativeCameraFallback(input) {
-  input?.click();
-}
-
 function clearDualProof() {
-  stopDualCamera();
   dualProof = null;
+  dualRoleChoice = null;
 }
 
-async function startDualCameraIfNeeded() {
-  if (!dualProof || proofReview || !['main', 'selfie'].includes(dualProof.phase)) return;
-  const video = app.querySelector('[data-dual-camera]');
-  if (!video || !dualCameraSupported()) return;
-  const liveTrack = dualCameraStream?.getVideoTracks?.().find((track) => track.readyState === 'live');
-  if (liveTrack) {
-    video.srcObject = dualCameraStream;
-    await video.play?.().catch(() => {});
-    video.parentElement?.querySelector('.dual-camera-loading')?.remove();
-    return;
-  }
-  const requestId = ++dualCameraRequestId;
-  stopMediaStream(dualCameraStream);
-  dualCameraStream = null;
-  try {
-    const facing = dualProof.phase === 'main' ? 'environment' : 'user';
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: facing },
-        width: { ideal: 1920 },
-        height: { ideal: 1440 },
-        aspectRatio: { ideal: 4 / 3 },
-      },
-      audio: false,
-    });
-    if (requestId !== dualCameraRequestId || !dualProof || !video.isConnected) {
-      stopMediaStream(stream);
-      return;
-    }
-    dualCameraStream = stream;
-    video.srcObject = stream;
-    await video.play?.().catch(() => {});
-    video.parentElement?.querySelector('.dual-camera-loading')?.remove();
-  } catch (error) {
-    if (requestId !== dualCameraRequestId || !dualProof) return;
-    dualProof = transitionDualProof(dualProof, { type: 'failed', error: 'Camera access failed. Use the phone camera fallback below.' });
-    render();
-  }
-}
-
-async function finishDualSelection(file, side) {
-  if (!dualProof || !file) return;
+async function handleNativeDualInput(input, role) {
+  const file = input?.files?.[0];
+  if (input) input.value = '';
+  if (!file) return false;
+  if (!dualProof || !['main', 'selfie'].includes(role)) return false;
   const validation = validateProofFile(file);
   if (!validation.valid) {
     notify(validation.error, 3400);
-    return;
-  }
-  const prepared = file.size > MAX_PROOF_BYTES ? await compressProofFile(file) : file;
-  dualProof = transitionDualProof(dualProof, { type: side === 'main' ? 'main_selected' : 'selfie_selected', file: prepared });
-  stopDualCamera();
-  if (dualProof.phase === 'review') {
-    try {
-      const output = dualProof.mode === 'dual'
-        ? await composeDualProof(dualProof.mainFile, dualProof.selfieFile)
-        : dualProof.mainFile;
-      if (!output) throw new Error('Take a proof photo first');
-      const previewUrl = URL.createObjectURL(output);
-      if (proofReview?.previewUrl) URL.revokeObjectURL(proofReview.previewUrl);
-      proofReview = createProofReviewState({ file: output, habitId: dualProof.habitId, previewUrl });
-    } catch (error) {
-      dualProof = transitionDualProof(dualProof, { type: 'failed', error: readableError(error) });
-    }
-  }
-  render();
-}
-
-async function captureDualCamera() {
-  if (!dualProof) return;
-  const video = app.querySelector('[data-dual-camera]');
-  if (!video || !dualCameraStream) {
-    (dualProof.phase === 'main' ? dualProofMainInput : proofSelfieInput)?.click();
-    return;
+    return false;
   }
   try {
-    const side = dualProof.phase;
-    const file = await captureVideoFrame(video, { facing: side === 'main' ? 'environment' : 'user' });
-    await finishDualSelection(file, side);
-  } catch (error) {
-    dualProof = transitionDualProof(dualProof, { type: 'failed', error: readableError(error) });
+    const prepared = file.size > MAX_PROOF_BYTES ? await compressProofFile(file) : file;
+    const nextDual = setDualProofFile(dualProof, role, prepared);
+    dualProof = nextDual;
+    if (!nextDual.mainFile || !nextDual.selfieFile) return true;
+    const output = await composeDualProof(nextDual.mainFile, nextDual.selfieFile);
+    const previewUrl = URL.createObjectURL(output);
+    if (proofReview?.previewUrl) URL.revokeObjectURL(proofReview.previewUrl);
+    proofReview = createProofReviewState({ file: output, habitId: nextDual.habitId, previewUrl });
     render();
+    return true;
+  } catch (error) {
+    notify(readableError(error), 4200);
+    return false;
   }
 }
 
@@ -1894,31 +1816,35 @@ function bindProofThumbnails() {
 
 function bindProofActions() {
   app.querySelectorAll('[data-proof-camera]').forEach((element) => { element.onclick = () => chooseProofInput(proofInput); });
-  app.querySelectorAll('[data-proof-donezo-camera]').forEach((element) => { element.onclick = () => {
-    if (!proofHabit) return;
-    dualProof = createDualProofState(proofHabit, 'single');
-    proofHabit = null;
-    render();
-  }; });
   app.querySelectorAll('[data-proof-gallery]').forEach((element) => { element.onclick = () => chooseProofInput(proofGalleryInput); });
   app.querySelectorAll('[data-proof-paste]').forEach((element) => { element.onclick = handlePasteProof; });
   app.querySelectorAll('[data-proof-source-close]').forEach((element) => { element.onclick = () => { proofHabit = null; render(); }; });
-  app.querySelectorAll('[data-proof-retake]').forEach((element) => { element.onclick = () => replaceProofSelection(proofInput); });
-  app.querySelectorAll('[data-proof-add-selfie]').forEach((element) => { element.onclick = () => {
-    if (!proofReview) return;
-    const habitId = proofReview.habitId;
-    const mainFile = proofReview.file;
-    dualProof = { ...createDualProofState(habitId, 'dual'), phase: 'selfie', mainFile };
-    proofSelfieInput?.click();
-  }; });
   app.querySelectorAll('[data-proof-choose]').forEach((element) => { element.onclick = () => {
     if (dualProof?.habitId === proofReview?.habitId) clearDualProof();
     replaceProofSelection(proofGalleryInput);
   }; });
+  app.querySelectorAll('[data-proof-make-dual]').forEach((element) => { element.onclick = () => {
+    if (!proofReview) return;
+    dualRoleChoice = { habitId: proofReview.habitId, firstFile: proofReview.file };
+    render();
+  }; });
+  app.querySelectorAll('[data-dual-first-role]').forEach((element) => { element.onclick = () => {
+    if (!dualRoleChoice || !proofReview) return;
+    const role = element.dataset.dualFirstRole;
+    if (!['main', 'selfie'].includes(role)) return;
+    const { habitId, firstFile } = dualRoleChoice;
+    dualProof = createDualProofState(habitId, firstFile, role);
+    dualRoleChoice = null;
+    const input = role === 'main' ? proofSelfieInput : dualProofMainInput;
+    input?.click();
+    queueMicrotask(() => render());
+  }; });
+  app.querySelectorAll('[data-dual-role-cancel]').forEach((element) => { element.onclick = () => { dualRoleChoice = null; render(); }; });
+  app.querySelectorAll('[data-dual-replace-main]').forEach((element) => { element.onclick = () => dualProofMainInput?.click(); });
+  app.querySelectorAll('[data-dual-replace-selfie]').forEach((element) => { element.onclick = () => proofSelfieInput?.click(); });
   app.querySelectorAll('[data-proof-review-close]').forEach((element) => { element.onclick = dismissProofReview; });
   app.querySelectorAll('[data-proof-submit]').forEach((element) => { element.onclick = handleProofSubmit; });
   bindProofThumbnails();
-  void startDualCameraIfNeeded();
 }
 
 async function openFriendProfile(userId) {
@@ -1996,7 +1922,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofSourceSheet()}${dualProofSheet()}${proofReviewSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${dualRoleChoiceSheet()}${proofSourceSheet()}${proofReviewSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;
@@ -2014,7 +1940,7 @@ function render() {
   app.querySelectorAll('[data-friends]').forEach((element) => { element.onclick = () => { setActiveTab('friends'); closeSheets(); render(); }; });
   app.querySelectorAll('[data-select-squad]').forEach((element) => { element.onclick = () => handleSquadSelect(element.dataset.selectSquad); });
   app.querySelectorAll('[data-habit]').forEach((element) => { element.onclick = () => handleHabit(element.dataset.habit); });
-  app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { dualProof = createDualProofState(element.dataset.quickProof, 'single'); proofHabit = null; render(); }; });
+  app.querySelectorAll('[data-quick-proof]').forEach((element) => { element.onclick = () => { proofHabit = element.dataset.quickProof; clearDualProof(); proofInput?.click(); }; });
   app.querySelectorAll('[data-reaction]').forEach((element) => { element.onclick = () => handleReaction(element.dataset.reaction, element.dataset.reactionEmoji); });
   app.querySelectorAll('[data-comment-open]').forEach((element) => { element.onclick = () => openCommentSheet(element.dataset.commentOpen); });
   app.querySelectorAll('[data-delete-comment]').forEach((element) => { element.onclick = () => handleDeleteComment(element.dataset.deleteComment); });
@@ -3443,13 +3369,5 @@ supabase.auth.onAuthStateChange((event, nextSession) => {
   queueMicrotask(() => boot(nextSession));
 });
 
-dualProofMainInput?.addEventListener('change', async () => {
-  const file = dualProofMainInput.files?.[0];
-  dualProofMainInput.value = '';
-  if (file) await finishDualSelection(file, 'main');
-});
-proofSelfieInput?.addEventListener('change', async () => {
-  const file = proofSelfieInput.files?.[0];
-  proofSelfieInput.value = '';
-  if (file) await finishDualSelection(file, 'selfie');
-});
+dualProofMainInput?.addEventListener('change', () => handleNativeDualInput(dualProofMainInput, 'main'));
+proofSelfieInput?.addEventListener('change', () => handleNativeDualInput(proofSelfieInput, 'selfie'));
