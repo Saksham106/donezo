@@ -1345,6 +1345,7 @@ async function handlePeopleAdd(userId) {
   if (!userId) return;
   const previousSearch = peopleSearchResults;
   const previousSuggestions = peopleSuggestions;
+  const previousDiscovery = discoveryProfilePerson;
   syncPeopleRelationship(userId, 'outgoing');
   refreshPeopleSheet();
   try {
@@ -1355,6 +1356,7 @@ async function handlePeopleAdd(userId) {
   } catch (error) {
     peopleSearchResults = previousSearch;
     peopleSuggestions = previousSuggestions;
+    discoveryProfilePerson = previousDiscovery;
     notify(readableError(error), 3600);
   }
   refreshPeopleSheet();
@@ -1364,6 +1366,7 @@ async function handlePeopleCancel(requestId, userId) {
   if (!requestId || !userId) return;
   const previousSearch = peopleSearchResults;
   const previousSuggestions = peopleSuggestions;
+  const previousDiscovery = discoveryProfilePerson;
   syncPeopleRelationship(userId, 'available', null);
   refreshPeopleSheet();
   try {
@@ -1373,6 +1376,7 @@ async function handlePeopleCancel(requestId, userId) {
   } catch (error) {
     peopleSearchResults = previousSearch;
     peopleSuggestions = previousSuggestions;
+    discoveryProfilePerson = previousDiscovery;
     notify(readableError(error), 3600);
   }
   refreshPeopleSheet();
@@ -1382,6 +1386,7 @@ async function handlePeopleAccept(requestId, userId) {
   if (!requestId) return;
   const previousSearch = peopleSearchResults;
   const previousSuggestions = peopleSuggestions;
+  const previousDiscovery = discoveryProfilePerson;
   if (userId) syncPeopleRelationship(userId, 'friend', null);
   refreshPeopleSheet();
   try {
@@ -1393,6 +1398,7 @@ async function handlePeopleAccept(requestId, userId) {
   } catch (error) {
     peopleSearchResults = previousSearch;
     peopleSuggestions = previousSuggestions;
+    discoveryProfilePerson = previousDiscovery;
     notify(readableError(error), 3600);
   }
   refreshPeopleSheet();
