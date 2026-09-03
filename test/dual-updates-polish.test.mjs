@@ -17,7 +17,7 @@ function section(source, start, end) {
 test('Dual is an upgrade from native proof review rather than a source-picker mode', () => {
   const picker = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
   const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
-  const role = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
+  const role = section(app, 'function dualRoleChoiceControls()', 'function proofSourceSheet()');
   assert.doesNotMatch(picker, /data-proof-dual|Dual photo/);
   assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
   assert.match(role, /data-dual-first-role="main"/);
