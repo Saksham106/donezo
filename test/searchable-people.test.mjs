@@ -6,6 +6,8 @@ import { createMemoryRepository } from '../src/store.js';
 const migrationUrl = new URL('../supabase/migrations/20260902195000_searchable_people.sql', import.meta.url);
 const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, 'utf8') : '';
 const store = readFileSync(new URL('../src/store.js', import.meta.url), 'utf8');
+const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+const social = readFileSync(new URL('../social.css', import.meta.url), 'utf8');
 
 test('searchable People migration makes usernames required and safe', () => {
   assert.match(migration, /alter table public\.profiles[\s\S]*username[\s\S]*not null/i);
@@ -49,6 +51,14 @@ function functionBlock(source, name, nextMarker = '\n  async function ') {
   let end = source.indexOf(nextMarker, start + 1);
   if (end < 0) end = source.length;
   return source.slice(start, end);
+}
+
+function section(source, start, end) {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  assert.ok(from >= 0, `missing start: ${start}`);
+  assert.ok(to > from, `missing end: ${end}`);
+  return source.slice(from, to);
 }
 
 test('production repository exposes transient discovery RPC methods without full load', () => {
@@ -120,4 +130,53 @@ test('memory username setter normalizes self and rejects reserved or taken usern
   assert.equal(repo.getState().profiles.find((person) => person.id === 'me').username, 'me.new');
   assert.throws(() => repo.setMyUsername('admin'), /reserved/i);
   assert.throws(() => repo.setMyUsername('bobby'), /taken/i);
+});
+
+test('People is a searchable full-height overlay with request badge and no new bottom tab', () => {
+  const friends = section(app, 'function friendsScreen()', 'function challengeProgress');
+  const people = section(app, 'function peopleSheet()', 'function proofRejectSheet');
+  const nav = section(app, 'function nav()', 'function openCheckInAction');
+  assert.match(friends, /data-people-open/);
+  assert.match(friends, /people-request-badge/);
+  assert.match(people, /name="peopleSearch"/);
+  assert.match(people, /placeholder="Search people"/);
+  assert.doesNotMatch(people, /autofocus/);
+  assert.match(social, /\.people-sheet[\s\S]{0,500}height:/);
+  assert.doesNotMatch(nav, /People/);
+});
+
+test('default People view orders Requests Suggestions Friends and preserves invite fallbacks', () => {
+  const people = section(app, 'function peopleSheet()', 'function proofRejectSheet');
+  const requests = people.indexOf('Requests');
+  const suggested = people.indexOf('Suggested for you');
+  const friends = people.indexOf('Friends');
+  assert.ok(requests >= 0 && suggested > requests && friends > suggested);
+  assert.match(people, /Have an invite code/);
+  assert.match(people, /data-invite-from-people/);
+  assert.match(people, /data-add-friend-from-people/);
+});
+
+test('People search is 2-character debounced latest-query-wins', () => {
+  assert.match(app, /peopleSearchRequestId/);
+  const search = section(app, 'function queuePeopleSearch(', 'async function loadPeopleSuggestions(');
+  assert.match(search, /normalized\.length\s*<\s*2/);
+  assert.match(search, /250/);
+  assert.match(search, /\+\+peopleSearchRequestId/);
+  assert.match(search, /requestId\s*!==\s*peopleSearchRequestId/);
+  assert.match(search, /repo\.searchPeople/);
+});
+
+test('opening and refreshing People stays overlay-local instead of rebuilding Friends', () => {
+  const helpers = section(app, 'function closePeopleSheet()', 'function proofRejectSheet');
+  assert.match(helpers, /function refreshPeopleSheet\(/);
+  assert.match(helpers, /function openPeopleSheet\(/);
+  assert.match(helpers, /insertAdjacentHTML\(['\"]beforeend['\"],\s*peopleSheet\(\)\)/);
+  assert.match(helpers, /bindPeopleSheetActions\(\)/);
+  assert.doesNotMatch(helpers, /\brender\(\)/);
+});
+
+test('People rows expose Add Requested Accept Friends relationship states', () => {
+  const people = section(app, 'function peopleRelationshipAction(', 'function peopleSheet()');
+  for (const label of ['Add', 'Requested', 'Accept', 'Friends']) assert.match(people, new RegExp(`>${label}<|${label}`));
+  assert.match(people, /mutual/i);
 });
