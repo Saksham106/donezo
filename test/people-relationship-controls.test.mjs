@@ -30,8 +30,19 @@ test('outgoing cancellation is optimistic, clears request id, and rolls back on 
   assert.match(cancel, /repo\.cancelFriendRequest\(requestId\)/);
   assert.match(cancel, /previousSearch/);
   assert.match(cancel, /previousSuggestions/);
+  assert.match(cancel, /previousDiscovery/);
+  assert.match(cancel, /discoveryProfilePerson = previousDiscovery/);
   assert.match(cancel, /Friend request unsent/);
   assert.doesNotMatch(cancel, /\brender\(\)/);
+});
+
+test('optimistic People relationship mutations restore an open discovery profile on failure', () => {
+  const add = section(app, 'async function handlePeopleAdd(', 'async function handlePeopleCancel(');
+  const accept = section(app, 'async function handlePeopleAccept(', 'function queuePeopleSearch(');
+  for (const handler of [add, accept]) {
+    assert.match(handler, /const previousDiscovery = discoveryProfilePerson/);
+    assert.match(handler, /discoveryProfilePerson = previousDiscovery/);
+  }
 });
 
 test('Friends opens a small Remove friend confirmation instead of navigating to profile', () => {
