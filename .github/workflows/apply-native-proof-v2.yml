@@ -34,3 +34,4 @@ jobs:
           git add src/app.js src/dual-proof.js social.css test
           git commit -m "feat: simplify native proof capture [native-proof-v2-applied]"
           git push origin HEAD:feat/proof-friends-polish-2026-09-02
+      # retry after updating intentionally replaced legacy camera tests
