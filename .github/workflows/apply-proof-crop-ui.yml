@@ -34,4 +34,4 @@ jobs:
           git add src/app.js social.css test
           git commit -m "feat: crop tall proofs before upload [proof-crop-ui-applied]"
           git push origin HEAD:feat/proof-friends-polish-2026-09-02
-      # final rerun after distinguishing finalized retry from fresh submit
+      # rerun after updating legacy upload safety contract to finalized artifacts
