@@ -15,11 +15,14 @@ function section(source, start, end) {
 
 test('proof cards show display name plus relative and exact time without username or streak', () => {
   const card = section(app, 'function activityCard(', 'function personProofCarousel');
-  assert.match(card, /proof-card-title/);
-  assert.match(card, /actor\?\.name|actorName/);
-  assert.match(card, /formatWhen\(activity\.when\)/);
-  assert.match(card, /formatExactTime\(activity\.when\)/);
-  const proofBranch = card.slice(card.indexOf('if (activity.proofPath)'));
+  const proofStart = card.indexOf('if (activity.proofPath)');
+  const fallbackStart = card.indexOf('\n  return `<article class="activity ${activity.invalid', proofStart);
+  assert.ok(proofStart >= 0 && fallbackStart > proofStart, 'proof branch must be independently inspectable');
+  const proofBranch = card.slice(proofStart, fallbackStart);
+  assert.match(proofBranch, /proof-card-title/);
+  assert.match(proofBranch, /actor\?\.name|actorName/);
+  assert.match(proofBranch, /formatWhen\(activity\.when\)/);
+  assert.match(proofBranch, /formatExactTime\(activity\.when\)/);
   assert.doesNotMatch(proofBranch, /actor\?\.handle|actorHandle/);
   assert.doesNotMatch(proofBranch, /activity\.streak/);
   assert.doesNotMatch(proofBranch, /mine \? 'You'/);
