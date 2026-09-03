@@ -25,7 +25,7 @@ test('native phone camera is the primary Take photo path with no Donezo camera o
 
 test('a native single photo can be upgraded to Dual in either role', () => {
   const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
-  const role = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
+  const role = section(app, 'function dualRoleChoiceControls()', 'function proofSourceSheet()');
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
   assert.match(review, /data-proof-make-dual/);
   assert.match(review, /Make Dual/);

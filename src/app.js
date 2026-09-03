@@ -1733,9 +1733,9 @@ async function handleUseProofCrop() {
   }
 }
 
-function dualRoleChoiceSheet() {
+function dualRoleChoiceControls() {
   if (!dualRoleChoice || !proofReview) return '';
-  return `<div class="sheet-backdrop proof-role-layer"><section class="sheet compact-sheet proof-role-sheet" role="dialog" aria-modal="true" aria-label="Choose first photo role" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">MAKE DUAL</p><h2>What was this photo?</h2></div><button class="icon-btn" type="button" data-dual-role-cancel aria-label="Cancel">×</button></div><div class="proof-role-options"><button class="btn full" type="button" data-dual-first-role="main">Main proof</button><button class="btn full" type="button" data-dual-first-role="selfie">Selfie</button></div></section></div>`;
+  return `<section class="proof-role-step" role="group" aria-label="Choose first photo role"><div class="proof-role-copy"><p class="eyebrow">MAKE DUAL</p><h3>What was this photo?</h3><small>We’ll open the other camera next.</small></div><div class="proof-role-options"><button class="btn full" type="button" data-dual-first-role="main">Main proof</button><button class="btn full" type="button" data-dual-first-role="selfie">Selfie</button></div><button class="text-btn proof-role-back" type="button" data-dual-role-cancel>Back</button></section>`;
 }
 
 function proofSourceSheet() {
@@ -1746,16 +1746,20 @@ function proofSourceSheet() {
 }
 
 function proofReviewSheet() {
-  if (!proofReview || dualRoleChoice) return '';
+  if (!proofReview) return '';
   const habit = getState()?.habits.find((item) => item.id === proofReview.habitId);
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
   const submitLabel = uploading ? 'Uploading…' : proofReview.status === 'error' ? 'Retry proof' : 'Submit proof';
+  const choosingDualRole = Boolean(dualRoleChoice);
   const dualReady = dualProof?.habitId === habit.id && Boolean(dualProof?.mainFile) && Boolean(dualProof?.selfieFile);
-  const replaceActions = dualReady
-    ? `<div class="proof-review-actions compact-proof-review-actions"><button class="btn" type="button" data-dual-replace-main ${uploading ? 'disabled' : ''}>Replace main</button><button class="btn" type="button" data-dual-replace-selfie ${uploading ? 'disabled' : ''}>Replace selfie</button></div>`
-    : `<div class="proof-review-actions compact-proof-review-actions"><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button><button class="btn proof-make-dual" type="button" data-proof-make-dual ${uploading ? 'disabled' : ''}>Make Dual</button></div>`;
-  return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}${replaceActions}<div class="upload-status" aria-live="polite" data-upload-status>${uploading ? 'Uploading proof. Keep Donezo open.' : proofReview.status === 'error' ? 'Upload failed. Your photo is saved for retry.' : 'Ready to submit.'}</div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button></section></div>`;
+  const reviewActions = choosingDualRole
+    ? dualRoleChoiceControls()
+    : dualReady
+      ? `<div class="proof-review-actions compact-proof-review-actions"><button class="btn" type="button" data-dual-replace-main ${uploading ? 'disabled' : ''}>Replace main</button><button class="btn" type="button" data-dual-replace-selfie ${uploading ? 'disabled' : ''}>Replace selfie</button></div>`
+      : `<div class="proof-review-actions compact-proof-review-actions"><button class="btn" type="button" data-proof-choose ${uploading ? 'disabled' : ''}>Choose another</button><button class="btn proof-make-dual" type="button" data-proof-make-dual ${uploading ? 'disabled' : ''}>Make Dual</button></div>`;
+  const submitControls = choosingDualRole ? '' : `<div class="upload-status" aria-live="polite" data-upload-status>${uploading ? 'Uploading proof. Keep Donezo open.' : proofReview.status === 'error' ? 'Upload failed. Your photo is saved for retry.' : 'Ready to submit.'}</div><button class="btn primary full proof-submit-btn" type="button" data-proof-submit ${uploading ? 'disabled aria-busy="true"' : ''}>${submitLabel}</button><button class="text-btn" type="button" data-proof-review-close ${uploading ? 'disabled' : ''}>Cancel</button>`;
+  return `<div class="sheet-backdrop"><section class="sheet proof-review-sheet" role="dialog" aria-modal="true" aria-label="Review proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">REVIEW PROOF</p><h2>${esc(habit.emoji)} ${esc(habit.title)}</h2></div><button class="icon-btn" type="button" data-proof-review-close aria-label="Cancel proof" ${uploading ? 'disabled' : ''}>×</button></div><div class="proof-preview-frame"><img src="${esc(proofReview.previewUrl)}" alt="Selected proof for ${esc(habit.title)}"></div><div class="proof-file-meta"><strong>Looks usable?</strong><span>${esc(formatProofFileSize(proofReview.file.size))} · max 4 MB</span></div>${proofReview.error ? `<div class="proof-error" role="alert"><strong>That didn’t upload.</strong><p>${esc(proofReview.error)} Your photo is still here, so you can retry.</p></div>` : ''}${reviewActions}${submitControls}</section></div>`;
 }
 
 function clearDualProof() {
@@ -2026,6 +2030,7 @@ function bindProofActions() {
     if (!proofReview) return;
     dualRoleChoice = { habitId: proofReview.habitId, firstFile: proofReview.file };
     render();
+    app.querySelector('[data-dual-first-role]')?.focus();
   }; });
   app.querySelectorAll('[data-dual-first-role]').forEach((element) => { element.onclick = () => {
     if (!dualRoleChoice || !proofReview) return;
@@ -2038,7 +2043,11 @@ function bindProofActions() {
     input?.click();
     queueMicrotask(() => render());
   }; });
-  app.querySelectorAll('[data-dual-role-cancel]').forEach((element) => { element.onclick = () => { dualRoleChoice = null; render(); }; });
+  app.querySelectorAll('[data-dual-role-cancel]').forEach((element) => { element.onclick = () => {
+    dualRoleChoice = null;
+    render();
+    app.querySelector('[data-proof-make-dual]')?.focus();
+  }; });
   app.querySelectorAll('[data-dual-replace-main]').forEach((element) => { element.onclick = () => dualProofMainInput?.click(); });
   app.querySelectorAll('[data-dual-replace-selfie]').forEach((element) => { element.onclick = () => proofSelfieInput?.click(); });
   app.querySelectorAll('[data-proof-review-close]').forEach((element) => { element.onclick = dismissProofReview; });
@@ -2121,7 +2130,7 @@ function render() {
     return;
   }
   const screens = { today: todayScreen, friends: friendsScreen, league: leagueScreen, me: meScreen };
-  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofCropSheet()}${dualRoleChoiceSheet()}${proofSourceSheet()}${proofReviewSheet()}</div>`;
+  app.innerHTML = `<div class="app-shell">${topbar()}${offlineIndicator()}${mutationIndicator()}<main class="content-scroll" id="content-scroll">${screens[tab]()}</main>${pwaUpdateBanner()}${notificationOptInBanner()}${nav()}${habitSheet()}${settingsSheet()}${nudgeComposerSheet()}${nudgeInboxSheet()}${peopleSheet()}${inviteSheet()}${addFriendSheet()}${checkInUndoSheet()}${proofRejectSheet()}${commentSheet()}${batonSheet()}${challengeInfoSheet()}${badgeCabinet()}${monthlyWrappedSheet()}${friendProfileSheet()}${recoverySheet()}${challengeSheet()}${stakeSheet()}${proofCropSheet()}${proofSourceSheet()}${proofReviewSheet()}</div>`;
   const contentScroller = app.querySelector('#content-scroll');
   if (contentScroller) {
     contentScroller.scrollTop = screenScroll[tab] || 0;

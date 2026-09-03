@@ -36,22 +36,35 @@ test('single proof review uses one compact Choose another and Make Dual row', ()
   assert.match(css, /\.proof-make-dual[^}]*background:/);
 });
 
-test('Make Dual asks what the first photo was and opens the opposite native camera', () => {
+test('Make Dual asks what the first photo was inside the existing review and opens the opposite native camera', () => {
   assert.match(app, /let dualRoleChoice = null/);
-  const roleSheet = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
-  assert.match(roleSheet, /What was this photo\?/);
-  assert.match(roleSheet, />Main proof</);
-  assert.match(roleSheet, />Selfie</);
+  const roleControls = section(app, 'function dualRoleChoiceControls()', 'function proofSourceSheet()');
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  assert.match(roleControls, /What was this photo\?/);
+  assert.match(roleControls, />Main proof</);
+  assert.match(roleControls, />Selfie</);
+  assert.match(roleControls, /role="group"[^>]*aria-label="Choose first photo role"/);
+  assert.match(review, /dualRoleChoiceControls\(\)/);
+  assert.match(review, /proof-preview-frame[^]*\$\{reviewActions\}/);
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
   assert.match(bindings, /data-proof-make-dual/);
   assert.match(bindings, /data-dual-first-role/);
+  assert.match(bindings, /querySelector\('\[data-dual-first-role\]'\)\?\.focus\(\)/);
+  assert.match(bindings, /querySelector\('\[data-proof-make-dual\]'\)\?\.focus\(\)/);
   assert.match(bindings, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
   assert.match(bindings, /input\?\.click\(\)/);
 });
 
-test('role choice replaces the review sheet instead of rendering behind it', () => {
+test('role choice swaps only the review controls while preserving the photo', () => {
   const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
-  assert.match(review, /if \(!proofReview \|\| dualRoleChoice\) return '';/);
+  assert.match(review, /if \(!proofReview\) return '';/);
+  assert.doesNotMatch(review, /if \(!proofReview \|\| dualRoleChoice\)/);
+  assert.match(review, /const choosingDualRole = Boolean\(dualRoleChoice\)/);
+  assert.match(review, /choosingDualRole\s*\? dualRoleChoiceControls\(\)/);
+  assert.match(review, /choosingDualRole\s*\?\s*''\s*:/);
+  assert.match(css, /\.proof-role-step\{[^}]*animation:proof-role-step-in/);
+  assert.match(css, /@keyframes proof-role-step-in\{[^}]*translateX/);
+  assert.match(css, /prefers-reduced-motion:reduce[^]*\.proof-role-step\{animation:none/);
 });
 
 test('dual proof state supports Main-first and Selfie-first capture order', async () => {

@@ -17,7 +17,7 @@ test('tall proofs use a fixed 3:4 crop sheet before upload', () => {
   assert.match(app, /let proofCrop = null/);
   assert.match(app, /inspectProofFile/);
   assert.match(app, /cropProofFile/);
-  const sheet = section(app, 'function proofCropSheet()', 'function dualRoleChoiceSheet()');
+  const sheet = section(app, 'function proofCropSheet()', 'function dualRoleChoiceControls()');
   assert.match(sheet, /data-proof-crop-frame/);
   assert.match(sheet, /data-proof-crop-image/);
   assert.match(sheet, /data-proof-crop-use[^>]*>Use crop/);
@@ -48,7 +48,7 @@ test('fresh submit inspects the main proof and pauses tall images before central
 });
 
 test('crop confirmation passes only the final cropped or recomposed artifact to upload', () => {
-  const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceSheet()');
+  const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceControls()');
   assert.match(useCrop, /cropProofFile\(crop\.sourceFile, crop\.position\)/);
   assert.match(useCrop, /crop\.dual[^]*composeDualProof\(cropped, crop\.selfieFile\)/);
   assert.match(useCrop, /uploadProofArtifact\(crop\.review, artifact\)/);
@@ -58,7 +58,7 @@ test('crop confirmation passes only the final cropped or recomposed artifact to 
 });
 
 test('cropped single proofs are compressed and validated before centralized upload', () => {
-  const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceSheet()');
+  const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceControls()');
   assert.match(useCrop, /cropped\.size > MAX_PROOF_BYTES[^]*compressProofFile\(cropped\)/);
   assert.match(useCrop, /validateProofFile\(artifact\)/);
   assert.ok(useCrop.indexOf('validateProofFile(artifact)') < useCrop.indexOf('uploadProofArtifact(crop.review, artifact)'));

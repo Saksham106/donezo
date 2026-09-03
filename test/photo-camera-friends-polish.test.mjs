@@ -39,7 +39,7 @@ test('Dual is a native review upgrade rather than a separate proof source', () =
 
   const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
   assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
-  const role = section(app, 'function dualRoleChoiceSheet()', 'function proofSourceSheet()');
+  const role = section(app, 'function dualRoleChoiceControls()', 'function proofSourceSheet()');
   assert.match(role, /Main proof/);
   assert.match(role, /Selfie/);
 });
