@@ -151,7 +151,7 @@ test('app surfaces updates without sacrificing unsaved mobile drafts', async () 
   assert.match(social, /\.pwa-update-banner/);
 });
 
-test('ships the controller entry point and a versioned network-first shell worker', async () => {
+test('ships the controller entry point and content-versioned network-first shell worker', async () => {
   const [html, build, worker] = await Promise.all([
     readFile(new URL('../index.html', import.meta.url), 'utf8'),
     readFile(new URL('../scripts/build.mjs', import.meta.url), 'utf8'),
@@ -161,7 +161,11 @@ test('ships the controller entry point and a versioned network-first shell worke
   assert.match(html, /name="mobile-web-app-capable" content="yes"/);
   assert.match(html, /<script type="module" src="\/pwa\.js"><\/script>/);
   assert.match(build, /cp\('src\/pwa\.js', 'dist\/pwa\.js'\)/);
-  assert.match(worker, /donezo-shell-v27/);
+  assert.match(worker, /donezo-shell-__BUILD_ID__/);
+  assert.match(build, /createHash\('sha256'\)/);
+  assert.match(build, /replace\('__BUILD_ID__', buildId\)/);
+  assert.match(build, /writeFile\('dist\/sw\.js'/);
+  assert.doesNotMatch(worker, /donezo-shell-v\d+/);
   assert.match(worker, /SKIP_WAITING/);
   assert.match(worker, /request\.mode === 'navigate'/);
   assert.match(worker, /cache:\s*'no-store'/);

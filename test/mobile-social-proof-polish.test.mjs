@@ -54,7 +54,7 @@ test('standard bottom sheets initialize reusable swipe-down dismissal', () => {
   assert.match(social, /\.sheet\.is-dragging|\.sheet-backdrop\.is-dragging/);
 });
 
-test('PWA shell cache advances beyond v23', () => {
+test('PWA shell cache uses the build fingerprint placeholder', () => {
   assert.doesNotMatch(sw, /donezo-shell-v23/);
-  assert.match(sw, /donezo-shell-v27/);
+  assert.match(sw, /donezo-shell-__BUILD_ID__/);
 });
