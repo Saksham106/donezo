@@ -27,7 +27,7 @@ test('proof source is native-only and removes the Donezo live camera surface', (
 });
 
 test('single proof review uses one compact Choose another and Make Dual row', () => {
-  const review = section(app, 'function proofReviewSheet()', 'function stopDualCamera()');
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
   assert.match(review, /data-proof-choose[^>]*>Choose another/);
   assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
   assert.match(review, /compact-proof-review-actions/);
@@ -45,8 +45,8 @@ test('Make Dual asks what the first photo was and opens the opposite native came
   const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
   assert.match(bindings, /data-proof-make-dual/);
   assert.match(bindings, /data-dual-first-role/);
-  assert.match(bindings, /proofSelfieInput\.click\(\)/);
-  assert.match(bindings, /dualProofMainInput\.click\(\)/);
+  assert.match(bindings, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
+  assert.match(bindings, /input\?\.click\(\)/);
 });
 
 test('dual proof state supports Main-first and Selfie-first capture order', async () => {
