@@ -95,6 +95,7 @@ let peopleSuggestionsLoading = false;
 let peopleSearchRequestId = 0;
 let peopleSuggestionsRequestId = 0;
 let peopleSearchDebounceTimer = null;
+let discoveryProfilePerson = null;
 const proofThumbnailUrls = new Map();
 let commentCheckInId = null;
 let batonSheetOpen = false;
@@ -1112,7 +1113,7 @@ function settingsSheet() {
   const views = {
     menu: `<div class="settings-menu"><button type="button" data-settings-view="profile"><span class="settings-menu-icon">☺</span><span><strong>Profile & app</strong><small>Name, install help, account</small></span><b>›</b></button><button type="button" data-settings-view="appearance"><span class="settings-menu-icon">◐</span><span><strong>Appearance</strong><small>System, light, or dark</small></span><b>›</b></button><button type="button" data-settings-view="notifications"><span class="settings-menu-icon">◌</span><span><strong>Notifications</strong><small>Quiet hours and reminders</small></span><b>›</b></button><button type="button" data-settings-view="social"><span class="settings-menu-icon">↗</span><span><strong>Social & privacy</strong><small>Awards and Baton participation</small></span><b>›</b></button></div>`,
     appearance: `<section class="appearance-settings"><p class="sheet-copy">Pick what feels right. System follows your phone automatically.</p><div class="theme-choice" role="radiogroup" aria-label="App theme"><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'system'}" class="${currentThemeChoice() === 'system' ? 'active' : ''}" data-theme-choice="system"><span>◐</span><strong>System</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'light'}" class="${currentThemeChoice() === 'light' ? 'active' : ''}" data-theme-choice="light"><span>☀</span><strong>Light</strong></button><button type="button" role="radio" aria-checked="${currentThemeChoice() === 'dark'}" class="${currentThemeChoice() === 'dark' ? 'active' : ''}" data-theme-choice="dark"><span>☾</span><strong>Dark</strong></button></div></section>`,
-    profile: `<form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button>`,
+    profile: `<form id="display-name-form" class="form sheet-form"><label>Display name<input name="displayName" maxlength="60" value="${esc(me().name)}" required></label><button class="btn full">Save name</button></form><form id="username-form" class="form sheet-form username-form"><label>Username<div class="username-input-wrap"><span aria-hidden="true">@</span><input name="username" value="${esc(String(me().handle || '').replace(/^@/, ''))}" minlength="3" maxlength="30" pattern="[A-Za-z0-9][A-Za-z0-9._]{2,29}" autocapitalize="none" autocomplete="off" spellcheck="false" required></div><small>People can find you by this.</small></label><button class="btn full">Save username</button></form><div class="install-card"><strong>Install Donezo</strong><p>iPhone: Safari → Share → Add to Home Screen. Push works best from the installed app.</p></div><button class="text-btn danger" id="sign-out">Sign out</button>`,
 
     squads: `<section class="squad-manager"><div class="settings-title"><div><strong>Your squads</strong><p>Keep groups separate. Switching does not lose your place.</p></div><span>${(state.circles || []).length}</span></div><div class="settings-squad-list">${squadList}</div><details><summary>Create another squad</summary>${createCircleForm(false, true)}</details><details><summary>Join with a code</summary>${joinCircleForm(false, true)}</details></section>`,
     notifications: `<section class="notification-settings"><div class="notification-hero"><span class="notification-hero-icon" aria-hidden="true">🔔</span><div><strong>Stay in the loop, not glued to it.</strong><small>${capability.supported ? `Push is ${capability.permission}. You control what earns a buzz.` : 'Push is not supported here. Donezo still works.'}</small></div><button class="btn small-btn" type="button" id="notification-btn">${capability.permission === 'granted' ? 'Test' : 'Enable'}</button></div><form id="notification-preferences-form" class="form notification-form"><section class="notification-panel"><div class="notification-panel-head"><div><strong>Quiet hours</strong><small>Donezo shuts up while you sleep.</small></div><label class="switch-control"><input type="checkbox" name="quietHoursEnabled" ${preferences.quietHoursEnabled ? 'checked' : ''}><span aria-hidden="true"></span></label></div><div class="quiet-hours-grid"><label>From<input name="quietHoursStart" type="time" value="${esc(preferences.quietHoursStart)}"></label><label>Until<input name="quietHoursEnd" type="time" value="${esc(preferences.quietHoursEnd)}"></label></div><label class="timezone-field">Timezone<input name="timezone" value="${esc(preferences.timezone)}" maxlength="100" required><small>Uses your habit timezone so reminders land correctly.</small></label></section><section class="notification-panel"><div class="notification-panel-head"><div><strong>What can buzz you</strong><small>Keep only the stuff you would actually open.</small></div></div><div class="notification-options">${categoryChoices}</div></section>${habitChoices ? `<section class="notification-panel"><div class="notification-panel-head"><div><strong>Habit reminders</strong><small>Mute individual habits without muting Donezo.</small></div></div><div class="notification-options">${habitChoices}</div></section>` : ''}<button class="btn primary full" ${busy ? 'disabled' : ''}>Save notifications</button></form></section>`,
@@ -1175,8 +1176,34 @@ function peoplePersonRow(person) {
   return `<article class="people-discovery-row"><button class="people-discovery-identity" type="button" data-people-person="${esc(person.id)}"><span class="avatar">${avatar}</span><span class="people-discovery-meta"><strong>${esc(person.name || 'Donezo user')}</strong>${handle ? `<small>${esc(handle)}</small>` : ''}${mutualCopy ? `<small>${esc(mutualCopy)}</small>` : ''}</span></button>${peopleRelationshipAction(person)}</article>`;
 }
 
+
+function discoveryProfileSheet() {
+  if (!discoveryProfilePerson) return '';
+  const person = discoveryProfilePerson;
+  const handle = person.handle || (person.username ? `@${person.username}` : '');
+  const mutual = Number(person.mutualCount || 0);
+  const mutualCopy = mutual ? `${mutual} mutual ${mutual === 1 ? 'friend' : 'friends'}` : 'No mutual friends yet';
+  const avatar = person.avatarUrl
+    ? `<img src="${esc(person.avatarUrl)}" alt="">`
+    : esc(person.avatar || String(person.name || '?').slice(0, 1).toUpperCase());
+  return `<div class="sheet-backdrop people-layer" data-close-people-backdrop><section class="sheet people-sheet people-flow-sheet people-discovery-profile" role="dialog" aria-modal="true" aria-label="${esc(person.name || 'Donezo user')} profile" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><button class="settings-back" type="button" data-people-discovery-back>‹ People</button><h2>${esc(person.name || 'Donezo user')}</h2></div><button class="icon-btn" type="button" data-close-people aria-label="Close">×</button></div><div class="people-discovery-profile-body"><span class="avatar people-discovery-profile-avatar">${avatar}</span><strong>${esc(person.name || 'Donezo user')}</strong>${handle ? `<span>${esc(handle)}</span>` : ''}<small>${esc(mutualCopy)}</small><div class="people-discovery-profile-action">${peopleRelationshipAction(person)}</div></div></section></div>`;
+}
+
+function openPeoplePerson(person) {
+  if (!person?.id) return;
+  const alreadyFriend = person.relationship === 'friend' || friendList(getState()).some((friend) => friend.id === person.id);
+  if (alreadyFriend) {
+    discoveryProfilePerson = null;
+    openFriendProfile(person.id);
+    return;
+  }
+  discoveryProfilePerson = { ...person };
+  refreshPeopleSheet();
+}
+
 function peopleSheet() {
   if (!peopleSheetOpen || friendProfileUserId || inviteSheetOpen) return '';
+  if (discoveryProfilePerson) return discoveryProfileSheet();
   const state = getState();
   const normalizedQuery = peopleSearchQuery.trim().replace(/^@/, '').toLowerCase();
   const searching = normalizedQuery.length >= 2;
@@ -1229,6 +1256,7 @@ function closePeopleSheet() {
   peopleSearchLoading = false;
   peopleSuggestions = [];
   peopleSuggestionsLoading = false;
+  discoveryProfilePerson = null;
   clearTimeout(peopleSearchDebounceTimer);
   peopleSearchDebounceTimer = null;
   peopleSearchRequestId += 1;
@@ -1273,6 +1301,7 @@ function syncPeopleRelationship(userId, relationship, requestId = null) {
   const patch = (person) => person.id === userId ? { ...person, relationship, requestId: requestId ?? person.requestId ?? null } : person;
   peopleSearchResults = peopleSearchResults.map(patch);
   peopleSuggestions = peopleSuggestions.map(patch);
+  if (discoveryProfilePerson?.id === userId) discoveryProfilePerson = patch(discoveryProfilePerson);
 }
 
 async function handlePeopleAdd(userId) {
@@ -1397,10 +1426,15 @@ function bindPeopleSheetActions() {
   sheet.querySelector('[name="peopleSearch"]')?.addEventListener('input', (event) => queuePeopleSearch(event.target.value));
   sheet.querySelectorAll('[data-people-add]').forEach((element) => { element.onclick = () => handlePeopleAdd(element.dataset.peopleAdd); });
   sheet.querySelectorAll('[data-people-accept]').forEach((element) => { element.onclick = () => handlePeopleAccept(element.dataset.peopleAccept, element.dataset.peopleUser); });
+  sheet.querySelector('[data-people-discovery-back]')?.addEventListener('click', () => {
+    discoveryProfilePerson = null;
+    refreshPeopleSheet();
+  });
   sheet.querySelectorAll('[data-people-person]').forEach((element) => { element.onclick = () => {
+    const rawFriend = friendList(getState()).find((item) => item.id === element.dataset.peoplePerson);
     const person = [...peopleSearchResults, ...peopleSuggestions].find((item) => item.id === element.dataset.peoplePerson)
-      || friendList(getState()).find((item) => item.id === element.dataset.peoplePerson);
-    if (person?.relationship === 'friend' || friendList(getState()).some((item) => item.id === element.dataset.peoplePerson)) openFriendProfile(element.dataset.peoplePerson);
+      || (rawFriend ? { ...rawFriend, relationship: 'friend' } : null);
+    openPeoplePerson(person);
   }; });
   bindSheetSwipeDismiss();
 }
@@ -2145,6 +2179,7 @@ function render() {
   app.querySelector('#challenge-form')?.addEventListener('submit', handleChallengeSubmit);
   app.querySelector('#stake-form')?.addEventListener('submit', handleStakeSubmit);
   app.querySelector('#display-name-form')?.addEventListener('submit', handleDisplayName);
+  app.querySelector('#username-form')?.addEventListener('submit', handleUsernameSubmit);
   app.querySelector('#notification-preferences-form')?.addEventListener('submit', handleNotificationPreferences);
   app.querySelector('#social-preferences-form')?.addEventListener('submit', handleSocialPreferences);
   app.querySelectorAll('[data-camera-mode]').forEach((element) => { element.onclick = () => {
@@ -2307,6 +2342,7 @@ function closeSheets() {
   peopleSearchLoading = false;
   peopleSuggestions = [];
   peopleSuggestionsLoading = false;
+  discoveryProfilePerson = null;
   commentCheckInId = null;
   batonSheetOpen = false;
   badgeCabinetOpen = false;
@@ -3048,6 +3084,42 @@ async function markNudgeReadOptimistic(nudgeId) {
 
 async function handleReadNudge(nudgeId) {
   await markNudgeReadOptimistic(nudgeId);
+}
+
+async function handleUsernameSubmit(event) {
+  event.preventDefault();
+  const input = event.currentTarget.querySelector('[name="username"]');
+  const submit = event.currentTarget.querySelector('button[type="submit"], button:not([type])');
+  const raw = String(input?.value || '').trim();
+  if (networkBootLoading || !authoritativeReady) {
+    notify('Refreshing your latest data…', 2200);
+    return;
+  }
+  if (!online) {
+    notify('You are offline. Nothing was saved yet.', 3200);
+    return;
+  }
+  if (submit) {
+    submit.disabled = true;
+    submit.dataset.originalLabel = submit.textContent;
+    submit.textContent = 'Saving…';
+  }
+  try {
+    const saved = await repo.setMyUsername(raw);
+    if (input) input.value = saved;
+    scheduleStateCacheWrite();
+    notify(`Username saved · @${saved}`);
+  } catch (error) {
+    notify(readableError(error), 3600);
+    input?.focus({ preventScroll: true });
+    input?.select?.();
+  } finally {
+    if (submit) {
+      submit.disabled = false;
+      submit.textContent = submit.dataset.originalLabel || 'Save username';
+      delete submit.dataset.originalLabel;
+    }
+  }
 }
 
 async function handleDisplayName(event) {
