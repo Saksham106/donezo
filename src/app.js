@@ -1712,7 +1712,11 @@ async function handleUseProofCrop() {
     const cropped = await cropProofFile(crop.sourceFile, crop.position);
     const artifact = crop.dual
       ? await composeDualProof(cropped, crop.selfieFile)
-      : cropped;
+      : cropped.size > MAX_PROOF_BYTES
+        ? await compressProofFile(cropped)
+        : cropped;
+    const validation = validateProofFile(artifact);
+    if (!validation.valid) throw new Error(validation.error);
     if (proofCrop?.previewUrl === crop.previewUrl) {
       URL.revokeObjectURL(crop.previewUrl);
       proofCrop = null;
