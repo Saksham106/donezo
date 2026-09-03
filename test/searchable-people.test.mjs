@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { createMemoryRepository } from '../src/store.js';
 
 const migrationUrl = new URL('../supabase/migrations/20260902195000_searchable_people.sql', import.meta.url);
 const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, 'utf8') : '';
+const store = readFileSync(new URL('../src/store.js', import.meta.url), 'utf8');
 
 test('searchable People migration makes usernames required and safe', () => {
   assert.match(migration, /alter table public\.profiles[\s\S]*username[\s\S]*not null/i);
@@ -39,4 +41,83 @@ test('profile pending-request RLS compares friend requests to the outer profile 
   assert.match(migration, /request\.addressee_id\s*=\s*profiles\.id/i);
   assert.doesNotMatch(migration, /request\.requester_id\s*=\s*request\.id/i);
   assert.doesNotMatch(migration, /request\.addressee_id\s*=\s*request\.id/i);
+});
+
+function functionBlock(source, name, nextMarker = '\n  async function ') {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `missing function ${name}`);
+  let end = source.indexOf(nextMarker, start + 1);
+  if (end < 0) end = source.length;
+  return source.slice(start, end);
+}
+
+test('production repository exposes transient discovery RPC methods without full load', () => {
+  for (const [name, rpc] of [
+    ['searchPeople', 'search_people'],
+    ['suggestPeople', 'suggest_people'],
+    ['setMyUsername', 'set_my_username'],
+  ]) {
+    assert.match(store, new RegExp(`async function ${name}\\(`));
+    const body = functionBlock(store, name);
+    assert.match(body, new RegExp(`rpc\\(['\"]${rpc}['\"]`));
+    if (name !== 'setMyUsername') assert.doesNotMatch(body, /\bload\s*\(/);
+  }
+});
+
+test('discovery rows map only the safe public person shape', () => {
+  assert.match(store, /function mapDiscoveryPerson\(/);
+  for (const field of ['user_id', 'username', 'display_name', 'avatar_url', 'relationship_status', 'request_id', 'mutual_count']) {
+    assert.match(store, new RegExp(field));
+  }
+});
+
+const discoverySeed = {
+  currentUserId: 'me',
+  profiles: [
+    { id: 'me', name: 'Me Person', username: 'meperson' },
+    { id: 'alice', name: 'Alice Alpha', username: 'alice' },
+    { id: 'bob', name: 'Bob Bridge', username: 'bobby' },
+    { id: 'carol', name: 'Carol Current', username: 'carol' },
+  ],
+  members: [
+    { id: 'me', name: 'Me Person', username: 'meperson', xp: 0 },
+    { id: 'bob', name: 'Bob Bridge', username: 'bobby', xp: 0 },
+  ],
+  friendships: [
+    { user_a: 'bob', user_b: 'me' },
+    { user_a: 'alice', user_b: 'bob' },
+  ],
+  friendRequests: [],
+  habits: [],
+  checkIns: [],
+  nudges: [],
+};
+
+test('memory discovery searches usernames and computes relationship-safe mutual counts', () => {
+  const repo = createMemoryRepository(discoverySeed);
+  const results = repo.searchPeople('@ali');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'alice');
+  assert.equal(results[0].username, 'alice');
+  assert.equal(results[0].relationship, 'available');
+  assert.equal(results[0].mutualCount, 1);
+
+  const byName = repo.searchPeople('alpha');
+  assert.equal(byName[0].id, 'alice');
+});
+
+test('memory suggestions are mutual-only non-friends', () => {
+  const repo = createMemoryRepository(discoverySeed);
+  const suggestions = repo.suggestPeople();
+  assert.deepEqual(suggestions.map((person) => person.id), ['alice']);
+  assert.ok(suggestions.every((person) => person.mutualCount > 0));
+  assert.ok(suggestions.every((person) => person.relationship !== 'friend'));
+});
+
+test('memory username setter normalizes self and rejects reserved or taken usernames', () => {
+  const repo = createMemoryRepository(discoverySeed);
+  assert.equal(repo.setMyUsername('Me.New'), 'me.new');
+  assert.equal(repo.getState().profiles.find((person) => person.id === 'me').username, 'me.new');
+  assert.throws(() => repo.setMyUsername('admin'), /reserved/i);
+  assert.throws(() => repo.setMyUsername('bobby'), /taken/i);
 });
