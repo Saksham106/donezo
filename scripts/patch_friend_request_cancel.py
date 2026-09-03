@@ -55,7 +55,7 @@ memory_method = '''  function cancelFriendRequest(requestId) {
 
 '''
 assert memory_anchor in store
-assert 'function cancelFriendRequest(' not in store
+assert '\n  function cancelFriendRequest(' not in store
 store = store.replace(memory_anchor, memory_method + memory_anchor, 1)
 
 memory_return = '''    getState, asUser, ensureFriendsWorkspace, getFriends, getFriendIds, loadFriendConnections, searchPeople, suggestPeople, setMyUsername, createFriendInvite, acceptFriendInvite, inviteFriend, acceptFriend, removeFriend, addFriendForTest,
