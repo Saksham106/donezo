@@ -66,6 +66,7 @@ let proofPreparationId = 0;
 let dualProof = null;
 let dualRoleChoice = null;
 let proofCrop = null;
+let proofCropOperationId = 0;
 let proofRejectCheckInId = null;
 let checkInUndoRequest = null;
 let selectedEmoji = '⚡';
@@ -1685,11 +1686,20 @@ function stakeSheet() {
 function proofCropSheet() {
   if (!proofCrop) return '';
   const position = Math.max(0, Math.min(1, Number(proofCrop.position) || 0.5));
-  return `<div class="sheet-backdrop proof-crop-layer"><section class="sheet compact-sheet proof-crop-sheet" role="dialog" aria-modal="true" aria-label="Crop proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">POSITION PROOF</p><h2>Choose what shows.</h2></div><button class="icon-btn" type="button" data-proof-crop-cancel aria-label="Cancel crop">×</button></div><p class="proof-sheet-copy">Drag the photo up or down. This is the only version that will be uploaded.</p><div class="proof-crop-frame" data-proof-crop-frame><img class="proof-crop-image" data-proof-crop-image src="${esc(proofCrop.previewUrl)}" alt="Crop preview" style="object-position:50% ${Math.round(position * 100)}%"></div><div class="proof-crop-actions"><button class="btn primary full" type="button" data-proof-crop-use>Use crop</button><button class="text-btn" type="button" data-proof-crop-cancel>Cancel</button></div></section></div>`;
+  const sourceWidth = Math.max(1, Number(proofCrop.width) || 1);
+  const sourceHeight = Math.max(1, Number(proofCrop.height) || 1);
+  const sourceRatio = sourceWidth / sourceHeight;
+  const cropHeightRatio = Math.min(1, (sourceWidth / (3 / 4)) / sourceHeight);
+  const windowHeight = cropHeightRatio * 100;
+  const windowTop = (100 - windowHeight) * position;
+  const canvasWidthDvh = Math.max(1, sourceRatio * 42);
+  const canvasWidthRem = Math.max(1, sourceRatio * 26);
+  return `<div class="sheet-backdrop proof-crop-layer"><section class="sheet compact-sheet proof-crop-sheet" role="dialog" aria-modal="true" aria-label="Crop proof" data-sheet data-swipe-dismiss="false"><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">POSITION PROOF</p><h2>Choose what shows.</h2></div><button class="icon-btn" type="button" data-proof-crop-cancel aria-label="Cancel crop">×</button></div><p class="proof-sheet-copy" id="proof-crop-instructions">Drag the outlined window up or down. The dimmed area will be removed. Use arrow keys for precise control.</p><div class="proof-crop-stage"><div class="proof-crop-canvas" data-proof-crop-frame style="width:min(100%,${canvasWidthDvh.toFixed(3)}dvh,${canvasWidthRem.toFixed(3)}rem);aspect-ratio:${sourceWidth}/${sourceHeight};--proof-crop-window-height:${windowHeight.toFixed(3)};--proof-crop-window-top:${windowTop.toFixed(3)}"><img class="proof-crop-image" data-proof-crop-image src="${esc(proofCrop.previewUrl)}" alt="Full photo crop preview"><div class="proof-crop-window" data-proof-crop-window role="slider" tabindex="0" aria-label="Vertical crop position" aria-describedby="proof-crop-instructions" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(position * 100)}"><span aria-hidden="true">KEEP THIS AREA</span></div></div></div><div class="proof-crop-actions"><button class="btn primary full" type="button" data-proof-crop-use>Use crop</button><button class="text-btn" type="button" data-proof-crop-cancel>Cancel</button></div></section></div>`;
 }
 
-function openProofCrop(review, sourceFile, { dual = false, selfieFile = null } = {}) {
+function openProofCrop(review, sourceFile, { dual = false, selfieFile = null, width = 0, height = 0 } = {}) {
   if (!review || !sourceFile) return false;
+  proofCropOperationId += 1;
   if (proofCrop?.previewUrl) URL.revokeObjectURL(proofCrop.previewUrl);
   const previewUrl = URL.createObjectURL(sourceFile);
   proofCrop = {
@@ -1698,29 +1708,40 @@ function openProofCrop(review, sourceFile, { dual = false, selfieFile = null } =
     sourceFile,
     selfieFile,
     dual,
+    width,
+    height,
     previewUrl,
     position: 0.5,
   };
   render();
+  app.querySelector('[data-proof-crop-use]')?.focus();
   return true;
 }
 
 function closeProofCrop() {
-  if (proofCrop?.previewUrl) URL.revokeObjectURL(proofCrop.previewUrl);
+  const crop = proofCrop;
+  if (!crop) return;
+  proofCropOperationId += 1;
+  if (crop.previewUrl) URL.revokeObjectURL(crop.previewUrl);
+  proofReview = crop.review;
   proofCrop = null;
   render();
+  app.querySelector('[data-proof-submit]')?.focus();
 }
 
 async function handleUseProofCrop() {
   const crop = proofCrop;
   if (!crop || busy) return;
+  const operationId = ++proofCropOperationId;
   try {
     const cropped = await cropProofFile(crop.sourceFile, crop.position);
+    if (operationId !== proofCropOperationId || proofCrop !== crop) return;
     const artifact = crop.dual
       ? await composeDualProof(cropped, crop.selfieFile)
       : cropped.size > MAX_PROOF_BYTES
         ? await compressProofFile(cropped)
         : cropped;
+    if (operationId !== proofCropOperationId || proofCrop !== crop) return;
     const validation = validateProofFile(artifact);
     if (!validation.valid) throw new Error(validation.error);
     if (proofCrop?.previewUrl === crop.previewUrl) {
@@ -1729,6 +1750,7 @@ async function handleUseProofCrop() {
     }
     await uploadProofArtifact(crop.review, artifact);
   } catch (error) {
+    if (operationId !== proofCropOperationId || proofCrop !== crop) return;
     notify(readableError(error), 4200);
   }
 }
@@ -1746,7 +1768,7 @@ function proofSourceSheet() {
 }
 
 function proofReviewSheet() {
-  if (!proofReview) return '';
+  if (!proofReview || proofCrop) return '';
   const habit = getState()?.habits.find((item) => item.id === proofReview.habitId);
   if (!habit) return '';
   const uploading = proofReview.status === 'uploading';
@@ -1928,6 +1950,8 @@ async function handleProofSubmit() {
       openProofCrop(review, cropSource, {
         dual: Boolean(matchingDual),
         selfieFile: matchingDual ? dualProof.selfieFile : null,
+        width: inspection.width,
+        height: inspection.height,
       });
       return;
     }
@@ -1987,17 +2011,26 @@ function bindProofCropActions() {
   app.querySelectorAll('[data-proof-crop-cancel]').forEach((element) => { element.onclick = closeProofCrop; });
   app.querySelector('[data-proof-crop-use]')?.addEventListener('click', () => { void handleUseProofCrop(); });
   const frame = app.querySelector('[data-proof-crop-frame]');
-  const image = app.querySelector('[data-proof-crop-image]');
-  if (!frame || !image || !proofCrop) return;
+  const cropWindow = app.querySelector('[data-proof-crop-window]');
+  if (!frame || !cropWindow || !proofCrop) return;
   let dragging = false;
   let startY = 0;
   let startPosition = proofCrop.position;
+  const setPosition = (value) => {
+    if (!proofCrop) return;
+    const next = Math.max(0, Math.min(1, value));
+    const cropHeightRatio = Math.min(1, ((Number(proofCrop.width) || 1) / (3 / 4)) / Math.max(1, Number(proofCrop.height) || 1));
+    proofCrop.position = next;
+    const windowTop = (100 - (cropHeightRatio * 100)) * next;
+    frame.style.setProperty('--proof-crop-window-top', windowTop.toFixed(3));
+    cropWindow.setAttribute('aria-valuenow', String(Math.round(next * 100)));
+  };
   const updatePosition = (clientY) => {
     if (!dragging || !proofCrop) return;
     const deltaY = clientY - startY;
-    const next = Math.max(0, Math.min(1, startPosition - (deltaY / Math.max(1, frame.clientHeight))));
-    proofCrop.position = next;
-    image.style.objectPosition = `50% ${Math.round(next * 100)}%`;
+    const cropHeightRatio = Math.min(1, ((Number(proofCrop.width) || 1) / (3 / 4)) / Math.max(1, Number(proofCrop.height) || 1));
+    const travel = Math.max(1, frame.clientHeight * (1 - cropHeightRatio));
+    setPosition(startPosition + (deltaY / travel));
   };
   frame.addEventListener('pointerdown', (event) => {
     dragging = true;
@@ -2015,6 +2048,21 @@ function bindProofCropActions() {
   };
   frame.addEventListener('pointerup', finish);
   frame.addEventListener('pointercancel', () => { dragging = false; });
+  cropWindow.addEventListener('keydown', (event) => {
+    const position = proofCrop?.position ?? 0.5;
+    const next = event.key === 'ArrowUp' || event.key === 'ArrowLeft'
+      ? position - 0.05
+      : event.key === 'ArrowDown' || event.key === 'ArrowRight'
+        ? position + 0.05
+        : event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? 1
+            : null;
+    if (next == null) return;
+    event.preventDefault();
+    setPosition(next);
+  });
 }
 
 function bindProofActions() {
@@ -2354,7 +2402,7 @@ function renderPreservingScroll() {
 
 function bindSheetSwipeDismiss() {
   app.querySelectorAll('[data-sheet]').forEach((sheet) => {
-    if (sheet.classList.contains('wrapped-sheet') || sheet.dataset.swipeDismissBound === 'true') return;
+    if (sheet.classList.contains('wrapped-sheet') || sheet.dataset.swipeDismiss === 'false' || sheet.dataset.swipeDismissBound === 'true') return;
     const backdrop = sheet.closest('.sheet-backdrop');
     if (!backdrop) return;
     sheet.dataset.swipeDismissBound = 'true';

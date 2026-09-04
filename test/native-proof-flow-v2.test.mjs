@@ -57,7 +57,7 @@ test('Make Dual asks what the first photo was inside the existing review and ope
 
 test('role choice swaps only the review controls while preserving the photo', () => {
   const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
-  assert.match(review, /if \(!proofReview\) return '';/);
+  assert.match(review, /if \(!proofReview \|\| proofCrop\) return '';/);
   assert.doesNotMatch(review, /if \(!proofReview \|\| dualRoleChoice\)/);
   assert.match(review, /const choosingDualRole = Boolean\(dualRoleChoice\)/);
   assert.match(review, /choosingDualRole\s*\? dualRoleChoiceControls\(\)/);
