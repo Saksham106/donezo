@@ -67,6 +67,7 @@ test('crop position supports keyboard and assistive technology', () => {
   assert.match(bind, /ArrowUp/);
   assert.match(bind, /ArrowDown/);
   assert.match(bind, /aria-valuenow/);
+  assert.match(social, /\.proof-crop-canvas \.proof-crop-window:focus-visible\{[^}]*outline:4px solid var\(--color-white\)[^}]*outline-offset:-7px/);
   assert.match(social, /\.proof-crop-window:focus-visible/);
 });
 
