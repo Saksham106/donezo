@@ -22,8 +22,33 @@ test('tall proofs use a fixed 3:4 crop sheet before upload', () => {
   assert.match(sheet, /data-proof-crop-image/);
   assert.match(sheet, /data-proof-crop-use[^>]*>Use crop/);
   assert.match(sheet, /data-proof-crop-cancel[^>]*>Cancel/);
-  assert.match(social, /\.proof-crop-frame\{[^}]*aspect-ratio:3\/4[^}]*overflow:hidden/);
-  assert.match(social, /\.proof-crop-image\{[^}]*object-fit:cover[^}]*object-position:/);
+  assert.match(social, /\.proof-crop-stage\{[^}]*overflow:hidden/);
+  assert.match(social, /\.proof-crop-window\{[^}]*height:calc\(var\(--proof-crop-window-height\) \* 1%\)/);
+});
+
+test('crop step replaces proof review instead of stacking behind it', () => {
+  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
+  const crop = section(app, 'function proofCropSheet()', 'function openProofCrop(');
+  assert.match(review, /if \(!proofReview \|\| proofCrop\) return '';/);
+  assert.match(crop, /role="dialog"[^>]*aria-label="Crop proof"/);
+  assert.match(crop, /data-swipe-dismiss="false"/);
+});
+
+test('crop preview shows the whole photo with a clear dimmed crop window', () => {
+  const crop = section(app, 'function proofCropSheet()', 'function openProofCrop(');
+  assert.match(crop, /proof-crop-stage/);
+  assert.match(crop, /data-proof-crop-window/);
+  assert.match(crop, /--proof-crop-window-top:/);
+  assert.match(crop, /--proof-crop-window-height:/);
+  assert.match(social, /\.proof-crop-stage\{[^}]*position:relative/);
+  assert.match(social, /\.proof-crop-image\{[^}]*object-fit:contain/);
+  assert.match(social, /\.proof-crop-window\{[^}]*box-shadow:[^}]*9999px/);
+  assert.match(social, /\.proof-crop-window\{[^}]*border:3px solid var\(--color-coral\)/);
+  assert.match(social, /\.proof-crop-stage\{[^}]*max-height:min\(42dvh,26rem\)/);
+  assert.match(social, /\.proof-crop-sheet\{[^}]*overflow-y:auto/);
+  assert.match(crop, /role="slider"/);
+  assert.match(crop, /tabindex="0"/);
+  assert.match(crop, /aria-label="Vertical crop position"/);
 });
 
 test('crop drag stays local and updates normalized vertical position', () => {
@@ -31,8 +56,25 @@ test('crop drag stays local and updates normalized vertical position', () => {
   assert.match(bind, /pointerdown/);
   assert.match(bind, /pointermove/);
   assert.match(bind, /Math\.max\(0, Math\.min\(1,/);
-  assert.match(bind, /objectPosition/);
+  assert.match(bind, /style\.setProperty\('--proof-crop-window-top'/);
+  assert.match(bind, /--proof-crop-window-top/);
   assert.doesNotMatch(bind, /completeWithProof/);
+});
+
+test('crop position supports keyboard and assistive technology', () => {
+  const bind = section(app, 'function bindProofCropActions()', 'function bindProofActions()');
+  assert.match(bind, /keydown/);
+  assert.match(bind, /ArrowUp/);
+  assert.match(bind, /ArrowDown/);
+  assert.match(bind, /aria-valuenow/);
+  assert.match(social, /\.proof-crop-window:focus-visible/);
+});
+
+test('crop gestures cannot trigger generic sheet swipe dismissal', () => {
+  const swipe = section(app, 'function bindSheetSwipeDismiss()', 'function closeSheets()');
+  assert.match(swipe, /sheet\.dataset\.swipeDismiss === 'false'/);
+  const crop = section(app, 'function proofCropSheet()', 'function openProofCrop(');
+  assert.match(crop, /data-swipe-dismiss="false"/);
 });
 
 test('fresh submit inspects the main proof and pauses tall images before centralized upload', () => {
@@ -61,11 +103,28 @@ test('cropped single proofs are compressed and validated before centralized uplo
   const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceControls()');
   assert.match(useCrop, /cropped\.size > MAX_PROOF_BYTES[^]*compressProofFile\(cropped\)/);
   assert.match(useCrop, /validateProofFile\(artifact\)/);
-  assert.ok(useCrop.indexOf('validateProofFile(artifact)') < useCrop.indexOf('uploadProofArtifact(crop.review, artifact)'));
+  assert.ok(useCrop.indexOf('proofCrop = null') < useCrop.indexOf('uploadProofArtifact(crop.review, artifact)'));
 });
 
-test('crop cancel returns to review without uploading anything', () => {
+test('cancelling during asynchronous crop work invalidates the pending upload', () => {
+  const open = section(app, 'function openProofCrop(', 'function closeProofCrop()');
+  const close = section(app, 'function closeProofCrop()', 'async function handleUseProofCrop()');
+  const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceControls()');
+  assert.match(open, /proofCropOperationId \+= 1/);
+  assert.match(close, /proofCropOperationId \+= 1/);
+  assert.match(useCrop, /const operationId = \+\+proofCropOperationId/);
+  assert.match(useCrop, /operationId !== proofCropOperationId \|\| proofCrop !== crop/);
+  assert.match(useCrop, /catch \(error\) \{\s*if \(operationId !== proofCropOperationId \|\| proofCrop !== crop\) return;/);
+  const uploadIndex = useCrop.indexOf('uploadProofArtifact(crop.review, artifact)');
+  const guardsBeforeUpload = [...useCrop.matchAll(/operationId !== proofCropOperationId \|\| proofCrop !== crop/g)]
+    .filter((match) => match.index < uploadIndex);
+  assert.equal(guardsBeforeUpload.length, 2);
+});
+
+test('crop cancel restores the exact review without uploading anything', () => {
   const cancel = section(app, 'function closeProofCrop()', 'async function handleUseProofCrop()');
+  assert.match(cancel, /const crop = proofCrop/);
+  assert.match(cancel, /proofReview = crop\.review/);
   assert.match(cancel, /proofCrop = null/);
   assert.match(cancel, /URL\.revokeObjectURL/);
   assert.doesNotMatch(cancel, /completeWithProof|uploadProofArtifact/);
