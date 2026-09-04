@@ -13,6 +13,7 @@ import {
   accountabilityDateForMember,
   dailyAccountabilitySummary,
   dailyProgress,
+  calculateHabitStreak,
   leagueTimeLeft,
   localDateInTimeZone,
   proofRejectionThreshold,
@@ -689,7 +690,7 @@ function activationCard() {
   return `<section class="activation-card"><div class="activation-mark" aria-hidden="true">${completed}/${steps.length}</div><div class="activation-copy"><span>Next setup step</span><strong>${esc(steps[next].label)}</strong><small>Finish this once, then it gets out of your way.</small></div><button class="btn primary small-btn" type="button" data-activation-next="${next}">${['Set up', 'Add', 'Invite', 'Check in', 'Open'][next]}</button></section>`;
 }
 
-function habitCard(habit, actionMode = false) {
+function habitCard(habit, actionMode = false, showStreak = false) {
   const checkIn = checkInFor(habit.id);
   const checkedToday = Boolean(checkIn && !checkIn.invalid);
   const rejected = Boolean(checkIn?.invalid);
@@ -716,7 +717,14 @@ function habitCard(habit, actionMode = false) {
     : weekly
       ? `${target}${weeklyDetail}${habit.proofMode === 'photo' ? ' · Proof required' : ' · Truuust mode'}`
       : `${target}${timing}${habit.proofMode === 'photo' ? ' · Proof required' : ' · Truuust mode'}`;
-  return `<button class="habit ${isDone ? 'done' : ''} ${rejected ? 'rejected' : ''}" data-habit="${habit.id}" ${busy ? 'disabled' : ''}><span class="habit-icon">${esc(habit.emoji)}</span><span class="habit-copy"><strong>${esc(habit.title)}</strong><small>${esc(detail)}</small></span>${actionMode ? `<span class="habit-action ${isDone ? 'complete' : ''} ${rejected ? 'rejected' : ''}">${action}</span>` : `<span class="check">${isDone ? '✓' : rejected ? '↻' : ''}</span>`}</button>`;
+  const streak = showStreak ? calculateHabitStreak(habit, getState()?.checkIns || [], today()) : null;
+  const streakLabel = streak
+    ? `${streak.count} ${streak.unit}${streak.count === 1 ? '' : 's'} in a row`
+    : '';
+  const streakNumber = streak?.count > 0
+    ? `<span class="habit-streak" aria-label="${streakLabel}" title="${streakLabel}">${streak.count}</span>`
+    : '';
+  return `<button class="habit ${isDone ? 'done' : ''} ${rejected ? 'rejected' : ''}" data-habit="${habit.id}" ${busy ? 'disabled' : ''}><span class="habit-icon">${esc(habit.emoji)}</span><span class="habit-copy"><strong>${esc(habit.title)}</strong><small>${esc(detail)}</small></span>${actionMode ? `<span class="habit-action ${isDone ? 'complete' : ''} ${rejected ? 'rejected' : ''}">${action}</span>` : `<span class="habit-end">${streakNumber}<span class="check">${isDone ? '✓' : rejected ? '↻' : ''}</span></span>`}</button>`;
 }
 
 function todayScreen() {
@@ -726,7 +734,7 @@ function todayScreen() {
   const progress = progressFor(state.currentUserId);
   const remaining = progress.total - progress.completed;
   const firstName = me().name.split(/\s+/)[0];
-  const list = habits.length ? habits.map((habit) => habitCard(habit)).join('') : '<div class="empty"><b>Nothing due today.</b><p>Your active habits are either paused or waiting for their next scheduled day.</p><button class="btn primary" data-open-habit>Add habit</button></div>';
+  const list = habits.length ? habits.map((habit) => habitCard(habit, false, true)).join('') : '<div class="empty"><b>Nothing due today.</b><p>Your active habits are either paused or waiting for their next scheduled day.</p><button class="btn primary" data-open-habit>Add habit</button></div>';
   const progressCopy = progress.total === 0
     ? flexible.length ? 'Flexible weekly goals are in progress.' : 'Add one thing worth showing up for.'
     : remaining === 0 ? 'Clean sweep. You are done with fixed commitments today.' : `${remaining} ${remaining === 1 ? 'thing' : 'things'} left.`;
