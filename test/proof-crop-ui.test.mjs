@@ -37,6 +37,9 @@ test('crop step replaces proof review instead of stacking behind it', () => {
 test('crop preview shows the whole photo with a clear dimmed crop window', () => {
   const crop = section(app, 'function proofCropSheet()', 'function openProofCrop(');
   assert.match(crop, /proof-crop-stage/);
+  assert.match(crop, /proof-crop-label[^>]*>KEEP THIS AREA/);
+  assert.ok(crop.indexOf('proof-crop-label') < crop.indexOf('proof-crop-stage'));
+  assert.doesNotMatch(crop, /proof-crop-window[^>]*>\s*<span/);
   assert.match(crop, /data-proof-crop-window/);
   assert.match(crop, /--proof-crop-window-top:/);
   assert.match(crop, /--proof-crop-window-height:/);
@@ -78,24 +81,54 @@ test('crop gestures cannot trigger generic sheet swipe dismissal', () => {
   assert.match(crop, /data-swipe-dismiss="false"/);
 });
 
-test('fresh submit inspects the main proof and pauses tall images before centralized upload', () => {
-  const submit = section(app, 'async function handleProofSubmit()', 'async function loadProofThumbnail');
-  assert.match(submit, /dualProof\?\.habitId === review\.habitId[^]*dualProof\.mainFile/);
-  assert.match(submit, /inspectProofFile\(cropSource\)/);
-  assert.match(submit, /inspection\.needsCrop/);
-  assert.match(submit, /openProofCrop\(/);
-  assert.match(submit, /uploadProofArtifact\(review, review\.file\)/);
-  assert.doesNotMatch(submit, /completeWithProof/);
-  const freshUpload = submit.lastIndexOf('uploadProofArtifact(review, review.file)');
-  assert.ok(freshUpload > submit.indexOf('inspection.needsCrop'));
+test('selecting a tall proof opens crop before the review step', () => {
+  const prepare = section(app, 'async function prepareProofFile(', 'async function handlePasteProof()');
+  const accept = section(app, 'function acceptProofFile(', 'async function handleProofFileSelection(');
+  assert.match(prepare, /inspectProofFile\(prepared\)/);
+  assert.match(prepare, /acceptProofFile\(prepared, inspection\)/);
+  assert.match(accept, /inspection\?\.needsCrop/);
+  assert.match(accept, /openProofCrop\(/);
+  assert.ok(accept.indexOf('openProofCrop(') < accept.lastIndexOf('render()'));
 });
 
-test('crop confirmation passes only the final cropped or recomposed artifact to upload', () => {
+test('a tall main photo in Dual opens crop before composition', () => {
+  const dual = section(app, 'async function handleNativeDualInput(', 'function clearProofReview()');
+  assert.match(dual, /inspectProofFile\(nextDual\.mainFile\)/);
+  assert.match(dual, /inspection\.needsCrop/);
+  assert.match(dual, /openProofCrop\(currentReview, nextDual\.mainFile/);
+  assert.match(dual, /dualState: nextDual/);
+  assert.ok(dual.indexOf('openProofCrop(') < dual.lastIndexOf('dualProof = nextDual'));
+  assert.ok(dual.indexOf('openProofCrop(') < dual.indexOf('composeDualProof('));
+});
+
+test('Dual replacement stays transactional and ignores stale async completion', () => {
+  const clearDual = section(app, 'function clearDualProof()', 'async function handleNativeDualInput(');
+  const dual = section(app, 'async function handleNativeDualInput(', 'function clearProofReview()');
+  assert.match(app, /let dualProofOperationId = 0/);
+  assert.match(clearDual, /dualProofOperationId \+= 1/);
+  assert.match(dual, /const operationId = \+\+dualProofOperationId/);
+  assert.match(dual, /const currentDual = dualProof/);
+  assert.match(dual, /operationId !== dualProofOperationId \|\| dualProof !== currentDual/);
+  assert.ok(dual.indexOf('composeDualProof(') < dual.lastIndexOf('dualProof = nextDual'));
+});
+
+test('fresh submit uploads the already-previewed artifact without reopening crop', () => {
+  const submit = section(app, 'async function handleProofSubmit()', 'async function loadProofThumbnail');
+  assert.match(submit, /review\.artifactFinalized/);
+  assert.match(submit, /uploadProofArtifact\(review, review\.file\)/);
+  assert.ok(submit.indexOf('review.artifactFinalized') < submit.indexOf('inspectProofFile'));
+  assert.doesNotMatch(submit, /completeWithProof/);
+});
+
+test('crop confirmation creates a final preview instead of uploading immediately', () => {
   const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceControls()');
   assert.match(useCrop, /cropProofFile\(crop\.sourceFile, crop\.position\)/);
   assert.match(useCrop, /crop\.dual[^]*composeDualProof\(cropped, crop\.selfieFile\)/);
-  assert.match(useCrop, /uploadProofArtifact\(crop\.review, artifact\)/);
-  assert.doesNotMatch(useCrop, /completeWithProof/);
+  assert.match(useCrop, /setDualProofFile\(crop\.dualState, 'main', cropped\)/);
+  assert.match(useCrop, /createProofReviewState\(\{ file: artifact/);
+  assert.match(useCrop, /artifactFinalized: true/);
+  assert.match(useCrop, /data-proof-submit|proof-submit/);
+  assert.doesNotMatch(useCrop, /completeWithProof|uploadProofArtifact/);
   const upload = section(app, 'async function uploadProofArtifact(', 'async function handleProofSubmit()');
   assert.equal((upload.match(/completeWithProof/g) || []).length, 1);
 });
@@ -104,7 +137,7 @@ test('cropped single proofs are compressed and validated before centralized uplo
   const useCrop = section(app, 'async function handleUseProofCrop()', 'function dualRoleChoiceControls()');
   assert.match(useCrop, /cropped\.size > MAX_PROOF_BYTES[^]*compressProofFile\(cropped\)/);
   assert.match(useCrop, /validateProofFile\(artifact\)/);
-  assert.ok(useCrop.indexOf('proofCrop = null') < useCrop.indexOf('uploadProofArtifact(crop.review, artifact)'));
+  assert.ok(useCrop.indexOf('proofCrop = null') < useCrop.indexOf('render()'));
 });
 
 test('cancelling during asynchronous crop work invalidates the pending upload', () => {
@@ -116,10 +149,10 @@ test('cancelling during asynchronous crop work invalidates the pending upload', 
   assert.match(useCrop, /const operationId = \+\+proofCropOperationId/);
   assert.match(useCrop, /operationId !== proofCropOperationId \|\| proofCrop !== crop/);
   assert.match(useCrop, /catch \(error\) \{\s*if \(operationId !== proofCropOperationId \|\| proofCrop !== crop\) return;/);
-  const uploadIndex = useCrop.indexOf('uploadProofArtifact(crop.review, artifact)');
-  const guardsBeforeUpload = [...useCrop.matchAll(/operationId !== proofCropOperationId \|\| proofCrop !== crop/g)]
-    .filter((match) => match.index < uploadIndex);
-  assert.equal(guardsBeforeUpload.length, 2);
+  const finalizeIndex = useCrop.indexOf('proofReview =');
+  const guardsBeforeFinalize = [...useCrop.matchAll(/operationId !== proofCropOperationId \|\| proofCrop !== crop/g)]
+    .filter((match) => match.index < finalizeIndex);
+  assert.equal(guardsBeforeFinalize.length, 2);
 });
 
 test('crop cancel restores the exact review without uploading anything', () => {
