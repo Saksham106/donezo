@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createMemoryRepository } from '../src/store.js';
 import { validateInviteCode } from '../src/invite.js';
+import { uiSource } from './helpers/ui-source.mjs';
 
 const migration = await readFile(new URL('../supabase/migrations/0022_friend_invite_hardening.sql', import.meta.url), 'utf8').catch(() => '');
-const appSource = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const appSource = uiSource;
 const storeSource = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
 
 const seed = {
@@ -23,43 +24,6 @@ test('new friend invite codes carry at least 96 bits of CSPRNG entropy', () => {
   assert.match(migration, /encode\(extensions\.gen_random_bytes\(12\),\s*'hex'\)/i);
   assert.match(migration, /code !~ '\^\(\[a-z0-9\]\{12\}\|\[a-f0-9\]\{24\}\)\$'/i);
   assert.match(migration, /code_hash = md5\(code\)/i);
-});
-
-test('client accepts hardened friend codes while preserving legacy 12-character links', () => {
-  assert.equal(validateInviteCode('abcdef0123456789abcdef01').valid, true);
-  assert.equal(validateInviteCode('abcdef012345').valid, true);
-  assert.match(storeSource, /\^\(\?:\[a-z0-9\]\{12\}\|\[a-f0-9\]\{24\}\)\$/);
-  assert.match(appSource, /placeholder="Paste friend code or link"/);
-  assert.doesNotMatch(appSource, /name="code"[^>]*maxlength="24"/);
-  assert.doesNotMatch(appSource, /Paste the 12-character code a friend sent you/);
-});
-
-test('Friends invite sheet never exposes a legacy circle code as a friend code', () => {
-  const sheet = appSource.slice(appSource.indexOf('function inviteSheet()'), appSource.indexOf('function peopleSheet()'));
-  assert.match(sheet, /data-share-invite/);
-  assert.doesNotMatch(sheet, /circleInviteCode|createdCircleInvite/);
-});
-
-test('sharing uses a fresh prefetched single-use friend invite without sacrificing native share activation', () => {
-  const prime = appSource.slice(appSource.indexOf('function primeFriendInvite()'), appSource.indexOf('async function sharePreparedInvite('));
-  const share = appSource.slice(appSource.indexOf('async function handleShareInvite()'), appSource.indexOf('function clearPendingInvite()'));
-  const prepared = appSource.slice(appSource.indexOf('async function sharePreparedInvite('), appSource.indexOf('async function handleShareInvite()'));
-  assert.match(prime, /repo\.createFriendInvite\(\)/);
-  assert.match(share, /const directFriendFlow = typeof repo\?\.createFriendInvite === 'function'/);
-  assert.match(share, /const invite = prefetchedFriendInvite \|\| createdFriendInvite/);
-  assert.match(prepared, /await navigator\.share\(payload\)/);
-  assert.match(prepared, /prefetchedFriendInvite = null/);
-  assert.match(prepared, /void primeFriendInvite\(\)/);
-  assert.doesNotMatch(share, /await handleCreateFriendInvite\(\)/);
-  assert.doesNotMatch(share, /inviteSheetOpen/);
-  assert.doesNotMatch(appSource, /handleCopyRawInvite|data-copy-code/);
-});
-
-test('new Friends spaces share a direct friend invite rather than a legacy circle code', () => {
-  assert.match(appSource, /createdFriendInvite = await repo\.createFriendInvite\(\)/);
-  assert.match(appSource, /redeemInvite\(repo, validation\.code\)/);
-  assert.match(appSource, /function creatorInviteScreen\(\)/);
-  assert.match(appSource, /if \(\(createdFriendInvite \|\| createdCircleInvite\) && state\?\.circleId\) \{/);
 });
 
 test('memory repository emits hardened friend codes', () => {

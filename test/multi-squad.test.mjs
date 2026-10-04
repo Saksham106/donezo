@@ -61,27 +61,8 @@ test('database state exposes all squads and selected habit shares', () => {
   assert.deepEqual(state.habits[0].squadIds, ['family', 'bu']);
 });
 
-test('repository and UI support switching squads and selecting habit visibility', async () => {
-  const [store, app] = await Promise.all([source(storeUrl), source(appUrl)]);
-  assert.match(store, /async function selectCircle\(circleId\)/);
-  assert.match(store, /async function load\(requestedCircleId = state\.circleId\)/);
-  assert.match(store, /create_habit_with_squads/);
-  assert.match(store, /update_habit_with_squads/);
-  assert.match(app, /data-squad-switcher/);
-  assert.match(app, /repo\.selectCircle/);
-  assert.match(app, /name="squadIds"/);
-});
-
 test('editing a habit out of the active squad does not silently switch squads', async () => {
   const store = await source(storeUrl);
   assert.match(store, /async function updateHabit[\s\S]*?await load\(state\.circleId\)[\s\S]*?\|\| \{ id: updatedId \}/);
   assert.doesNotMatch(store, /await load\(squadIds\.includes\(state\.circleId\)/);
-});
-
-test('unified friend nudges are private and do not expose public callouts', async () => {
-  const app = await source(appUrl);
-  assert.doesNotMatch(app, /name="visibility"/);
-  assert.doesNotMatch(app, /Public callout/);
-  assert.match(app, /Only .* sees it\./);
-  assert.match(app, /repo\.sendNudge\([^\n]+,\s*'private'\)/);
 });

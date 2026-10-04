@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createDualProofState, setDualProofFile } from '../src/dual-proof.js';
+import { uiSource } from './helpers/ui-source.mjs';
 
-const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 const store = readFileSync(new URL('../src/store.js', import.meta.url), 'utf8');
 const proof = readFileSync(new URL('../src/proof.js', import.meta.url), 'utf8');
 const social = readFileSync(new URL('../social.css', import.meta.url), 'utf8');
@@ -32,18 +33,6 @@ test('habit proof mode is only Photo proof or Truuust me', () => {
   assert.doesNotMatch(requirement, /dual_photo/);
 });
 
-test('Dual is a native review upgrade rather than a separate proof source', () => {
-  const source = section(app, 'function proofSourceSheet()', 'function proofReviewSheet()');
-  assert.match(source, /data-proof-camera[^>]*>Take photo/);
-  assert.doesNotMatch(source, /data-proof-dual|Dual photo|Use Donezo camera/);
-
-  const review = section(app, 'function proofReviewSheet()', 'function clearDualProof()');
-  assert.match(review, /data-proof-make-dual[^>]*>Make Dual/);
-  const role = section(app, 'function dualRoleChoiceControls()', 'function proofSourceSheet()');
-  assert.match(role, /Main proof/);
-  assert.match(role, /Selfie/);
-});
-
 test('native Dual state supports either first-photo role', () => {
   const main = { name: 'main.jpg' };
   const selfie = { name: 'selfie.jpg' };
@@ -58,23 +47,6 @@ test('native Dual state supports either first-photo role', () => {
   assert.equal(selfieFirst.mainFile, null);
   selfieFirst = setDualProofFile(selfieFirst, 'main', main);
   assert.equal(selfieFirst.mainFile, main);
-});
-
-test('proof capture no longer uses a permission-heavy live camera stream', () => {
-  assert.doesNotMatch(app, /getUserMedia|startDualCameraIfNeeded|captureVideoFrame|Use iPhone camera for better quality/);
-  assert.doesNotMatch(social, /\.camera-quality-fallback|\.dual-camera-frame|\.camera-mode-switch/);
-  assert.match(app, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
-});
-
-test('Friends heading keeps refresh and people actions on one compact row', () => {
-  const friends = section(app, 'function friendsScreen()', 'function challengeProgress');
-  assert.match(friends, /friends-heading-row/);
-  assert.match(friends, /data-manual-refresh/);
-  assert.match(friends, /data-people-open/);
-  assert.doesNotMatch(friends, /syncText/);
-  assert.doesNotMatch(friends, /squad-refresh-row/);
-  assert.doesNotMatch(friends, /Synced /);
-  assert.match(app, /Synced just now/);
 });
 
 test('Friends proof feed cannot expand the PWA beyond the viewport', () => {

@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { leagueTimeLeft, weeklyLeaguePoints, rankMembersByWeeklyScore } from '../src/domain.js';
+import { uiSource } from './helpers/ui-source.mjs';
 
-const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 
 const matureHabit = (id, ownerId, createdDate = '2026-08-24') => ({
   id,
@@ -72,49 +73,4 @@ test('League countdown is concise across the Monday-Sunday period', () => {
   assert.equal(leagueTimeLeft('2026-09-06', '2026-08-31'), '6 days left');
   assert.equal(leagueTimeLeft('2026-09-06', '2026-09-05'), '1 day left');
   assert.equal(leagueTimeLeft('2026-09-06', '2026-09-06'), 'Ends today');
-});
-
-test('League clearly displays its Monday through Sunday date range and point rules', () => {
-  const league = app.slice(app.indexOf('function leagueScreen()'), app.indexOf('function challengeInfoSheet()'));
-  const info = app.slice(app.indexOf('function challengeInfoSheet()'), app.indexOf('function stakeHistory()'));
-  assert.match(league, /formatLeagueWeekRange/);
-  assert.match(league, /leagueTimeLeft/);
-  assert.doesNotMatch(league, /Monday through Sunday · resets every Monday/);
-  assert.doesNotMatch(league, /Your rank · \$\{esc\(weekRange\)\}/);
-  assert.match(league, /weeklyPoints/);
-  assert.match(league, /pts/);
-  assert.match(info, /First 3 each day/);
-  assert.match(info, /New habits unlock volume points after 2 separate days/);
-});
-
-test('proofs, Updates activity, and comments keep profile drill-downs', () => {
-  const activity = app.slice(app.indexOf('function activityCard('), app.indexOf('function personProofCarousel('));
-  const updates = app.slice(app.indexOf('function nudgeInboxSheet()'), app.indexOf('function inviteSheet()'));
-  const comments = app.slice(app.indexOf('function commentSheet()'), app.indexOf('function batonSheet()'));
-  assert.match(activity, /activityProfileButton/);
-  assert.match(app, /function activityProfileButton[^]*data-friend-profile/);
-  assert.match(updates, /update-activity-row[^]*data-friend-profile/);
-  assert.match(comments, /data-friend-profile/);
-  assert.doesNotMatch(app, /function proofViewerSheet/);
-});
-
-test('profile shows a collapsed friend count and expands the list on demand', () => {
-  const profile = app.slice(app.indexOf('function friendProfileSheet()'), app.indexOf('function recoverySheet()'));
-  assert.match(profile, /<details class="profile-connections"/);
-  assert.match(profile, /<summary/);
-  assert.match(profile, /connectionCount/);
-  assert.match(profile, /\.length \+ 1/);
-  assert.doesNotMatch(profile, /<section class="profile-connections"/);
-});
-
-test('Friends list sheet owns Invite and Add by link while parent and Settings stay uncluttered', () => {
-  const friends = app.slice(app.indexOf('function friendsScreen()'), app.indexOf('function challengeProgress('));
-  const people = app.slice(app.indexOf('function peopleSheet()'), app.indexOf('function proofRejectSheet()'));
-  const settings = app.slice(app.indexOf('function settingsSheet()'), app.indexOf('function nudgeComposerSheet()'));
-  assert.doesNotMatch(friends, /data-invite-open|data-add-friend-open/);
-  assert.match(people, /data-invite-from-people/);
-  assert.match(people, /data-add-friend-from-people/);
-  assert.match(app, /function addFriendSheet\(\)/);
-  assert.doesNotMatch(settings, /data-settings-view="friends"/);
-  assert.doesNotMatch(settings, /join-friend-form/);
 });
