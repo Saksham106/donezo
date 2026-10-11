@@ -89,6 +89,99 @@ export function calculateStreak(dateStrings, todayString) {
   return streak;
 }
 
+function scheduleForHabit(habit, startDate) {
+  return {
+    frequency: habit.scheduleFrequency || habit.frequency || 'daily',
+    weekdays: habit.scheduleWeekdays || [],
+    weeklyTargetDays: habit.weeklyTargetDays ?? 1,
+    targetQuantity: habit.targetQuantity ?? 1,
+    targetUnit: habit.targetUnit || 'count',
+    dueTime: habit.targetTime || null,
+    graceMinutes: habit.graceMinutes || 0,
+    timezone: habit.scheduleTimezone || habit.ownerTimeZone || 'UTC',
+    startDate,
+    pauseWindows: habit.pauseWindows || [],
+    versions: habit.scheduleVersions || habit.versions || [],
+  };
+}
+
+function currentStreakWindowStart(habit, createdDate, todayString, currentFrequency) {
+  const versions = [...(habit.scheduleVersions || habit.versions || [])]
+    .filter((version) => (version.effectiveFrom ?? version.effective_from) <= todayString)
+    .sort((a, b) => (a.effectiveFrom ?? a.effective_from).localeCompare(b.effectiveFrom ?? b.effective_from)
+      || Number(a.version || 0) - Number(b.version || 0));
+  const activeIndex = versions.findLastIndex((version) => {
+    const until = version.effectiveUntil ?? version.effective_until ?? null;
+    return !until || todayString < until;
+  });
+  if (activeIndex < 0) return createdDate;
+  const flexible = currentFrequency === 'times_per_week';
+  let start = versions[activeIndex].effectiveFrom ?? versions[activeIndex].effective_from ?? createdDate;
+  for (let index = activeIndex - 1; index >= 0; index -= 1) {
+    const frequency = versions[index].frequency || versions[index].scheduleFrequency || versions[index].schedule_frequency || 'daily';
+    if ((frequency === 'times_per_week') !== flexible) break;
+    start = versions[index].effectiveFrom ?? versions[index].effective_from ?? start;
+  }
+  return start > createdDate ? start : createdDate;
+}
+
+/**
+ * A fixed habit streak counts consecutive completed scheduled occurrences.
+ * Flexible goals count consecutive weeks that met their weekly target.
+ * An unfinished current occurrence/week stays open and does not erase history.
+ */
+export function calculateHabitStreak(habit, checkIns, todayString) {
+  if (!habit?.id || !habit?.ownerId || !todayString) return { count: 0, unit: 'check-in' };
+  const relevant = (checkIns || []).filter((item) => (
+    item.habitId === habit.id && item.userId === habit.ownerId && item.invalid !== true && item.date <= todayString
+  ));
+  const createdDate = habit.createdDate
+    || (habit.createdAt ? localDateInTimeZone(habit.createdAt, habit.ownerTimeZone || habit.scheduleTimezone || 'UTC') : null)
+    || relevant.map((item) => item.date).sort()[0]
+    || todayString;
+  const schedule = scheduleForHabit(habit, createdDate);
+  let currentFrequency;
+  try { currentFrequency = getScheduleOccurrence(schedule, todayString).frequency; } catch { currentFrequency = 'daily'; }
+  const streakStartDate = currentStreakWindowStart(habit, createdDate, todayString, currentFrequency);
+
+  if (currentFrequency === 'times_per_week') {
+    const firstWeek = mondayOf(streakStartDate);
+    let weekStart = mondayOf(todayString);
+    let count = 0;
+    let currentWeek = true;
+    while (weekStart >= firstWeek) {
+      const throughDate = currentWeek ? todayString : shiftLocalDate(weekStart, 6);
+      const score = weeklyCompletionScore(habit.ownerId, [habit], relevant, throughDate);
+      if (score.possible > 0) {
+        const complete = score.completed >= score.possible;
+        if (complete) count += 1;
+        else if (!currentWeek) break;
+      }
+      currentWeek = false;
+      weekStart = shiftLocalDate(weekStart, -7);
+    }
+    return { count, unit: 'week' };
+  }
+
+  const quantities = new Map();
+  for (const item of relevant) {
+    const quantity = Number(item.completedQuantity ?? item.completed_quantity ?? 1);
+    quantities.set(item.date, (quantities.get(item.date) || 0) + (Number.isFinite(quantity) ? Math.max(0, quantity) : 0));
+  }
+  let count = 0;
+  for (let cursor = todayString; cursor >= streakStartDate; cursor = shiftLocalDate(cursor, -1)) {
+    let occurrence;
+    try { occurrence = getScheduleOccurrence(schedule, cursor); } catch {
+      occurrence = { scheduled: true, targetQuantity: Number(habit.targetQuantity ?? 1) };
+    }
+    if (!occurrence.scheduled) continue;
+    const complete = (quantities.get(cursor) || 0) >= Number(occurrence.targetQuantity ?? 1);
+    if (complete) count += 1;
+    else if (cursor !== todayString) break;
+  }
+  return { count, unit: 'check-in' };
+}
+
 export function calculateBestStreak(dateStrings) {
   const dates = [...new Set(dateStrings)].sort();
   let best = 0;

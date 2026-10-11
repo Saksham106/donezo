@@ -5,6 +5,7 @@ import {
   dailyAccountabilitySummary,
   calculateBestStreak,
   calculateStreak,
+  calculateHabitStreak,
   rankMembers,
   weeklyCompletionScore,
   rankMembersByWeeklyScore,
@@ -53,6 +54,66 @@ test('dailyAccountabilitySummary exposes today work and exact yesterday misses',
 test('calculateStreak counts consecutive completed days ending today', () => {
   const dates = ['2026-08-27', '2026-08-26', '2026-08-25', '2026-08-23'];
   assert.equal(calculateStreak(dates, '2026-08-27'), 3);
+});
+
+test('calculateHabitStreak counts completed scheduled occurrences without penalizing off days or an open today', () => {
+  const habit = {
+    id: 'run', ownerId: 'me', active: true, scheduleFrequency: 'selected_weekdays',
+    scheduleWeekdays: [1, 3, 5], targetQuantity: 1, createdDate: '2026-08-24',
+    scheduleTimezone: 'UTC',
+  };
+  const checkIns = [
+    { habitId: 'run', userId: 'me', date: '2026-08-28' },
+    { habitId: 'run', userId: 'me', date: '2026-08-31' },
+    { habitId: 'run', userId: 'me', date: '2026-09-02' },
+  ];
+  assert.deepEqual(calculateHabitStreak(habit, checkIns, '2026-09-03'), { count: 3, unit: 'check-in' });
+  assert.deepEqual(calculateHabitStreak(habit, checkIns, '2026-09-04'), { count: 3, unit: 'check-in' });
+});
+
+test('calculateHabitStreak requires full quantity and ignores invalid proof', () => {
+  const habit = {
+    id: 'read', ownerId: 'me', active: true, scheduleFrequency: 'daily',
+    targetQuantity: 3, createdDate: '2026-09-01', scheduleTimezone: 'UTC',
+  };
+  const checkIns = [
+    { habitId: 'read', userId: 'me', date: '2026-09-01', completedQuantity: 3 },
+    { habitId: 'read', userId: 'me', date: '2026-09-02', completedQuantity: 2 },
+    { habitId: 'read', userId: 'me', date: '2026-09-02', completedQuantity: 1, invalid: true },
+  ];
+  assert.deepEqual(calculateHabitStreak(habit, checkIns, '2026-09-03'), { count: 0, unit: 'check-in' });
+});
+
+test('calculateHabitStreak treats flexible goals as consecutive successful weeks', () => {
+  const habit = {
+    id: 'gym', ownerId: 'me', active: true, scheduleFrequency: 'times_per_week',
+    weeklyTargetDays: 3, targetQuantity: 1, createdDate: '2026-08-10', scheduleTimezone: 'UTC',
+  };
+  const checkIns = [
+    ...['2026-08-24', '2026-08-26', '2026-08-28', '2026-08-31', '2026-09-02', '2026-09-04']
+      .map((date) => ({ habitId: 'gym', userId: 'me', date })),
+    { habitId: 'gym', userId: 'me', date: '2026-09-07' },
+  ];
+  assert.deepEqual(calculateHabitStreak(habit, checkIns, '2026-09-10'), { count: 2, unit: 'week' });
+  checkIns.push(
+    { habitId: 'gym', userId: 'me', date: '2026-09-09' },
+    { habitId: 'gym', userId: 'me', date: '2026-09-10' },
+  );
+  assert.deepEqual(calculateHabitStreak(habit, checkIns, '2026-09-10'), { count: 3, unit: 'week' });
+});
+
+test('calculateHabitStreak resets its unit window when a habit switches between flexible and fixed schedules', () => {
+  const habit = {
+    id: 'gym', ownerId: 'me', active: true, scheduleFrequency: 'daily',
+    targetQuantity: 1, createdDate: '2026-08-10', scheduleTimezone: 'UTC',
+    scheduleVersions: [
+      { version: 1, effectiveFrom: '2026-08-10', effectiveUntil: '2026-09-07', frequency: 'times_per_week', weeklyTargetDays: 3, targetQuantity: 1, timezone: 'UTC' },
+      { version: 2, effectiveFrom: '2026-09-07', effectiveUntil: null, frequency: 'daily', targetQuantity: 1, timezone: 'UTC' },
+    ],
+  };
+  const checkIns = ['2026-08-31', '2026-09-02', '2026-09-04', '2026-09-07', '2026-09-08']
+    .map((date) => ({ habitId: 'gym', userId: 'me', date }));
+  assert.deepEqual(calculateHabitStreak(habit, checkIns, '2026-09-09'), { count: 2, unit: 'check-in' });
 });
 
 test('calculateBestStreak finds the longest consecutive run', () => {

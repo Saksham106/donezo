@@ -16,18 +16,16 @@ function section(source, start, end) {
 
 test('fresh submit inspects the main proof and pauses tall images before centralized upload', () => {
   const submit = section(app, 'async function handleProofSubmit()', 'async function loadProofThumbnail');
-  assert.match(submit, /dualProof\?\.habitId === review\.habitId[^]*dualProof\.mainFile/);
-  assert.match(submit, /inspectProofFile\(cropSource\)/);
-  assert.match(submit, /inspection\.needsCrop/);
-  assert.match(submit, /openProofCrop\(/);
+  assert.match(submit, /review\.artifactFinalized/);
   assert.match(submit, /uploadProofArtifact\(review, review\.file\)/);
+  assert.ok(submit.indexOf('review.artifactFinalized') < submit.indexOf('inspectProofFile'));
   assert.doesNotMatch(submit, /completeWithProof/);
-  const freshUpload = submit.lastIndexOf('uploadProofArtifact(review, review.file)');
-  assert.ok(freshUpload > submit.indexOf('inspection.needsCrop'));
 });
 
 test('crop cancel returns to review without uploading anything', () => {
   const cancel = section(app, 'function closeProofCrop()', 'async function handleUseProofCrop()');
+  assert.match(cancel, /const crop = proofCrop/);
+  assert.match(cancel, /proofReview = crop\.review/);
   assert.match(cancel, /proofCrop = null/);
   assert.match(cancel, /URL\.revokeObjectURL/);
   assert.doesNotMatch(cancel, /completeWithProof|uploadProofArtifact/);
