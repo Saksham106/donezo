@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { uiSource } from './helpers/ui-source.mjs';
 
 const app = uiSource;
@@ -24,9 +25,20 @@ test('fresh submit inspects the main proof and pauses tall images before central
 
 test('crop cancel returns to review without uploading anything', () => {
   const cancel = section(app, 'function closeProofCrop()', 'async function handleUseProofCrop()');
-  assert.match(cancel, /const crop = proofCrop/);
-  assert.match(cancel, /proofReview = crop\.review/);
-  assert.match(cancel, /proofCrop = null/);
-  assert.match(cancel, /URL\.revokeObjectURL/);
+  const open = section(app, 'function openProofCrop(', 'function closeProofCrop()');
+  const review = { habitId: 'habit-1', file: {}, previewUrl: 'blob:review' };
+  const ui = { proofReview: review, proofCrop: null };
+  const revoked = [];
+  let renders = 0;
+  const flow = runInNewContext(`${open}\n${cancel}\n({ openProofCrop, closeProofCrop })`, {
+    ui, render: () => { renders += 1; },
+    URL: { createObjectURL: () => 'blob:crop', revokeObjectURL: (url) => revoked.push(url) },
+  });
+  assert.equal(flow.openProofCrop(review, review.file), true);
+  flow.closeProofCrop();
+  assert.equal(ui.proofReview, review, 'original review remains available for retry');
+  assert.equal(ui.proofCrop, null);
+  assert.deepEqual(revoked, ['blob:crop'], 'only the crop preview is released');
+  assert.equal(renders, 2);
   assert.doesNotMatch(cancel, /completeWithProof|uploadProofArtifact/);
 });

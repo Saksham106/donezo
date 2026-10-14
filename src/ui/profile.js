@@ -1,6 +1,6 @@
 // Profile: identity header, habits, this week's history strip, milestones
 // and monthly Wrapped. Settings open from the gear.
-import { BADGE_CATALOG } from '../domain.js';
+import { BADGE_CATALOG, calculateHabitStreak } from '../domain.js';
 import { habitPausedOn, historyEntries, myHabits, shiftDate, weekBounds, weekStrip } from '../today-domain.js';
 import { getState, me, member, today, ui } from './state.js';
 import { avatar, esc, formatDay, formatExactTime, formatTime, icon } from './util.js';
@@ -21,11 +21,13 @@ function scheduleLabel(habit) {
 
 function habitRow(habit) {
   const date = today();
+  const streak = calculateHabitStreak(habit, getState().checkIns, date);
+  const streakLabel = `${streak.count} ${streak.unit} streak`;
   const pause = (habit.pauseWindows || []).find((item) => item.startDate <= date && date <= item.endDate);
   const sub = pause
     ? `Paused until ${formatDay(pause.endDate, { month: 'short', day: 'numeric' })}`
     : `${scheduleLabel(habit)}${habit.targetTime ? ` · ${formatTime(habit.targetTime)}` : ''} · ${habit.proofMode === 'photo' ? 'photo proof' : 'honor system'}`;
-  return `<button type="button" class="dz-habit-row ${habitPausedOn(habit, date) ? 'paused' : ''}" data-edit-habit="${habit.id}" aria-label="Edit ${esc(habit.title)}"><span class="dz-tile">${esc(habit.emoji)}</span><span class="dz-row-copy"><strong>${esc(habit.title)}</strong><small>${esc(sub)}</small></span>${icon('chevron', 16, 2.2)}</button>`;
+  return `<button type="button" class="dz-habit-row ${habitPausedOn(habit, date) ? 'paused' : ''}" data-edit-habit="${habit.id}" aria-label="Edit ${esc(habit.title)}"><span class="dz-tile">${esc(habit.emoji)}</span><span class="dz-row-copy"><strong>${esc(habit.title)}</strong><small>${esc(sub)}</small></span><span class="habit-streak" aria-label="${streakLabel}">${streak.count}</span>${icon('chevron', 16, 2.2)}</button>`;
 }
 
 /** Check-ins and recoveries for the history list, newest first. */
