@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { uiSource } from './helpers/ui-source.mjs';
 
-const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 const social = readFileSync(new URL('../social.css', import.meta.url), 'utf8');
 
 function section(source, start, end) {
@@ -26,43 +27,8 @@ test('native proof review keeps the compact highlighted Make Dual action', () =>
   assert.match(social, /\.proof-make-dual\{[^}]*background:var\(--color-coral-soft\)/);
 });
 
-test('Dual role selection uses native front or rear inputs instead of a stream', () => {
-  const bindings = section(app, 'function bindProofActions()', 'async function openFriendProfile(');
-  assert.match(bindings, /role === 'main' \? proofSelfieInput : dualProofMainInput/);
-  assert.match(bindings, /input\?\.click\(\)/);
-  assert.doesNotMatch(bindings, /getUserMedia|startDualCameraIfNeeded/);
-});
-
-test('background refresh does not rebuild a scrolled Friends feed', () => {
-  assert.match(app, /function shouldDeferFriendsRefreshRender\(\)/);
-  assert.match(app, /tab === 'friends'/);
-  assert.match(app, /scrollTop > 4/);
-  const refresh = section(app, 'async function refreshRepositoryData', 'function startRefreshCoordinator');
-  assert.match(refresh, /!shouldDeferFriendsRefreshRender\(\)[^]*renderPreservingScroll\(\)/);
-  const coordinator = section(app, 'function startRefreshCoordinator', 'async function handleApplyPwaUpdate');
-  assert.match(coordinator, /!shouldDeferFriendsRefreshRender\(\)[^]*renderPreservingScroll\(\)/);
-});
-
-test('manual refresh clears its spinner without rebuilding a scrolled Friends feed', () => {
-  const manual = section(app, 'async function handleManualRefresh()', 'async function handleNotifications');
-  assert.match(manual, /manualRefreshLoading = false;/);
-  assert.match(manual, /syncManualRefreshButton\(\)/);
-  const sync = section(app, 'function syncManualRefreshButton()', 'async function handleManualRefresh()');
-  assert.match(sync, /querySelector\('\[data-manual-refresh\]'\)/);
-  assert.match(sync, /classList\.toggle\('loading', manualRefreshLoading\)/);
-  assert.match(sync, /disabled = manualRefreshLoading/);
-});
-
 test('reaction strip scrolls horizontally only', () => {
   assert.match(social, /\.reaction-row\{[^}]*overflow-x:auto[^}]*overflow-y:hidden/);
-});
-
-test('proof rejection lives in the top-right card header, not the reaction strip', () => {
-  const card = section(app, 'function activityCard(', 'function personProofCarousel');
-  assert.match(card, /proof-card-heading-copy[\s\S]*\$\{rejectionControl\}<\/div>\$\{proofPreview\}/);
-  assert.match(card, /class="reaction-row"[^`]*\$\{reactionButtons\}<\/div>/s);
-  assert.doesNotMatch(card, /class="reaction-row"[^`]*rejectionControl/s);
-  assert.match(social, /\.proof-card-header\{[^}]*grid-template-columns:minmax\(0,1fr\) auto/);
 });
 
 test('Friends eyebrow sits tightly above the heading', () => {

@@ -140,10 +140,8 @@ test('does not auto-apply a waiting update before the parent explicitly accepts 
 });
 
 test('app surfaces updates without sacrificing unsaved mobile drafts', async () => {
-  const [app, social] = await Promise.all([
-    readFile(new URL('../src/app.js', import.meta.url), 'utf8'),
-    readFile(new URL('../social.css', import.meta.url), 'utf8'),
-  ]);
+  const { uiSource: app } = await import('./helpers/ui-source.mjs');
+  const social = await readFile(new URL('../social.css', import.meta.url), 'utf8');
   assert.match(app, /function pwaUpdateBanner\(/);
   assert.match(app, /DonezoPWA\?\.onUpdateAvailable/);
   assert.match(app, /hasUnsavedDraft\(\)/);

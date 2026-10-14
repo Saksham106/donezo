@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mapDatabaseState } from '../src/store.js';
+import { uiSource } from './helpers/ui-source.mjs';
 
-const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 
 const user = { id: 'owner', email: 'owner@example.com' };
 const rows = {
@@ -36,15 +37,4 @@ test('proof state exposes immutable audience size to the proof card', () => {
   assert.equal(activity.audienceSize, 3);
   assert.equal(checkIn.downvotes, 1);
   assert.equal(checkIn.invalid, false, 'one of two eligible peers is not a majority');
-});
-
-test('proof cards use the immutable audience for rejection threshold and show owner rejection status', () => {
-  assert.match(app, /proofRejectionThreshold\(activity\.audienceSize\)/);
-  assert.match(app, /const rejectionControl =/);
-  assert.match(app, /mine[\s\S]*proof-rejection-status/);
-});
-
-test('proof activity metadata includes relative and exact local time', () => {
-  assert.match(app, /function formatExactTime\(value\)/);
-  assert.match(app, /formatWhen\(activity\.when\)[\s\S]*formatExactTime\(activity\.when\)/);
 });

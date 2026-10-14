@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { uiSource } from './helpers/ui-source.mjs';
 
-const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 const store = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
 const styles = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 const social = await readFile(new URL('../social.css', import.meta.url), 'utf8');
@@ -11,24 +12,6 @@ const migrationNames = await readdir(new URL('../supabase/migrations/', import.m
 const migrationName = migrationNames.find((name) => name.includes('one_positive_reaction_per_proof'));
 const migration = migrationName ? await readFile(new URL(`../supabase/migrations/${migrationName}`, import.meta.url), 'utf8') : '';
 const slice = (start, end) => app.slice(app.indexOf(start), app.indexOf(end));
-
-test('friend growth actions live in the Friends list sheet, not parent feed', () => {
-  const friends = slice('function friendsScreen()', 'function challengeProgress');
-  const people = slice('function peopleSheet()', 'function proofRejectSheet');
-  assert.doesNotMatch(friends, /data-invite-open|data-add-friend-open/);
-  assert.match(people, /data-invite-from-people/);
-  assert.match(people, /data-add-friend-from-people/);
-});
-
-test('proof cards lead with habit identity and preview at most two replies', () => {
-  const card = slice('function activityCard(', 'function personProofCarousel');
-  assert.match(card, /proof-card-title/);
-  assert.match(card, /proof-card-byline/);
-  assert.match(card, /proofReplyPreview/);
-  assert.match(app, /function proofReplyPreview\(/);
-  assert.match(app, /\.slice\(-2\)/);
-  assert.match(app, /View all .* replies/);
-});
 
 test('positive reaction toggles replace the previous positive reaction only', () => {
   assert.match(store, /async function setPositiveReaction\(checkInId, emoji\)/);

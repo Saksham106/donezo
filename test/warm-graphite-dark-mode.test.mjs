@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { uiSource } from './helpers/ui-source.mjs';
 
 const tokens = await readFile(new URL('../tokens.css', import.meta.url), 'utf8');
-const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 
 function darkBlock() {
   const start = tokens.indexOf('[data-theme="dark"]');

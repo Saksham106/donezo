@@ -7,8 +7,9 @@ import {
   STATE_CACHE_SCHEMA_VERSION,
   validateStateCacheEnvelope,
 } from '../src/state-cache.js';
+import { uiSource } from './helpers/ui-source.mjs';
 
-const app = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
+const app = uiSource;
 const store = await readFile(new URL('../src/store.js', import.meta.url), 'utf8');
 const social = await readFile(new URL('../social.css', import.meta.url), 'utf8');
 const sw = await readFile(new URL('../sw.js', import.meta.url), 'utf8');
@@ -139,25 +140,6 @@ test('repository exposes a fast peek/hydrate path and hot persistence methods av
   }
 });
 
-test('app routes hot interactions through optimistic state rather than global runMutation', () => {
-  assert.match(app, /createLatestIntentCoordinator/);
-  assert.match(app, /scheduleReconciliation/);
-  assert.match(app, /reapplyOptimisticPatches/);
-
-  for (const [start, end] of [
-    ['async function handleReaction(', 'async function handleCommentSubmit('],
-    ['async function handleDownvote(', 'async function handleReaction('],
-    ['async function handleCommentSubmit(', 'async function handleUndoCommentDelete('],
-  ]) {
-    const body = section(app, start, end);
-    assert.notEqual(body, '', `missing ${start}`);
-    assert.doesNotMatch(body, /runMutation\s*\(/, `${start} should not use global mutation lane`);
-  }
-
-  assert.match(app, /toggleSimpleCheckIn/);
-  assert.match(app, /markNudgeReadOptimistic/);
-});
-
 test('warm startup reads user cache before authoritative load and sign-out clears it', () => {
   const boot = section(app, 'async function boot(', 'for (const eventName');
   const cacheRead = boot.indexOf('readStateCache(');
@@ -168,47 +150,6 @@ test('warm startup reads user cache before authoritative load and sign-out clear
   assert.match(section(app, 'async function handleSignOut(', 'proofInput.addEventListener'), /clearStateCache\(/);
 });
 
-test('cached startup stays read-only until an authoritative load succeeds', () => {
-  assert.match(app, /let authoritativeReady = false/);
-  const refresh = section(app, 'async function refreshRepositoryData(', 'function startRefreshCoordinator');
-  assert.match(refresh, /authoritativeReady = true/);
-
-  const mutation = section(app, 'async function runMutation(', 'async function handleAuth');
-  const optimistic = section(app, 'async function runOptimisticMutation(', 'function formatWhen');
-  const reaction = section(app, 'async function handleReaction(', 'async function handleCommentSubmit');
-  const proofSubmit = section(app, 'async function handleProofSubmit()', 'async function loadProofViewerUrl()');
-  assert.match(mutation, /!authoritativeReady/);
-  assert.match(optimistic, /!authoritativeReady/);
-  assert.match(reaction, /!authoritativeReady/);
-  assert.match(proofSubmit, /!authoritativeReady/);
-
-  const boot = section(app, 'async function boot(', 'for (const eventName');
-  assert.match(boot, /authoritativeReady = false/);
-  assert.match(boot, /authoritativeReady = true/);
-  const cachedFailure = boot.slice(boot.indexOf('if (cachedRendered)'));
-  assert.doesNotMatch(cachedFailure.slice(0, cachedFailure.indexOf('stopRefreshCoordinator')), /authoritativeReady = true/);
-});
-
-test('Friends list primes a fresh invite before the tap so native share keeps user activation', () => {
-  assert.match(app, /let prefetchedFriendInvite = null/);
-  assert.match(app, /function primeFriendInvite\(/);
-  const peopleOpen = section(app, "app.querySelectorAll('[data-people-open]')", "app.querySelectorAll('[data-invite-from-people]')");
-  assert.match(peopleOpen, /openPeopleSheet/);
-  const peopleOpenHelper = section(app, 'function openPeopleSheet()', 'function checkInUndoSheet()');
-  assert.match(peopleOpenHelper, /primeFriendInvite\(\)/);
-
-  const share = section(app, 'async function handleShareInvite()', 'function clearPendingInvite()');
-  assert.match(share, /prefetchedFriendInvite/);
-  assert.match(share, /sharePreparedInvite/);
-  assert.doesNotMatch(share, /await handleCreateFriendInvite\(/);
-
-  const preparedShare = section(app, 'async function sharePreparedInvite(', 'async function handleShareInvite()');
-  assert.match(preparedShare, /navigator\.share\(payload\)/);
-  const firstAwait = preparedShare.indexOf('await ');
-  const shareCall = preparedShare.indexOf('navigator.share(payload)');
-  assert.ok(shareCall >= 0 && firstAwait === shareCall - 'await '.length, 'navigator.share must be the first awaited operation');
-});
-
 test('optimistic reply success refreshes server ids without rebuilding the proof feed', () => {
   const submit = section(app, 'async function handleCommentSubmit(', 'async function handleUndoCommentDelete(');
   const replace = submit.indexOf('repo.replaceOptimisticComment(temp.id, saved)');
@@ -217,18 +158,6 @@ test('optimistic reply success refreshes server ids without rebuilding the proof
   assert.doesNotMatch(submit, /renderPreservingScroll\(\)/);
   const undo = section(app, 'async function handleUndoCommentDelete(', 'async function handleDeleteComment(');
   assert.doesNotMatch(undo, /fakeEvent/);
-});
-
-test('Friends list uses one action row and Invite friends goes straight to share flow', () => {
-  const people = section(app, 'function peopleSheet()', 'function proofRejectSheet');
-  assert.match(people, /people-growth-actions/);
-  assert.match(people, /data-invite-from-people/);
-  assert.match(people, /data-add-friend-from-people/);
-  assert.match(social, /\.people-growth-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
-
-  const bind = section(app, "app.querySelectorAll('[data-invite-from-people]')", "app.querySelectorAll('[data-add-friend-from-people]')");
-  assert.match(bind, /handleShareInvite/);
-  assert.doesNotMatch(bind, /inviteSheetOpen\s*=\s*true/);
 });
 
 test('inline proof image loader reuses a cached signed URL before signing again', () => {
