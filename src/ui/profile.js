@@ -1,7 +1,7 @@
 // Profile: identity header, habits, this week's history strip, milestones
 // and monthly Wrapped. Settings open from the gear.
 import { BADGE_CATALOG, calculateHabitStreak } from '../domain.js';
-import { habitPausedOn, historyEntries, myHabits, shiftDate, weekBounds, weekStrip } from '../today-domain.js';
+import { habitPausedOn, historyEntries, missedHabits, myHabits, shiftDate, weekBounds, weekStrip } from '../today-domain.js';
 import { getState, me, member, today, ui } from './state.js';
 import { avatar, esc, formatDay, formatExactTime, formatTime, icon } from './util.js';
 import { render } from './render.js';
@@ -167,8 +167,7 @@ export function bindProfile(root) {
   root.querySelectorAll('[data-strip-missed]').forEach((element) => { element.onclick = () => {
     const date = element.dataset.stripMissed;
     const state = getState();
-    const habit = myHabits(state).find((item) => !state.checkIns.some((checkIn) => checkIn.habitId === item.id && checkIn.userId === state.currentUserId && checkIn.date === date && !checkIn.invalid)
-      && !(state.recoveries || []).some((recovery) => recovery.habitId === item.id && recovery.missedDate === date));
+    const habit = missedHabits(state, today()).find((item) => item.missedDate === date);
     if (habit) openRecovery(habit.id, date);
   }; });
   root.querySelectorAll('[data-badge-cabinet]').forEach((element) => { element.onclick = () => { ui.badgeCabinetOpen = true; render(); }; });

@@ -3,7 +3,7 @@
 // tab underneath keeps its scroll position.
 import { MAX_PROOF_BYTES, compressProofFile, createProofReviewState, formatProofFileSize, imageFileFromPasteData, readClipboardImage, requiresPhotoProof, transitionProofReview, validateProofFile } from '../proof.js';
 import { composeDualProof, createDualProofState, setDualProofFile } from '../dual-proof.js';
-import { cropProofFile, inspectProofFile } from '../proof-crop.js';
+import { cropGeometry, cropProofFile, inspectProofFile } from '../proof-crop.js';
 import { contextualHabitStatus } from '../ux.js';
 import { actionableHabitsFor, completedHabitsFor, flexibleWeekProgress, missedHabits, sortHabitsForDay } from '../today-domain.js';
 import { app, checkInFor, getState, inputs, me, today, ui } from './state.js';
@@ -52,7 +52,12 @@ export function closeCheckInOverlay() {
 }
 
 function caughtUpSheet() {
-  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet dz-sheet dz-caught-up" role="dialog" aria-modal="true" aria-label="All caught up" data-sheet><div class="sheet-handle"></div><span class="dz-caught-up-mark">${icon('check', 28, 2.6)}</span><h2>All caught up</h2><p>Everything due today is done.</p><button class="dz-btn secondary full" type="button" data-checkin-add-habit>Add a habit</button></section></div>`;
+  const state = getState();
+  const doneToday = completedHabitsFor(state.currentUserId, today(), state);
+  const doneLine = doneToday.length
+    ? `<div class="dz-done-line">Done today · ${doneToday.map((habit) => `<button type="button" data-habit="${habit.id}" aria-label="Undo ${esc(habit.title)}">${esc(habit.title)}</button>`).join(', ')}</div>`
+    : '';
+  return `<div class="sheet-backdrop" data-close-sheet><section class="sheet compact-sheet dz-sheet dz-caught-up" role="dialog" aria-modal="true" aria-label="All caught up" data-sheet><div class="sheet-handle"></div><span class="dz-caught-up-mark">${icon('check', 28, 2.6)}</span><h2>All caught up</h2><p>Everything due today is done.</p>${doneLine}<button class="dz-btn secondary full" type="button" data-checkin-add-habit>Add a habit</button></section></div>`;
 }
 
 function pickerSheet() {
@@ -87,8 +92,16 @@ function proofSourceSheet() {
 
 function proofCropSheet() {
   if (!ui.proofCrop) return '';
-  const position = Math.max(0, Math.min(1, Number(ui.proofCrop.position) || 0.5));
-  return `<div class="sheet-backdrop proof-crop-layer"><section class="sheet compact-sheet proof-crop-sheet" role="dialog" aria-modal="true" aria-label="Crop proof" data-sheet><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">POSITION PROOF</p><h2>Choose what shows.</h2></div><button class="icon-btn" type="button" data-proof-crop-cancel aria-label="Cancel crop">×</button></div><p class="proof-sheet-copy">Drag the photo up or down. This is the only version that will be uploaded.</p><div class="proof-crop-frame" data-proof-crop-frame><img class="proof-crop-image" data-proof-crop-image src="${esc(ui.proofCrop.previewUrl)}" alt="Crop preview" style="object-position:50% ${Math.round(position * 100)}%"></div><div class="proof-crop-actions"><button class="btn primary full" type="button" data-proof-crop-use>Use crop</button><button class="text-btn" type="button" data-proof-crop-cancel>Cancel</button></div></section></div>`;
+  const position = Math.max(0, Math.min(1, (Number.isFinite(Number(ui.proofCrop.position)) ? Number(ui.proofCrop.position) : 0.5)));
+  const sourceWidth = Math.max(1, Number(ui.proofCrop.width) || 1);
+  const sourceHeight = Math.max(1, Number(ui.proofCrop.height) || 1);
+  const sourceRatio = sourceWidth / sourceHeight;
+  const cropHeightRatio = cropGeometry(sourceWidth, sourceHeight).sourceHeight / sourceHeight;
+  const windowHeight = cropHeightRatio * 100;
+  const windowTop = (100 - windowHeight) * position;
+  const canvasWidthDvh = Math.max(1, sourceRatio * 42);
+  const canvasWidthRem = Math.max(1, sourceRatio * 26);
+  return `<div class="sheet-backdrop proof-crop-layer"><section class="sheet compact-sheet proof-crop-sheet" role="dialog" aria-modal="true" aria-label="Crop proof" data-sheet data-no-swipe="true"><div class="sheet-handle"></div><div class="sheet-head"><div><p class="eyebrow">POSITION PROOF</p><h2>Choose what shows.</h2></div><button class="icon-btn" type="button" data-proof-crop-cancel aria-label="Cancel crop">×</button></div><p class="proof-sheet-copy" id="proof-crop-instructions">Drag the outlined window up or down. The dimmed area will be removed. Use arrow keys for precise control.</p><p class="proof-crop-label" aria-hidden="true">KEEP THIS AREA</p><div class="proof-crop-stage"><div class="proof-crop-canvas" data-proof-crop-frame style="width:min(100%,${canvasWidthDvh.toFixed(3)}dvh,${canvasWidthRem.toFixed(3)}rem);aspect-ratio:${sourceWidth}/${sourceHeight};--proof-crop-window-height:${windowHeight.toFixed(3)};--proof-crop-window-top:${windowTop.toFixed(3)}"><img class="proof-crop-image" data-proof-crop-image src="${esc(ui.proofCrop.previewUrl)}" alt="Full photo crop preview"><div class="proof-crop-window" data-proof-crop-window role="slider" tabindex="0" aria-label="Vertical crop position" aria-describedby="proof-crop-instructions" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(position * 100)}"></div></div></div><div class="proof-crop-actions"><button class="btn primary full" type="button" data-proof-crop-use>Use crop</button><button class="text-btn" type="button" data-proof-crop-cancel>Cancel</button></div></section></div>`;
 }
 
 function dualRoleChoiceControls() {
@@ -98,7 +111,7 @@ function dualRoleChoiceControls() {
 
 function proofReviewSheet() {
   const review = ui.proofReview;
-  if (!review) return '';
+  if (!review || ui.proofCrop) return '';
   const habit = getState()?.habits.find((item) => item.id === review.habitId);
   if (!habit) return '';
   const uploading = review.status === 'uploading';
@@ -192,10 +205,10 @@ export function handleRedoProof(checkInId) {
 
 // --- Proof flow -----------------------------------------------------------
 
-function openProofCrop(review, sourceFile, { dual = false, selfieFile = null } = {}) {
+function openProofCrop(review, sourceFile, { dual = false, selfieFile = null, width = 0, height = 0 } = {}) {
   if (!review || !sourceFile) return false;
   if (ui.proofCrop?.previewUrl) URL.revokeObjectURL(ui.proofCrop.previewUrl);
-  ui.proofCrop = { habitId: review.habitId, review, sourceFile, selfieFile, dual, previewUrl: URL.createObjectURL(sourceFile), position: 0.5 };
+  ui.proofCrop = { habitId: review.habitId, review, sourceFile, selfieFile, dual, width, height, previewUrl: URL.createObjectURL(sourceFile), position: 0.5 };
   render();
   return true;
 }
@@ -206,14 +219,20 @@ function closeProofCrop() {
   render();
 }
 
+let proofCropOperationId = 0;
+
 async function handleUseProofCrop() {
   const crop = ui.proofCrop;
   if (!crop || ui.busy) return;
+  const operationId = ++proofCropOperationId;
+  const isCurrent = () => operationId === proofCropOperationId && ui.proofCrop === crop && ui.proofReview === crop.review;
   try {
     const cropped = await cropProofFile(crop.sourceFile, crop.position);
+    if (!isCurrent()) return;
     const artifact = crop.dual
       ? await composeDualProof(cropped, crop.selfieFile)
       : cropped.size > MAX_PROOF_BYTES ? await compressProofFile(cropped) : cropped;
+    if (!isCurrent()) return;
     const validation = validateProofFile(artifact);
     if (!validation.valid) throw new Error(validation.error);
     if (ui.proofCrop?.previewUrl === crop.previewUrl) {
@@ -222,7 +241,7 @@ async function handleUseProofCrop() {
     }
     await uploadProofArtifact(crop.review, artifact);
   } catch (error) {
-    notify(readableError(error), 4200);
+    if (isCurrent()) notify(readableError(error), 4200);
   }
 }
 
@@ -231,10 +250,16 @@ export function clearDualProof() {
   ui.dualRoleChoice = null;
 }
 
+let dualProofOperationId = 0;
+
 async function handleNativeDualInput(input, role) {
   const file = input?.files?.[0];
   if (input) input.value = '';
   if (!file || !ui.dualProof || !['main', 'selfie'].includes(role)) return false;
+  const operationId = ++dualProofOperationId;
+  const currentDual = ui.dualProof;
+  const currentReview = ui.proofReview;
+  const isCurrent = () => operationId === dualProofOperationId && ui.dualProof === currentDual && ui.proofReview === currentReview;
   const validation = validateProofFile(file);
   if (!validation.valid) {
     notify(validation.error, 3400);
@@ -242,17 +267,22 @@ async function handleNativeDualInput(input, role) {
   }
   try {
     const prepared = file.size > MAX_PROOF_BYTES ? await compressProofFile(file) : file;
-    const nextDual = setDualProofFile(ui.dualProof, role, prepared);
-    ui.dualProof = nextDual;
-    if (!nextDual.mainFile || !nextDual.selfieFile) return true;
+    if (!isCurrent()) return false;
+    const nextDual = setDualProofFile(currentDual, role, prepared);
+    if (!nextDual.mainFile || !nextDual.selfieFile) {
+      ui.dualProof = nextDual;
+      return true;
+    }
     const output = await composeDualProof(nextDual.mainFile, nextDual.selfieFile);
+    if (!isCurrent()) return false;
     const previewUrl = URL.createObjectURL(output);
-    if (ui.proofReview?.previewUrl) URL.revokeObjectURL(ui.proofReview.previewUrl);
+    ui.dualProof = nextDual;
+    if (currentReview?.previewUrl) URL.revokeObjectURL(currentReview.previewUrl);
     ui.proofReview = createProofReviewState({ file: output, habitId: nextDual.habitId, previewUrl });
     render();
     return true;
   } catch (error) {
-    notify(readableError(error), 4200);
+    if (isCurrent()) notify(readableError(error), 4200);
     return false;
   }
 }
@@ -393,7 +423,7 @@ async function handleProofSubmit() {
     const inspection = await inspectProofFile(cropSource);
     if (ui.proofReview !== review) return;
     if (inspection.needsCrop) {
-      openProofCrop(review, cropSource, { dual: Boolean(matchingDual), selfieFile: matchingDual ? ui.dualProof.selfieFile : null });
+      openProofCrop(review, cropSource, { dual: Boolean(matchingDual), selfieFile: matchingDual ? ui.dualProof.selfieFile : null, width: inspection.width, height: inspection.height });
       return;
     }
     await uploadProofArtifact(review, review.file);
@@ -409,16 +439,26 @@ function bindProofCropActions(root) {
   root.querySelectorAll('[data-proof-crop-cancel]').forEach((element) => { element.onclick = closeProofCrop; });
   root.querySelector('[data-proof-crop-use]')?.addEventListener('click', () => { void handleUseProofCrop(); });
   const frame = root.querySelector('[data-proof-crop-frame]');
-  const image = root.querySelector('[data-proof-crop-image]');
-  if (!frame || !image || !ui.proofCrop) return;
+  const cropWindow = root.querySelector('[data-proof-crop-window]');
+  if (!frame || !cropWindow || !ui.proofCrop) return;
   let dragging = false;
   let startY = 0;
   let startPosition = ui.proofCrop.position;
+  const setPosition = (value) => {
+    if (!ui.proofCrop) return;
+    const next = Math.max(0, Math.min(1, value));
+    const cropHeightRatio = cropGeometry(ui.proofCrop.width, ui.proofCrop.height).sourceHeight / Math.max(1, Number(ui.proofCrop.height) || 1);
+    ui.proofCrop.position = next;
+    const windowTop = (100 - (cropHeightRatio * 100)) * next;
+    frame.style.setProperty('--proof-crop-window-top', windowTop.toFixed(3));
+    cropWindow.setAttribute('aria-valuenow', String(Math.round(next * 100)));
+  };
   const updatePosition = (clientY) => {
     if (!dragging || !ui.proofCrop) return;
-    const next = Math.max(0, Math.min(1, startPosition - ((clientY - startY) / Math.max(1, frame.clientHeight))));
-    ui.proofCrop.position = next;
-    image.style.objectPosition = `50% ${Math.round(next * 100)}%`;
+    const deltaY = clientY - startY;
+    const cropHeightRatio = cropGeometry(ui.proofCrop.width, ui.proofCrop.height).sourceHeight / Math.max(1, Number(ui.proofCrop.height) || 1);
+    const travel = Math.max(1, frame.clientHeight * (1 - cropHeightRatio));
+    setPosition(startPosition + (deltaY / travel));
   };
   frame.addEventListener('pointerdown', (event) => {
     dragging = true;
@@ -428,13 +468,29 @@ function bindProofCropActions(root) {
     event.preventDefault();
   });
   frame.addEventListener('pointermove', (event) => updatePosition(event.clientY));
-  frame.addEventListener('pointerup', (event) => {
+  const finish = (event) => {
     if (!dragging) return;
     updatePosition(event.clientY);
     dragging = false;
     frame.releasePointerCapture?.(event.pointerId);
-  });
+  };
+  frame.addEventListener('pointerup', finish);
   frame.addEventListener('pointercancel', () => { dragging = false; });
+  cropWindow.addEventListener('keydown', (event) => {
+    const position = ui.proofCrop?.position ?? 0.5;
+    const next = event.key === 'ArrowUp' || event.key === 'ArrowLeft'
+      ? position - 0.05
+      : event.key === 'ArrowDown' || event.key === 'ArrowRight'
+        ? position + 0.05
+        : event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? 1
+            : null;
+    if (next == null) return;
+    event.preventDefault();
+    setPosition(next);
+  });
 }
 
 export function bindCheckIn(root) {
